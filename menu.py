@@ -112,7 +112,7 @@ class Button:
         return None
 
 def main_menu():
-    parallax_factor = 0.03  # Adjust this value for more or less parallax effect
+    parallax_factor = 0.02  # Adjust this value for more or less parallax effect
 
     # Define buttons
     start_button = Button(
@@ -163,7 +163,7 @@ def main_menu():
         mouse_click = pygame.mouse.get_pressed()
 
         # Calculate offset for parallax effect
-        offset_x = -(mouse_pos[0] - WIDTH // 1) * parallax_factor
+        offset_x = -(mouse_pos[0] - WIDTH // 3) * parallax_factor
         offset_y = -(mouse_pos[1] - HEIGHT // 3) * parallax_factor
 
         # Ensure the background fills the screen even when offset
