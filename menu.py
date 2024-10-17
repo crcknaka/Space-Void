@@ -3,6 +3,7 @@ import pygame
 import random
 import sys
 from game_assets import load_assets
+from settings import WIDTH, HEIGHT, FULLSCREEN  # Import screen dimensions from settings
 
 # Initialize Pygame modules
 pygame.init()
@@ -11,8 +12,11 @@ font = pygame.font.Font(None, 36)  # Default font
 author_font = pygame.font.Font(None, 24)  # Smaller font for author text
 
 # Screen dimensions
-WIDTH, HEIGHT = 600, 800
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
+# Set screen mode based on FULLSCREEN flag
+if FULLSCREEN:
+    screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.FULLSCREEN)  # Full-screen mode
+else:
+    screen = pygame.display.set_mode((WIDTH, HEIGHT))  # Windowed mode
 
 # Colors
 WHITE = (255, 255, 255)
@@ -25,6 +29,23 @@ BACKGROUND_COLOR = (0, 0, 0)
 # Load assets
 assets = load_assets()
 menu_background = assets['menu_background']
+
+# Get background image size and aspect ratio
+bg_width, bg_height = menu_background.get_size()
+bg_aspect_ratio = bg_width / bg_height
+
+# Resize background to fit the screen while maintaining aspect ratio
+if WIDTH / HEIGHT > bg_aspect_ratio:
+    # Screen is wider than the background aspect ratio, so fit by height
+    new_bg_height = HEIGHT
+    new_bg_width = int(HEIGHT * bg_aspect_ratio)
+else:
+    # Screen is taller than the background aspect ratio, so fit by width
+    new_bg_width = WIDTH
+    new_bg_height = int(WIDTH / bg_aspect_ratio)
+
+# Scale the background image while keeping the aspect ratio
+menu_background_scaled = pygame.transform.scale(menu_background, (new_bg_width, new_bg_height))
 
 # Fonts
 button_font = pygame.font.Font(None, 48)  # Use default font
@@ -105,7 +126,7 @@ def main_menu():
     )
     coop_button = Button(
         "COOPERATIVE",
-        WIDTH // 2 - 140,  # Adjusted x position for wider button
+        WIDTH // 2 - 140,  
         HEIGHT // 2 - 60,
         280,               # Increased width for better fit
         60,
@@ -141,12 +162,15 @@ def main_menu():
         mouse_click = pygame.mouse.get_pressed()
 
         # Calculate offset for parallax effect
-        offset_x = -(mouse_pos[0] - WIDTH // -1) * parallax_factor
-        offset_y = -(mouse_pos[1] - HEIGHT // 2) * parallax_factor
+        offset_x = -(mouse_pos[0] - WIDTH // 1) * parallax_factor
+        offset_y = -(mouse_pos[1] - HEIGHT // 3) * parallax_factor
 
         # Ensure the background fills the screen even when offset
         screen.fill(BACKGROUND_COLOR)  # Fill with black before blitting background
-        screen.blit(menu_background, (offset_x, offset_y))
+       # Center the background image based on its scaled size
+        bg_x = (WIDTH - new_bg_width) // 2
+        bg_y = (HEIGHT - new_bg_height) // 2
+        screen.blit(menu_background_scaled, (bg_x + offset_x, bg_y + offset_y))
 
         # Update and draw stars
         for star in menu_stars:

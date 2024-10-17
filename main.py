@@ -2,18 +2,28 @@
 import pygame
 import sys
 from menu import main_menu
+from settings import WIDTH, HEIGHT, FULLSCREEN  # Import screen dimensions from settings
 
 # Initialize Pygame and the mixer module
 pygame.init()
 pygame.mixer.init()
 pygame.font.init()  # Ensure font module is initialized
+pygame.display.set_caption("Space Void v0.5")
+icon = pygame.image.load('assets/images/icon.png')
+
+# Screen dimensions
+# screen = pygame.display.set_mode((WIDTH, HEIGHT)) 
+# Set screen mode based on FULLSCREEN flag
+if FULLSCREEN:
+    screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.FULLSCREEN)  # Full-screen mode
+else:
+    screen = pygame.display.set_mode((WIDTH, HEIGHT))  # Windowed mode
 
 def main():
     pygame.mixer.music.load('assets/sounds/background_music.mp3')
     pygame.mixer.music.play(-1)  # Loop the music indefinitely
     
-    pygame.display.set_caption("Space Void v0.5")
-    icon = pygame.image.load('assets/images/icon.png')
+
 
 # Set the window icon
     pygame.display.set_icon(icon)

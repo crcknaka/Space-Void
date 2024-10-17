@@ -2,8 +2,7 @@
 import pygame
 import random
 import math
-
-WIDTH, HEIGHT = 600, 800
+from settings import WIDTH, HEIGHT  # Import screen dimensions from settings
 
 # Global variable for game speed multiplier
 game_speed_multiplier = 1.0

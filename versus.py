@@ -4,14 +4,18 @@ import random
 import sys
 from game_classes import Player, Explosion, Star
 from game_assets import load_assets
+from settings import WIDTH, HEIGHT, FULLSCREEN  # Import screen dimensions from settings
 
 # Initialize Pygame modules
 pygame.init()
 pygame.font.init()  # Ensure font module is initialized
 
 # Screen dimensions
-WIDTH, HEIGHT = 600, 800
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
+# Set screen mode based on FULLSCREEN flag
+if FULLSCREEN:
+    screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.FULLSCREEN)  # Full-screen mode
+else:
+    screen = pygame.display.set_mode((WIDTH, HEIGHT))  # Windowed mode
 
 # Colors
 WHITE = (255, 255, 255)

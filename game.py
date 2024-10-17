@@ -14,15 +14,8 @@ from game_classes import (
 )
 from game_assets import load_assets
 from menu import main_menu
-
-# Initialize Pygame modules
-pygame.init()
-pygame.font.init()  # Ensure font module is initialized
-
-# Screen dimensions
-WIDTH, HEIGHT = 600, 800
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
-
+from settings import WIDTH, HEIGHT  # Import screen dimensions from settings
+from main import screen
 
 # Colors
 WHITE = (255, 255, 255)
