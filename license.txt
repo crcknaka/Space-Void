@@ -1,0 +1,21 @@
+Space Void - Proprietary License
+
+Copyright (C) [2024] [Ilja Kovalenko]. All Rights Reserved.
+
+1. License Grant:
+You are granted permission to use this software solely for personal, non-commercial purposes. Distribution, modification, or use of this software for any commercial purpose is strictly prohibited without explicit written permission from the author.
+
+2. Ownership:
+All ownership rights of the software and its associated assets belong to Ilja Kovalenko.
+
+3. Restrictions:
+You may not:
+- Copy or distribute the software.
+- Modify or create derivative works based on the software.
+- Use the software for any commercial purposes, including but not limited to selling, licensing, or distributing the software in exchange for monetary compensation.
+
+4. Disclaimer of Warranty:
+This software is provided "as is," without any warranties of any kind. The author is not liable for any damages arising from the use of the software.
+
+5. Termination:
+This license is valid until terminated. Your rights under this license will terminate automatically if you breach any terms of this agreement.
