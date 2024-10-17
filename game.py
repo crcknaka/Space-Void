@@ -24,6 +24,9 @@ RED = (255, 0, 0)
 
 assets = load_assets()
 
+def main():
+    pygame.mixer.music.load('assets/sounds/background_music.mp3')
+    pygame.mixer.music.play(-1)  # Loop the music indefinitely
 # Fonts
 game_font = pygame.font.Font(None, 36)  # Default font
 game_over_font = pygame.font.Font(None, 72)

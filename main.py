@@ -8,7 +8,7 @@ from settings import WIDTH, HEIGHT, FULLSCREEN  # Import screen dimensions from 
 pygame.init()
 pygame.mixer.init()
 pygame.font.init()  # Ensure font module is initialized
-pygame.display.set_caption("Space Void v0.5")
+pygame.display.set_caption("Space Void v0.6")
 icon = pygame.image.load('assets/images/icon.png')
 
 # Screen dimensions
@@ -24,6 +24,8 @@ def main():
     pygame.mixer.music.play(-1)  # Loop the music indefinitely
     
 
+if __name__ == "__main__":
+    main()
 
 # Set the window icon
     pygame.display.set_icon(icon)
@@ -31,6 +33,4 @@ def main():
     while True:
         main_menu() 
 
-if __name__ == "__main__":
-    main()
 
