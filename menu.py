@@ -97,12 +97,39 @@ class Button:
         self.active_color = active_color
         self.action = action
         self.hovered = False
+        self.width = width
+        self.height = height
+        self.original_width = width
+        self.original_height = height
+        self.growth_factor = 1.1  # Button grows by 10% when hovered
+        self.text_size = 48  # Font size
+        self.text_growth_factor = 1.1  # Font grows slightly as well
 
     def draw(self, surface):
         color = self.active_color if self.hovered else self.inactive_color
-        pygame.draw.rect(surface, color, self.rect, border_radius=5)
-        text_surf = button_font.render(self.text, True, WHITE)
-        text_rect = text_surf.get_rect(center=self.rect.center)
+        current_width = self.width
+        current_height = self.height
+        
+        # If hovered, increase the size of the button smoothly
+        if self.hovered:
+            current_width = int(self.original_width * self.growth_factor)
+            current_height = int(self.original_height * self.growth_factor)
+        
+        # Recalculate the button's rect to center the enlarged button
+        rect = pygame.Rect(
+            self.rect.centerx - current_width // 2,
+            self.rect.centery - current_height // 2,
+            current_width,
+            current_height
+        )
+        
+        pygame.draw.rect(surface, color, rect, border_radius=5)
+        
+        # Adjust font size when hovered
+        font_size = int(self.text_size * (self.text_growth_factor if self.hovered else 1))
+        text_font = pygame.font.Font(None, font_size)
+        text_surf = text_font.render(self.text, True, WHITE)
+        text_rect = text_surf.get_rect(center=rect.center)
         surface.blit(text_surf, text_rect)
 
     def update(self, mouse_pos, mouse_click):
@@ -110,6 +137,7 @@ class Button:
         if self.hovered and mouse_click[0]:
             return self.action()
         return None
+
 
 def main_menu():
     parallax_factor = 0.02  # Adjust this value for more or less parallax effect
@@ -145,6 +173,8 @@ def main_menu():
         HOVER_ORANGE,
         action=lambda: 'versus',
     )
+
+    
     exit_button = Button(
         "EXIT",
         WIDTH // 2 - 100,
