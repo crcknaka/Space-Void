@@ -11,6 +11,7 @@ pygame.font.init()  # Ensure font module is initialized
 font = pygame.font.Font(None, 36)  # Default font
 author_font = pygame.font.Font(None, 24)  # Smaller font for author text
 
+
 # Screen dimensions
 # Set screen mode based on FULLSCREEN flag
 if FULLSCREEN:
