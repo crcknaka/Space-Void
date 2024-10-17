@@ -468,8 +468,8 @@ def game_loop(cooperative=False):
     retry_button = pygame.Rect(WIDTH // 2 - 100, HEIGHT // 2 + 50, 200, 50)
     main_menu_button = pygame.Rect(WIDTH // 2 - 100, HEIGHT // 2 + 120, 200, 50)
     button_font = pygame.font.Font(None, 48)
-    retry_text = button_font.render("Retry", True, WHITE)
-    main_menu_text = button_font.render("Main Menu", True, WHITE)
+    retry_text = button_font.render("RETRY", True, WHITE)
+    main_menu_text = button_font.render("MAIN MENU", True, WHITE)
 
     while True:
         mouse_pos = pygame.mouse.get_pos()
