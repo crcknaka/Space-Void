@@ -154,10 +154,10 @@ def main_menu():
         action=lambda: 'single',
     )
     coop_button = Button(
-        "COOPERATIVE",
-        WIDTH // 2 - 140,  
+        "COOP",
+        WIDTH // 2 - 100,  
         HEIGHT // 2 - 60,
-        280,               # Increased width for better fit
+        200,        
         60,
         (70, 70, 70),
         HOVER_BLUE,
