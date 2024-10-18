@@ -216,13 +216,13 @@ class Rocket(pygame.sprite.Sprite):
         self.rect.centerx = x
         self.rect.centery = y
         self.speed = 8
-        self.targets_group = targets_group
-        self.target = self.find_nearest_target()
+        self.rotation_speed = 2  # Controls how fast the rocket rotates
         self.angle = 0  # Initial angle
+        self.targets_group = targets_group
         self.paused = False
 
     def find_nearest_target(self):
-        # Find the nearest enemy or asteroid
+        # Find the nearest target (enemy or asteroid)
         nearest_target = None
         min_distance = float('inf')
         for sprite in self.targets_group.sprites():
@@ -239,27 +239,50 @@ class Rocket(pygame.sprite.Sprite):
         if self.paused:
             return
 
-        if self.target and self.target.alive():
+        # Always find the nearest target every frame
+        self.target = self.find_nearest_target()
+
+        if self.target:
+            # Calculate direction towards the target
             dx = self.target.rect.centerx - self.rect.centerx
             dy = self.target.rect.centery - self.rect.centery
-            angle = math.atan2(dy, dx)
-            self.rect.x += self.speed * math.cos(angle)
-            self.rect.y += self.speed * math.sin(angle)
+            angle_to_target = math.atan2(dy, dx)
 
-            # Calculate the angle in degrees for the rocket sprite
-            self.angle = -math.degrees(angle)  # Negative to correct the image rotation direction
-            self.image = pygame.transform.rotate(self.original_image, self.angle)
+            # Smoothly rotate towards the target angle
+            target_angle = math.degrees(angle_to_target)
+            angle_diff = (target_angle - self.angle) % 360
+            if angle_diff > 180:
+                angle_diff -= 360
+
+            # Smoothly rotate towards the target
+            self.angle += min(self.rotation_speed, max(-self.rotation_speed, angle_diff))
+            self.angle %= 360
+
+            # Move the rocket towards the target using the calculated angle
+            rad_angle = math.radians(self.angle)
+            self.rect.x += self.speed * math.cos(rad_angle)
+            self.rect.y += self.speed * math.sin(rad_angle)
+
+            # Update the rocket's image with smooth rotation
+            self.image = pygame.transform.rotate(self.original_image, -self.angle)
             self.rect = self.image.get_rect(center=self.rect.center)
         else:
-            # Move straight if no target
-            self.rect.x += self.speed
+            # If no target, move straight in the current direction
+            rad_angle = math.radians(self.angle)
+            self.rect.x += self.speed * math.cos(rad_angle)
+            self.rect.y += self.speed * math.sin(rad_angle)
 
+        # Destroy the rocket if it goes off the screen
         if (self.rect.right < 0 or self.rect.left > WIDTH or
                 self.rect.bottom < 0 or self.rect.top > HEIGHT):
             self.kill()
 
     def pause(self):
         self.paused = not self.paused
+
+
+
+
 
 
 class Enemy(pygame.sprite.Sprite):
@@ -561,3 +584,4 @@ class Star:
             self.size,
         )
         surface.blit(star_surface, (int(self.x), int(self.y)))
+
