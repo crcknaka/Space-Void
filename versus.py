@@ -16,6 +16,24 @@ if FULLSCREEN:
     screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.FULLSCREEN)  # Full-screen mode
 else:
     screen = pygame.display.set_mode((WIDTH, HEIGHT))  # Windowed mode
+    
+# Bullet class specific to versus mode
+class BulletVersus(pygame.sprite.Sprite):
+    def __init__(self, x, y, image, speedx):
+        super().__init__()
+        self.image = image
+        self.rect = self.image.get_rect()
+        if speedx > 0:
+            self.rect.left = x
+        else:
+            self.rect.right = x
+        self.rect.centery = y
+        self.speedx = speedx
+
+    def update(self):
+        self.rect.x += self.speedx
+        if self.rect.left > WIDTH or self.rect.right < 0:
+            self.kill()
 
 # Colors
 WHITE = (255, 255, 255)
@@ -278,61 +296,80 @@ def versus_loop():
 
     # Game Over Screen
     game_over_text = game_over_font.render(f"{winner} WINS!", True, RED)
-    retry_button = pygame.Rect(WIDTH // 2 - 100, HEIGHT // 2 + 50, 200, 50)
-    main_menu_button = pygame.Rect(WIDTH // 2 - 100, HEIGHT // 2 + 120, 200, 50)
+
+    # Define the buttons for retry and main menu
+    retry_button = {
+        "rect": pygame.Rect(WIDTH // 2 - 100, HEIGHT // 2 + 50, 200, 50),
+        "color": (70, 70, 70),
+        "hover_color": (0, 255, 0),
+        "text": "RETRY"
+    }
+
+    main_menu_button = {
+        "rect": pygame.Rect(WIDTH // 2 - 100, HEIGHT // 2 + 120, 200, 50),
+        "color": (70, 70, 70),
+        "hover_color": (255, 0, 0),
+        "text": "MAIN MENU"
+    }
+
     button_font = pygame.font.Font(None, 48)
-    retry_text = button_font.render("Retry", True, WHITE)
-    main_menu_text = button_font.render("Main Menu", True, WHITE)
+    buttons = [retry_button, main_menu_button]
+    current_index = 0  # Initially, select the Retry button
 
     while True:
         mouse_pos = pygame.mouse.get_pos()
-        mouse_click = pygame.mouse.get_pressed()
 
         screen.fill(BLACK)
         screen.blit(game_over_text, (WIDTH // 2 - game_over_text.get_width() // 2, HEIGHT // 2 - 100))
 
-        # Check for hover effects
-        retry_hovered = retry_button.collidepoint(mouse_pos)
-        main_menu_hovered = main_menu_button.collidepoint(mouse_pos)
+        # Update selected button based on keyboard navigation (Up/Down or W/S)
+        keys = pygame.key.get_pressed()
+        if keys[pygame.K_DOWN] or keys[pygame.K_s]:
+            current_index = (current_index + 1) % len(buttons)
+            pygame.time.wait(150)  # Avoid fast cycling
+        elif keys[pygame.K_UP] or keys[pygame.K_w]:
+            current_index = (current_index - 1) % len(buttons)
+            pygame.time.wait(150)
 
-        pygame.draw.rect(screen, (0, 255, 0) if retry_hovered else (70, 70, 70), retry_button)
-        pygame.draw.rect(screen, (255, 0, 0) if main_menu_hovered else (70, 70, 70), main_menu_button)
+        # Handle hover effect and keyboard selection
+        for i, button in enumerate(buttons):
+            button_rect = button["rect"]
+            # Only highlight if either hovered by mouse OR selected via keyboard, not both
+            if button_rect.collidepoint(mouse_pos):
+                current_index = i
+                button_color = button["hover_color"]
+            else:
+                button_color = button["hover_color"] if (i == current_index) else button["color"]
+            
+            pygame.draw.rect(screen, button_color, button_rect)
 
-        retry_text_rect = retry_text.get_rect(center=retry_button.center)
-        main_menu_text_rect = main_menu_text.get_rect(center=main_menu_button.center)
-        screen.blit(retry_text, retry_text_rect)
-        screen.blit(main_menu_text, main_menu_text_rect)
+            # Render the text and center it in the button
+            text_surface = button_font.render(button["text"], True, WHITE)
+            text_rect = text_surface.get_rect(center=button_rect.center)
+            screen.blit(text_surface, text_rect)
 
+        # Handle mouse click and Enter key selection
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 sys.exit()
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_RETURN:
+                    if current_index == 0:
+                        versus_loop()  # Restart versus mode
+                        return
+                    elif current_index == 1:
+                        from menu import main_menu
+                        main_menu()  # Return to main menu
+                        return
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                if retry_button.collidepoint(mouse_pos):
-                    versus_loop()  # Restart the versus mode
+                if retry_button["rect"].collidepoint(mouse_pos):
+                    versus_loop()  # Restart versus mode
                     return
-                if main_menu_button.collidepoint(mouse_pos):
+                if main_menu_button["rect"].collidepoint(mouse_pos):
                     from menu import main_menu
-                    main_menu()
+                    main_menu()  # Return to main menu
                     return
 
         pygame.display.flip()
         pygame.time.Clock().tick(60)
-
-# Bullet class specific to versus mode
-class BulletVersus(pygame.sprite.Sprite):
-    def __init__(self, x, y, image, speedx):
-        super().__init__()
-        self.image = image
-        self.rect = self.image.get_rect()
-        if speedx > 0:
-            self.rect.left = x
-        else:
-            self.rect.right = x
-        self.rect.centery = y
-        self.speedx = speedx
-
-    def update(self):
-        self.rect.x += self.speedx
-        if self.rect.left > WIDTH or self.rect.right < 0:
-            self.kill()
