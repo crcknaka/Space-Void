@@ -8,7 +8,7 @@ from settings import WIDTH, HEIGHT, FULLSCREEN  # Import screen dimensions from 
 pygame.init()
 pygame.mixer.init()
 pygame.font.init()  # Ensure font module is initialized
-pygame.display.set_caption("Space Void v0.6")
+pygame.display.set_caption("Space Void v0.7")
 icon = pygame.image.load('assets/images/icon.png')
 
 # Screen dimensions
@@ -32,5 +32,4 @@ if __name__ == "__main__":
 
     while True:
         main_menu() 
-
-
+        
