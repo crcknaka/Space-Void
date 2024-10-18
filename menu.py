@@ -1,4 +1,3 @@
-# menu.py
 import pygame
 import random
 import sys
@@ -10,7 +9,6 @@ pygame.init()
 pygame.font.init()  # Ensure font module is initialized
 font = pygame.font.Font(None, 36)  # Default font
 author_font = pygame.font.Font(None, 24)  # Smaller font for author text
-
 
 # Screen dimensions
 # Set screen mode based on FULLSCREEN flag
@@ -97,21 +95,23 @@ class Button:
         self.active_color = active_color
         self.action = action
         self.hovered = False
+        self.selected = False  # Used for keyboard navigation
         self.width = width
         self.height = height
         self.original_width = width
         self.original_height = height
-        self.growth_factor = 1.1  # Button grows by 10% when hovered
+        self.growth_factor = 1.1  # Button grows by 10% when hovered or selected
         self.text_size = 48  # Font size
         self.text_growth_factor = 1.1  # Font grows slightly as well
 
     def draw(self, surface):
-        color = self.active_color if self.hovered else self.inactive_color
+        # Choose color based on hover or selected state
+        color = self.active_color if self.hovered or self.selected else self.inactive_color
         current_width = self.width
         current_height = self.height
         
-        # If hovered, increase the size of the button smoothly
-        if self.hovered:
+        # If hovered or selected, increase the size of the button smoothly
+        if self.hovered or self.selected:
             current_width = int(self.original_width * self.growth_factor)
             current_height = int(self.original_height * self.growth_factor)
         
@@ -125,18 +125,15 @@ class Button:
         
         pygame.draw.rect(surface, color, rect, border_radius=5)
         
-        # Adjust font size when hovered
-        font_size = int(self.text_size * (self.text_growth_factor if self.hovered else 1))
+        # Adjust font size when hovered or selected
+        font_size = int(self.text_size * (self.text_growth_factor if self.hovered or self.selected else 1))
         text_font = pygame.font.Font(None, font_size)
         text_surf = text_font.render(self.text, True, WHITE)
         text_rect = text_surf.get_rect(center=rect.center)
         surface.blit(text_surf, text_rect)
 
-    def update(self, mouse_pos, mouse_click):
+    def update(self, mouse_pos):
         self.hovered = self.rect.collidepoint(mouse_pos)
-        if self.hovered and mouse_click[0]:
-            return self.action()
-        return None
 
 
 def main_menu():
@@ -173,8 +170,6 @@ def main_menu():
         HOVER_ORANGE,
         action=lambda: 'versus',
     )
-
-    
     exit_button = Button(
         "EXIT",
         WIDTH // 2 - 100,
@@ -187,42 +182,28 @@ def main_menu():
     )
 
     buttons = [start_button, coop_button, versus_button, exit_button]
+    current_index = 0  # Keep track of the selected button
+    buttons[current_index].selected = True  # Highlight the first button
 
     while True:
         mouse_pos = pygame.mouse.get_pos()
-        mouse_click = pygame.mouse.get_pressed()
 
-        # Calculate offset for parallax effect
-        offset_x = -(mouse_pos[0] - WIDTH // 3) * parallax_factor
-        offset_y = -(mouse_pos[1] - HEIGHT // 3) * parallax_factor
+           # Handle keyboard navigation
+        keys = pygame.key.get_pressed()
+        if keys[pygame.K_DOWN] or keys[pygame.K_s]:
+            buttons[current_index].selected = False
+            current_index = (current_index + 1) % len(buttons)  # Move to the next button
+            buttons[current_index].selected = True
+            pygame.time.wait(150)  # Add a small delay to avoid instant skipping
+        elif keys[pygame.K_UP] or keys[pygame.K_w]:
+            buttons[current_index].selected = False
+            current_index = (current_index - 1) % len(buttons)  # Move to the previous button
+            buttons[current_index].selected = True
+            pygame.time.wait(150)
 
-        # Ensure the background fills the screen even when offset
-        screen.fill(BACKGROUND_COLOR)  # Fill with black before blitting background
-       # Center the background image based on its scaled size
-        bg_x = (WIDTH - new_bg_width) // 2
-        bg_y = (HEIGHT - new_bg_height) // 2
-        screen.blit(menu_background_scaled, (bg_x + offset_x, bg_y + offset_y))
-
-        # Update and draw stars
-        for star in menu_stars:
-            star.update()
-            star.draw(screen)
-
-        # Draw the game title
-        title_text = title_font.render("Space Void v0.5", True, WHITE)
-        title_rect = title_text.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 240))
-        screen.blit(title_text, title_rect)
-
-        # Draw author text in the bottom-right corner
-        author_text = "Made by cRc^"
-        author_surface = author_font.render(author_text, True, WHITE)
-        author_rect = author_surface.get_rect()
-        author_rect.bottomright = (WIDTH - 10, HEIGHT - 10)  # 10 pixels from the edge for padding
-        screen.blit(author_surface, author_rect)
-
-        # Update and draw buttons
-        for button in buttons:
-            result = button.update(mouse_pos, mouse_click)
+              # Trigger action for the selected button with Enter key
+        if keys[pygame.K_RETURN]:
+            result = buttons[current_index].action()
             if result is not None:
                 if result == 'single':
                     from game import game_loop
@@ -239,12 +220,71 @@ def main_menu():
                 elif result == 'exit':
                     pygame.quit()
                     sys.exit()
-            button.draw(screen)
 
+        # Reset keyboard selection when the mouse hovers over any button
+        for i, button in enumerate(buttons):
+            button.update(mouse_pos)
+            if button.hovered:
+                buttons[current_index].selected = False
+                current_index = i
+                buttons[current_index].selected = True
+
+        # Handle mouse click events
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 sys.exit()
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 1:  # Left mouse button
+                    if buttons[current_index].hovered:
+                        result = buttons[current_index].action()
+                        if result is not None:
+                            if result == 'single':
+                                from game import game_loop
+                                game_loop(cooperative=False)
+                                return
+                            elif result == 'cooperative':
+                                from game import game_loop
+                                game_loop(cooperative=True)
+                                return
+                            elif result == 'versus':
+                                from versus import versus_loop
+                                versus_loop()
+                                return
+                            elif result == 'exit':
+                                pygame.quit()
+                                sys.exit()
+
+        # Calculate offset for parallax effect
+        offset_x = -(mouse_pos[0] - WIDTH // -1) * parallax_factor
+        offset_y = -(mouse_pos[1] - HEIGHT // 2) * parallax_factor
+
+        # Ensure the background fills the screen even when offset
+        screen.fill(BACKGROUND_COLOR)
+        bg_x = (WIDTH - new_bg_width) // 4
+        bg_y = (HEIGHT - new_bg_height) // 1
+        screen.blit(menu_background_scaled, (bg_x + offset_x, bg_y + offset_y))
+
+        # Update and draw stars
+        for star in menu_stars:
+            star.update()
+            star.draw(screen)
+
+        # Draw the game title
+        title_text = title_font.render("Space Void v0.7", True, WHITE)
+        title_rect = title_text.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 240))
+        screen.blit(title_text, title_rect)
+
+        # Draw author text in the bottom-right corner
+        author_text = "Made by cRc^"
+        author_surface = author_font.render(author_text, True, WHITE)
+        author_rect = author_surface.get_rect()
+        author_rect.bottomright = (WIDTH - 10, HEIGHT - 10)  # 10 pixels from the edge for padding
+        screen.blit(author_surface, author_rect)
+
+        # Update and draw buttons
+        for button in buttons:
+            button.draw(screen)
 
         pygame.display.flip()
         pygame.time.Clock().tick(60)
