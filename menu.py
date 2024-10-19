@@ -99,7 +99,7 @@ class Star:
             self.y = random.randint(0, HEIGHT)
 
     def draw(self, surface):
-        star_surface = pygame.Surface((self.size * 1.4, self.size * 1.4), pygame.SRCALPHA)
+        star_surface = pygame.Surface((self.size * 1.6, self.size * 1.6), pygame.SRCALPHA)
         pygame.draw.circle(
             star_surface,
             (255, 255, 255, self.opacity),

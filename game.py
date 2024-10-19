@@ -16,6 +16,7 @@ from game_assets import load_assets
 from menu import main_menu
 from settings import WIDTH, HEIGHT  # Import screen dimensions from settings
 from main import screen
+hover_sound = pygame.mixer.Sound('assets/sounds/hover.wav')  # Add your hover sound file
 click_sound = pygame.mixer.Sound('assets/sounds/click.wav')  # Add your click sound file
 # Colors
 WHITE = (255, 255, 255)
@@ -25,6 +26,7 @@ RED = (255, 0, 0)
 assets = load_assets()
 
 def main():
+
     pygame.mixer.music.load('assets/sounds/background_music.mp3')
     pygame.mixer.music.play(-1)  # Loop the music indefinitely
 # Fonts
@@ -128,7 +130,7 @@ def game_loop(cooperative=False):
     asteroid_spawn_interval = 5000  # Initial spawn interval for asteroids
 
     pygame.time.set_timer(ADDENEMY, enemy_spawn_interval)
-    pygame.time.set_timer(ADDPOWERUP, 10000)  # Spawn power-up every 10 seconds
+    pygame.time.set_timer(ADDPOWERUP, 1000)  # Spawn power-up every 10 seconds
     pygame.time.set_timer(ADDASTEROID, asteroid_spawn_interval)
 
     # Background image
@@ -160,7 +162,7 @@ def game_loop(cooperative=False):
                 enemies.add(enemy)
                 combined_targets.add(enemy)
             if event.type == ADDPOWERUP and not paused:
-                powerup_type = random.choice(['shooting', 'slow_motion', 'kill_all', 'rocket'])
+                powerup_type = random.choice(['shooting', 'slow_motion', 'kill_all', 'rocket', 'spread', ])
                 if powerup_type == 'shooting':
                     powerup_image = assets['powerup_img']
                 elif powerup_type == 'slow_motion':
@@ -168,10 +170,14 @@ def game_loop(cooperative=False):
                 elif powerup_type == 'kill_all':
                     powerup_image = assets['kill_all_powerup_img']
                 elif powerup_type == 'rocket':
-                    powerup_image = assets['rocket_powerup_img']
+                    powerup_image = assets['rocket_powerup_img']   
+                elif powerup_type == 'spread':  # Add new power-up
+                    powerup_image = assets['spread_powerup_img']  # Add this to your assets
+                
                 powerup = PowerUp(powerup_image, powerup_type)
                 all_sprites.add(powerup)
                 powerups.add(powerup)
+                
             if event.type == ADDASTEROID and not paused:
                 asteroid = Asteroid(assets['asteroid_img'], 'large')
                 all_sprites.add(asteroid)
@@ -395,6 +401,9 @@ def game_loop(cooperative=False):
                         elif hit.type == 'rocket':
                             player.add_rockets(1)
                             assets['powerup_sound'].play()
+                        elif hit.type == 'spread':  # Spread power-up effect
+                            player.increase_spread()
+                            assets['powerup_sound'].play()
 
             # Check if slow-motion effect has ended
             if slow_motion_end_time and pygame.time.get_ticks() > slow_motion_end_time:
@@ -467,7 +476,7 @@ def game_loop(cooperative=False):
         pygame.display.flip()
         pygame.time.delay(30)
 
-         # Game Over screen with buttons and hover effects
+    # Game Over screen with buttons and hover effects
     game_over_text = game_over_font.render("GAME OVER", True, RED)
 
     retry_button = {
@@ -525,22 +534,29 @@ def game_loop(cooperative=False):
             if event.type == pygame.QUIT:
                 pygame.quit()
                 sys.exit()
+
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_RETURN:
-                    if current_index == 0:
+                    # Check the current selected button
+                    if current_index == 0:  # Retry button
+                        click_sound.play()
                         game_loop(cooperative=cooperative)  # Restart the game
-                        return
-                    elif current_index == 1:
+                        return  # Exit game_loop and restart the game
+                    elif current_index == 1:  # Main Menu button
+                        click_sound.play()  # Play sound when going back to the main menu
                         main_menu()  # Go back to the main menu
-                        return
+                        return  # Ensure game_loop is exited
+
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if buttons[0]["rect"].collidepoint(mouse_pos):
+                    click_sound.play()
                     game_loop(cooperative=cooperative)  # Restart the game
-                    return
+                    return  # Ensure game loop is exited
                 elif buttons[1]["rect"].collidepoint(mouse_pos):
+                    click_sound.play()  # Play click sound
                     main_menu()  # Go back to the main menu
                     return
-
+    
         pygame.display.flip()
         pygame.time.Clock().tick(60)
 

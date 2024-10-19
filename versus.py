@@ -357,21 +357,26 @@ def versus_loop():
                 sys.exit()
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_RETURN:
-                    if current_index == 0:
+                    if current_index == 0:  # Retry button is selected
+                        click_sound.play()
                         versus_loop()  # Restart versus mode
                         return
-                    elif current_index == 1:
+                    elif current_index == 1:  # Main Menu button is selected
+                        click_sound.play()
                         from menu import main_menu
                         main_menu()  # Return to main menu
                         return
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if retry_button["rect"].collidepoint(mouse_pos):
+                    click_sound.play()
                     versus_loop()  # Restart versus mode
                     return
                 if main_menu_button["rect"].collidepoint(mouse_pos):
+                    click_sound.play()
                     from menu import main_menu
                     main_menu()  # Return to main menu
                     return
+
 
         pygame.display.flip()
         pygame.time.Clock().tick(60)

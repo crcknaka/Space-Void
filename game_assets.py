@@ -28,6 +28,7 @@ def load_assets():
         'powerup_img': load_image('powerup.png', (60, 30)),  # Shooting power-up image
         'slow_motion_powerup_img': load_image('slow_motion_powerup.png', (60, 30)),  # Slow-motion power-up image
         'kill_all_powerup_img': load_image('kill_all_powerup.png', (60, 30)),  # Kill-all power-up image
+        'spread_powerup_img': load_image('spread_powerup.png', (60, 30)),  # Spread power-up image
         'rocket_powerup_img': load_image('rocket_powerup.png', (60, 30)),  # Rocket power-up image
         'menu_background': load_image('menu_background.png'),
         'game_background': load_image('game_background.png'),  # Game background image
@@ -43,5 +44,6 @@ def load_assets():
         'versus_music': 'versus_music.mp3',  # Versus mode music
         'player1_kill_sound': load_sound('player1_kill.wav'),
         'player2_kill_sound': load_sound('player2_kill.wav'),
+        
     }
     return assets
