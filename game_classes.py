@@ -315,7 +315,7 @@ class Enemy(pygame.sprite.Sprite):
         self.image = self.original_image.copy()
         self.rect = self.image.get_rect()
         self.rect.x = WIDTH + random.randint(50, 100)
-        self.rect.y = random.randint(50, HEIGHT - 50)
+        self.rect.y = random.randint(0, HEIGHT - self.rect.height)
         self.speedx = random.randint(-3, -1) - (level - 1)  # Increase speed with level
         self.speedy = 0
         self.enemy_bullets_group = enemy_bullets_group
