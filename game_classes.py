@@ -448,13 +448,18 @@ class Asteroid(pygame.sprite.Sprite):
         self.original_image = image
         self.size = size
         self.angle = 0
-        self.rotation_speed = random.uniform(-1, 1) if size == 'large' else 0  # Only large asteroids rotate
+        
+        # Set different rotation speeds for different sizes
         if self.size == 'large':
-            self.image = pygame.transform.scale(self.original_image, (80, 80))
+            self.rotation_speed = random.uniform(0.5, 1)
         elif self.size == 'medium':
-            self.image = pygame.transform.scale(self.original_image, (50, 50))
+            self.rotation_speed = random.uniform(1, 2)  # Faster for medium
         elif self.size == 'small':
-            self.image = pygame.transform.scale(self.original_image, (30, 30))  
+            self.rotation_speed = random.uniform(2, 3)  # Even faster for small
+
+        # Scale the asteroid image based on its size
+        self.image = self.get_scaled_image()
+
         self.rect = self.image.get_rect()
         self.rect.x = WIDTH + random.randint(5, 10)
         self.rect.y = random.randint(0, HEIGHT - self.rect.height)
@@ -463,15 +468,23 @@ class Asteroid(pygame.sprite.Sprite):
         self.last_update = pygame.time.get_ticks()
         self.rotation_delay = 50  # Rotate every 50 milliseconds
 
-    def update(self):
-        # Update rotation for large asteroids
+    def get_scaled_image(self):
+        """Return the scaled asteroid image based on its size."""
         if self.size == 'large':
-            now = pygame.time.get_ticks()
-            if now - self.last_update > self.rotation_delay:
-                self.last_update = now
-                self.angle += self.rotation_speed * game_speed_multiplier
-                self.image = pygame.transform.rotate(self.original_image, self.angle)
-                self.rect = self.image.get_rect(center=self.rect.center)
+            return pygame.transform.scale(self.original_image, (80, 80))  # Large asteroid
+        elif self.size == 'medium':
+            return pygame.transform.scale(self.original_image, (50, 50))  # Medium asteroid
+        elif self.size == 'small':
+            return pygame.transform.scale(self.original_image, (30, 30))  # Small asteroid
+
+    def update(self):
+        # Update rotation for all asteroid sizes
+        now = pygame.time.get_ticks()
+        if now - self.last_update > self.rotation_delay:
+            self.last_update = now
+            self.angle += self.rotation_speed * game_speed_multiplier
+            self.image = pygame.transform.rotate(self.get_scaled_image(), self.angle)
+            self.rect = self.image.get_rect(center=self.rect.center)
 
         # Update position
         self.rect.x -= self.speedx * game_speed_multiplier
@@ -492,6 +505,7 @@ class Asteroid(pygame.sprite.Sprite):
                 asteroid.speedy = random.uniform(-3, 3)
                 pieces.append(asteroid)
         return pieces
+
 
 class PowerUp(pygame.sprite.Sprite):
     def __init__(self, image, powerup_type):
