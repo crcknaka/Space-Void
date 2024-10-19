@@ -6,6 +6,7 @@ from game_classes import Player, Explosion, Star
 from game_assets import load_assets
 from settings import WIDTH, HEIGHT, FULLSCREEN  # Import screen dimensions from settings
 
+click_sound = pygame.mixer.Sound('assets/sounds/click.wav')  # Add your click sound file
 # Initialize Pygame modules
 pygame.init()
 pygame.font.init()  # Ensure font module is initialized
@@ -163,6 +164,7 @@ def versus_loop():
                 sys.exit()
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
+                    click_sound.play() 
                     from menu import main_menu
                     main_menu()
                     return

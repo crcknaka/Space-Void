@@ -10,6 +10,11 @@ pygame.font.init()  # Ensure font module is initialized
 font = pygame.font.Font(None, 36)  # Default font
 author_font = pygame.font.Font(None, 24)  # Smaller font for author text
 
+# Load sound effects
+hover_sound = pygame.mixer.Sound('assets/sounds/hover.wav')  # Add your hover sound file
+click_sound = pygame.mixer.Sound('assets/sounds/click.wav')  # Add your click sound file
+
+
 # Screen dimensions
 # Set screen mode based on FULLSCREEN flag
 if FULLSCREEN:
@@ -132,8 +137,11 @@ class Button:
         text_rect = text_surf.get_rect(center=rect.center)
         surface.blit(text_surf, text_rect)
 
-    def update(self, mouse_pos):
-        self.hovered = self.rect.collidepoint(mouse_pos)
+    def update(self, mouse_pos, play_hover_sound):
+        is_hovered = self.rect.collidepoint(mouse_pos)
+        if is_hovered and not self.hovered and play_hover_sound:
+            hover_sound.play()  # Play the hover sound
+        self.hovered = is_hovered
 
 
 def main_menu():
@@ -185,26 +193,31 @@ def main_menu():
     current_index = 0  # Keep track of the selected button
     buttons[current_index].selected = True  # Highlight the first button
 
+    play_hover_sound = True  # Ensure the hover sound plays only once per hover
+
     while True:
         mouse_pos = pygame.mouse.get_pos()
 
-           # Handle keyboard navigation
+        # Handle keyboard navigation
         keys = pygame.key.get_pressed()
         if keys[pygame.K_DOWN] or keys[pygame.K_s]:
             buttons[current_index].selected = False
             current_index = (current_index + 1) % len(buttons)  # Move to the next button
             buttons[current_index].selected = True
+            hover_sound.play()  # Play hover sound when navigating with the keyboard
             pygame.time.wait(150)  # Add a small delay to avoid instant skipping
         elif keys[pygame.K_UP] or keys[pygame.K_w]:
             buttons[current_index].selected = False
             current_index = (current_index - 1) % len(buttons)  # Move to the previous button
             buttons[current_index].selected = True
+            hover_sound.play()  # Play hover sound when navigating with the keyboard
             pygame.time.wait(150)
 
-              # Trigger action for the selected button with Enter key
+        # Trigger action for the selected button with Enter key
         if keys[pygame.K_RETURN]:
             result = buttons[current_index].action()
             if result is not None:
+                click_sound.play()  # Play the click sound when pressing Enter
                 if result == 'single':
                     from game import game_loop
                     game_loop(cooperative=False)
@@ -223,7 +236,7 @@ def main_menu():
 
         # Reset keyboard selection when the mouse hovers over any button
         for i, button in enumerate(buttons):
-            button.update(mouse_pos)
+            button.update(mouse_pos, play_hover_sound)
             if button.hovered:
                 buttons[current_index].selected = False
                 current_index = i
@@ -237,6 +250,7 @@ def main_menu():
             if event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1:  # Left mouse button
                     if buttons[current_index].hovered:
+                        click_sound.play()  # Play the click sound
                         result = buttons[current_index].action()
                         if result is not None:
                             if result == 'single':

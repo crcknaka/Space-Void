@@ -16,7 +16,7 @@ from game_assets import load_assets
 from menu import main_menu
 from settings import WIDTH, HEIGHT  # Import screen dimensions from settings
 from main import screen
-
+click_sound = pygame.mixer.Sound('assets/sounds/click.wav')  # Add your click sound file
 # Colors
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
@@ -184,6 +184,7 @@ def game_loop(cooperative=False):
                         if hasattr(sprite, 'pause'):
                             sprite.pause()
                 elif event.key == pygame.K_ESCAPE:
+                    click_sound.play() 
                     main_menu()
                     return  # Exit the game_loop function
 
