@@ -1,12 +1,15 @@
-# versus.py
 import pygame
 import random
 import sys
 from game_classes import Player, Explosion, Star
 from game_assets import load_assets
 from settings import WIDTH, HEIGHT, FULLSCREEN  # Import screen dimensions from settings
+from pause_menu import PauseMenu  # Import the PauseMenu
+from gameover_menu import GameOverMenu  # Import the new GameOverMenu
 
 click_sound = pygame.mixer.Sound('assets/sounds/click.wav')  # Add your click sound file
+hover_sound = pygame.mixer.Sound('assets/sounds/hover.wav')  # Add your hover sound file
+
 # Initialize Pygame modules
 pygame.init()
 pygame.font.init()  # Ensure font module is initialized
@@ -45,7 +48,6 @@ assets = load_assets()
 
 # Fonts
 game_font = pygame.font.Font(None, 36)  # Default font
-game_over_font = pygame.font.Font(None, 72)
 
 def versus_loop():
     pygame.mixer.music.load('assets/sounds/versus_music.mp3')
@@ -154,6 +156,9 @@ def versus_loop():
     respawn_timer_p1 = None
     respawn_timer_p2 = None
 
+    # Initialize the pause menu
+    pause_menu = PauseMenu(screen, click_sound, hover_sound)
+
     while running:
         pygame.time.Clock().tick(60)
 
@@ -164,22 +169,30 @@ def versus_loop():
                 sys.exit()
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
-                    click_sound.play() 
-                    from menu import main_menu
-                    main_menu()
-                    return
-                if event.key == pygame.K_p:
                     paused = not paused
                     for sprite in all_sprites:
                         if hasattr(sprite, 'pause'):
                             sprite.pause()
+
         if paused:
-            # Draw PAUSE text in the center of the screen when paused
-            pause_text = game_font.render("PAUSE", True, RED)
-            screen.blit(pause_text, (WIDTH // 2 - pause_text.get_width() // 2, HEIGHT // 2))
-            
-            pygame.display.flip()
-            continue  # Skip the rest of the loop while paused
+            mouse_pos = pygame.mouse.get_pos()
+            pause_menu.update(mouse_pos)
+            pause_menu.draw()
+
+            # Handle pause menu events
+            for event in pygame.event.get():
+                if event.type == pygame.KEYDOWN or event.type == pygame.MOUSEBUTTONDOWN:
+                    result = pause_menu.handle_mouse_event(event, mouse_pos) or pause_menu.handle_event(event)
+                    if result == "resume":
+                        paused = False
+                    elif result == "main_menu":
+                        from menu import main_menu
+                        main_menu()
+                        return
+
+            continue  # Skip the rest of the loop if paused
+
+        # Game logic when not paused
         if not paused:
             # Update background position for parallax effect
             background_x -= 0.1  # Adjust speed as needed
@@ -227,7 +240,7 @@ def versus_loop():
 
             # Handle collisions between bullets and players
             if player1.alive:
-                hits = pygame.sprite.spritecollide(player1, bullets_p2, True)
+                hits = pygame.sprite.spritecollide(player1, bullets_p2, True, pygame.sprite.collide_mask)
                 if hits:
                     explosion = Explosion(player1.rect.center, assets['explosion_spritesheet'])
                     all_sprites.add(explosion)
@@ -239,7 +252,7 @@ def versus_loop():
                     assets['player2_kill_sound'].play()
 
             if player2.alive:
-                hits = pygame.sprite.spritecollide(player2, bullets_p1, True)
+                hits = pygame.sprite.spritecollide(player2, bullets_p1, True, pygame.sprite.collide_mask)
                 if hits:
                     explosion = Explosion(player2.rect.center, assets['explosion_spritesheet'])
                     all_sprites.add(explosion)
@@ -296,87 +309,26 @@ def versus_loop():
         if game_over:
             break
 
-    # Game Over Screen
-    game_over_text = game_over_font.render(f"{winner} WINS!", True, RED)
-
-    # Define the buttons for retry and main menu
-    retry_button = {
-        "rect": pygame.Rect(WIDTH // 2 - 100, HEIGHT // 2 + 50, 200, 50),
-        "color": (70, 70, 70),
-        "hover_color": (0, 255, 0),
-        "text": "RETRY"
-    }
-
-    main_menu_button = {
-        "rect": pygame.Rect(WIDTH // 2 - 100, HEIGHT // 2 + 120, 200, 50),
-        "color": (70, 70, 70),
-        "hover_color": (255, 0, 0),
-        "text": "MAIN MENU"
-    }
-
-    button_font = pygame.font.Font(None, 48)
-    buttons = [retry_button, main_menu_button]
-    current_index = 0  # Initially, select the Retry button
+    # Show the Game Over Menu
+    gameover_menu = GameOverMenu(screen, winner, click_sound, hover_sound)
 
     while True:
         mouse_pos = pygame.mouse.get_pos()
 
-        screen.fill(BLACK)
-        screen.blit(game_over_text, (WIDTH // 2 - game_over_text.get_width() // 2, HEIGHT // 2 - 100))
+        gameover_menu.update(mouse_pos)
+        gameover_menu.draw()
 
-        # Update selected button based on keyboard navigation (Up/Down or W/S)
-        keys = pygame.key.get_pressed()
-        if keys[pygame.K_DOWN] or keys[pygame.K_s]:
-            current_index = (current_index + 1) % len(buttons)
-            pygame.time.wait(150)  # Avoid fast cycling
-        elif keys[pygame.K_UP] or keys[pygame.K_w]:
-            current_index = (current_index - 1) % len(buttons)
-            pygame.time.wait(150)
-
-        # Handle hover effect and keyboard selection
-        for i, button in enumerate(buttons):
-            button_rect = button["rect"]
-            # Only highlight if either hovered by mouse OR selected via keyboard, not both
-            if button_rect.collidepoint(mouse_pos):
-                current_index = i
-                button_color = button["hover_color"]
-            else:
-                button_color = button["hover_color"] if (i == current_index) else button["color"]
-            
-            pygame.draw.rect(screen, button_color, button_rect)
-
-            # Render the text and center it in the button
-            text_surface = button_font.render(button["text"], True, WHITE)
-            text_rect = text_surface.get_rect(center=button_rect.center)
-            screen.blit(text_surface, text_rect)
-
-        # Handle mouse click and Enter key selection
+        # Handle mouse and keyboard events for the Game Over menu
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 sys.exit()
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_RETURN:
-                    if current_index == 0:  # Retry button is selected
-                        click_sound.play()
-                        versus_loop()  # Restart versus mode
-                        return
-                    elif current_index == 1:  # Main Menu button is selected
-                        click_sound.play()
-                        from menu import main_menu
-                        main_menu()  # Return to main menu
-                        return
-            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                if retry_button["rect"].collidepoint(mouse_pos):
-                    click_sound.play()
-                    versus_loop()  # Restart versus mode
-                    return
-                if main_menu_button["rect"].collidepoint(mouse_pos):
-                    click_sound.play()
-                    from menu import main_menu
-                    main_menu()  # Return to main menu
-                    return
-
-
-        pygame.display.flip()
-        pygame.time.Clock().tick(60)
+            
+            result = gameover_menu.handle_mouse_event(event, mouse_pos) or gameover_menu.handle_event(event)
+            if result == "retry":
+                versus_loop()  # Restart versus mode
+                return
+            elif result == "main_menu":
+                from menu import main_menu
+                main_menu()  # Return to main menu
+                return

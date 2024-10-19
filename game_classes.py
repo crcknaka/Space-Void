@@ -44,10 +44,6 @@ class Player(pygame.sprite.Sprite):
         self.bullet_speedx = -10 if self.facing_left else 10
         self.last_rocket = pygame.time.get_ticks()
         self.rocket_delay = 1000  # Delay between rockets
-        
-         # Track the number of bullets to shoot with spread power-up
-        self.spread_bullet_count = 1  # Starts with 1, increased by power-ups
-
 
     def update(self):
         if self.paused or not self.alive:
@@ -153,27 +149,13 @@ class Player(pygame.sprite.Sprite):
         if now - self.last_shot > self.shoot_delay:
             if self.facing_left:
                 bullet_img = pygame.transform.flip(self.assets['bullet_img'], True, False)
-                # Fire multiple bullets with spread
-                spread_angle = 10  # Angle between each bullet
-                start_angle = -(self.spread_bullet_count - 1) * (spread_angle / 2)
-                for i in range(self.spread_bullet_count):
-                    bullet = Bullet(self.rect.left, self.rect.centery, bullet_img, speedx=-10, angle=start_angle + (i * spread_angle))
-                    self.bullets_group.add(bullet)
-                    self.all_sprites_group.add(bullet)
+                bullet = Bullet(self.rect.left, self.rect.centery, bullet_img, speedx=-10)
             else:
-                spread_angle = 10
-                start_angle = -(self.spread_bullet_count - 1) * (spread_angle / 2)
-                for i in range(self.spread_bullet_count):
-                    bullet = Bullet(self.rect.right, self.rect.centery, self.assets['bullet_img'], speedx=10, angle=start_angle + (i * spread_angle))
-                    self.bullets_group.add(bullet)
-                    self.all_sprites_group.add(bullet)
-            
+                bullet = Bullet(self.rect.right, self.rect.centery, self.assets['bullet_img'], speedx=10)
+            self.bullets_group.add(bullet)
+            self.all_sprites_group.add(bullet)
             self.last_shot = now
             self.assets['gun_sound'].play()
-            
-    def increase_spread(self):
-        """Increase the number of bullets fired in a spread."""
-        self.spread_bullet_count += 1        
 
     def handle_rocket(self):
         if self.rockets_group is None or self.targets_group is None:
@@ -200,7 +182,7 @@ class Player(pygame.sprite.Sprite):
         self.rocket_count += amount
 
 class Bullet(pygame.sprite.Sprite):
-    def __init__(self, x, y, image, speedx=10, angle=0):
+    def __init__(self, x, y, image, speedx=10):
         super().__init__()
         self.image = image
         self.rect = self.image.get_rect()
@@ -210,17 +192,13 @@ class Bullet(pygame.sprite.Sprite):
             self.rect.right = x
         self.rect.centery = y
         self.speedx = speedx
-        self.angle = angle  # Angle for the spread effect
-        self.speedy = speedx * math.tan(math.radians(angle))  # Calculate vertical speed based on the angle
         self.paused = False
 
     def update(self):
         if self.paused:
             return
 
-        # Update bullet position based on angle and speed
         self.rect.x += self.speedx  # Bullets not affected by game_speed_multiplier
-        self.rect.y += self.speedy
         if self.rect.left > WIDTH or self.rect.right < 0:
             self.kill()
 

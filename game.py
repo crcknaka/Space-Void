@@ -341,7 +341,7 @@ def game_loop(cooperative=False):
             # Handle collisions between players and enemy bullets
             for player in [player1, player2]:
                 if player and player.alive:
-                    hits = pygame.sprite.spritecollide(player, enemy_bullets, True)
+                    hits = pygame.sprite.spritecollide(player, enemy_bullets, True, pygame.sprite.collide_mask)
                     if hits:
                         explosion = Explosion(player.rect.center, assets['explosion_spritesheet'])
                         all_sprites.add(explosion)
@@ -352,7 +352,7 @@ def game_loop(cooperative=False):
             # Handle collisions between players and enemies
             for player in [player1, player2]:
                 if player and player.alive:
-                    hits = pygame.sprite.spritecollide(player, enemies, True)
+                    hits = pygame.sprite.spritecollide(player, enemies, True, pygame.sprite.collide_mask)
                     if hits:
                         explosion = Explosion(player.rect.center, assets['explosion_spritesheet'])
                         all_sprites.add(explosion)
@@ -363,7 +363,7 @@ def game_loop(cooperative=False):
             # Handle collisions between players and asteroids
             for player in [player1, player2]:
                 if player and player.alive:
-                    hits = pygame.sprite.spritecollide(player, asteroids, True)
+                    hits = pygame.sprite.spritecollide(player, asteroids, True, pygame.sprite.collide_mask)
                     if hits:
                         explosion = Explosion(player.rect.center, assets['explosion_spritesheet'])
                         all_sprites.add(explosion)
