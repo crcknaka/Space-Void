@@ -64,6 +64,14 @@ class StaticStar:
         self.max_opacity = opacity
         self.fading = random.choice([True, False])
         self.fade_speed = random.uniform(0.1, 0.5)  # Speed of fading in or out
+        
+        # Randomly choose a color from white to blue (RGB values)
+        # White (255, 255, 255) to Blue (0, 0, 255)
+        self.color = (
+            random.randint(0, 255),  # Red value
+            random.randint(0, 255),  # Green value
+            255                       # Blue value (always fully blue)
+        )
 
     def update(self):
         # Randomly increase or decrease opacity to simulate light up or turn off
@@ -80,8 +88,15 @@ class StaticStar:
 
     def draw(self, surface):
         star_surface = pygame.Surface((self.size * 1.2, self.size * 1.2), pygame.SRCALPHA)
-        pygame.draw.circle(star_surface, (255, 255, 255, int(self.opacity)), (self.size, self.size), self.size)
+        # Draw the star with the color and opacity
+        pygame.draw.circle(
+            star_surface, 
+            (*self.color, int(self.opacity)),  # Color with the alpha (opacity)
+            (self.size, self.size), 
+            self.size
+        )
         surface.blit(star_surface, (int(self.x), int(self.y)))
+
 
 # Star class for parallax effect (stars that move)
 class Star:
