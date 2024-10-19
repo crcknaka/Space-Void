@@ -448,7 +448,7 @@ class Asteroid(pygame.sprite.Sprite):
         self.original_image = image
         self.size = size
         self.angle = 0
-        
+
         # Set different rotation speeds for different sizes
         if self.size == 'large':
             self.rotation_speed = random.uniform(0.5, 1)
@@ -457,25 +457,38 @@ class Asteroid(pygame.sprite.Sprite):
         elif self.size == 'small':
             self.rotation_speed = random.uniform(2, 3)  # Even faster for small
 
-        # Scale the asteroid image based on its size
+        # Scale the asteroid image based on its size (only once during creation)
         self.image = self.get_scaled_image()
+        self.original_image = self.image  # Store the scaled image for rotation
+
+        # Set different movement speeds for different sizes
+        if self.size == 'large':
+            self.speedx = random.uniform(1, 2)  # Slow horizontal speed for large asteroids
+            self.speedy = random.uniform(-1, 1)  # Small vertical movement range
+        elif self.size == 'medium':
+            self.speedx = random.uniform(2, 4)  # Medium speed for medium asteroids
+            self.speedy = random.uniform(-2, 2)
+        elif self.size == 'small':
+            self.speedx = random.uniform(4, 6)  # Fast horizontal speed for small asteroids
+            self.speedy = random.uniform(-3, 3)
 
         self.rect = self.image.get_rect()
         self.rect.x = WIDTH + random.randint(5, 10)
         self.rect.y = random.randint(0, HEIGHT - self.rect.height)
-        self.speedx = random.uniform(2, 5)
-        self.speedy = random.uniform(-2, 2)
         self.last_update = pygame.time.get_ticks()
         self.rotation_delay = 50  # Rotate every 50 milliseconds
 
     def get_scaled_image(self):
         """Return the scaled asteroid image based on its size."""
         if self.size == 'large':
-            return pygame.transform.scale(self.original_image, (80, 80))  # Large asteroid
+            random_size = random.randint(80, 150)  # Random size between 80 and 150 for large asteroids
+            return pygame.transform.scale(self.original_image, (random_size, random_size))  # Random large asteroid size
         elif self.size == 'medium':
-            return pygame.transform.scale(self.original_image, (50, 50))  # Medium asteroid
+            random_size = random.randint(40, 80)  # Random size between 40 and 80 for medium asteroids
+            return pygame.transform.scale(self.original_image, (random_size, random_size))  # Random medium asteroid size
         elif self.size == 'small':
-            return pygame.transform.scale(self.original_image, (30, 30))  # Small asteroid
+            random_size = random.randint(20, 40)  # Random size between 20 and 40 for small asteroids
+            return pygame.transform.scale(self.original_image, (random_size, random_size))  # Random small asteroid size
 
     def update(self):
         # Update rotation for all asteroid sizes
@@ -483,7 +496,7 @@ class Asteroid(pygame.sprite.Sprite):
         if now - self.last_update > self.rotation_delay:
             self.last_update = now
             self.angle += self.rotation_speed * game_speed_multiplier
-            self.image = pygame.transform.rotate(self.get_scaled_image(), self.angle)
+            self.image = pygame.transform.rotate(self.original_image, self.angle)  # Rotate scaled image
             self.rect = self.image.get_rect(center=self.rect.center)
 
         # Update position
@@ -496,7 +509,13 @@ class Asteroid(pygame.sprite.Sprite):
         pieces = []
         next_size = {'large': 'medium', 'medium': 'small', 'small': None}
         new_size = next_size[self.size]
-        piece_count = 2 if self.size == 'large' else 1  # Reduce count for medium asteroids
+
+        # Number of pieces for medium asteroids: 2-3 small asteroids
+        if self.size == 'medium':
+            piece_count = random.randint(2, 3)
+        else:
+            piece_count = 2 if self.size == 'large' else 1  # Reduce count for medium asteroids
+
         if new_size:
             for _ in range(piece_count):
                 asteroid = Asteroid(self.original_image, new_size)
