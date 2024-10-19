@@ -14,7 +14,6 @@ author_font = pygame.font.Font(None, 24)  # Smaller font for author text
 hover_sound = pygame.mixer.Sound('assets/sounds/hover.wav')  # Add your hover sound file
 click_sound = pygame.mixer.Sound('assets/sounds/click.wav')  # Add your click sound file
 
-
 # Screen dimensions
 # Set screen mode based on FULLSCREEN flag
 if FULLSCREEN:
@@ -55,7 +54,36 @@ menu_background_scaled = pygame.transform.scale(menu_background, (new_bg_width, 
 button_font = pygame.font.Font(None, 48)  # Use default font
 title_font = pygame.font.Font(None, 72)
 
-# Star class for the menu background
+# Static star class (stars without parallax effect, some light up or fade out)
+class StaticStar:
+    def __init__(self, x, y, size, opacity):
+        self.x = x
+        self.y = y
+        self.size = size
+        self.opacity = opacity
+        self.max_opacity = opacity
+        self.fading = random.choice([True, False])
+        self.fade_speed = random.uniform(0.1, 0.5)  # Speed of fading in or out
+
+    def update(self):
+        # Randomly increase or decrease opacity to simulate light up or turn off
+        if self.fading:
+            self.opacity -= self.fade_speed
+            if self.opacity <= 0:
+                self.opacity = 0
+                self.fading = False
+        else:
+            self.opacity += self.fade_speed
+            if self.opacity >= self.max_opacity:
+                self.opacity = self.max_opacity
+                self.fading = True
+
+    def draw(self, surface):
+        star_surface = pygame.Surface((self.size * 1.2, self.size * 1.2), pygame.SRCALPHA)
+        pygame.draw.circle(star_surface, (255, 255, 255, int(self.opacity)), (self.size, self.size), self.size)
+        surface.blit(star_surface, (int(self.x), int(self.y)))
+
+# Star class for parallax effect (stars that move)
 class Star:
     def __init__(self, x, y, speed, size, opacity):
         self.x = x
@@ -71,7 +99,7 @@ class Star:
             self.y = random.randint(0, HEIGHT)
 
     def draw(self, surface):
-        star_surface = pygame.Surface((self.size * 2, self.size * 2), pygame.SRCALPHA)
+        star_surface = pygame.Surface((self.size * 1.4, self.size * 1.4), pygame.SRCALPHA)
         pygame.draw.circle(
             star_surface,
             (255, 255, 255, self.opacity),
@@ -80,7 +108,7 @@ class Star:
         )
         surface.blit(star_surface, (int(self.x), int(self.y)))
 
-# Initialize stars for the menu
+# Initialize parallax stars for the menu
 menu_stars = [
     Star(
         random.randint(0, WIDTH),
@@ -90,6 +118,17 @@ menu_stars = [
         random.randint(50, 200),
     )
     for _ in range(50)
+]
+
+# Initialize static stars for the menu background
+static_stars = [
+    StaticStar(
+        random.randint(0, WIDTH),
+        random.randint(0, HEIGHT),
+        random.randint(1, 4),  # Size of the static stars
+        random.randint(50, 200)  # Initial opacity
+    )
+    for _ in range(100)  # You can increase or decrease the number of static stars
 ]
 
 class Button:
@@ -279,7 +318,12 @@ def main_menu():
         bg_y = (HEIGHT - new_bg_height) // 1
         screen.blit(menu_background_scaled, (bg_x + offset_x, bg_y + offset_y))
 
-        # Update and draw stars
+        # Update and draw static stars (non-parallax stars)
+        for static_star in static_stars:
+            static_star.update()
+            static_star.draw(screen)
+
+        # Update and draw parallax stars (moving stars)
         for star in menu_stars:
             star.update()
             star.draw(screen)
