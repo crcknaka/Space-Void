@@ -130,7 +130,7 @@ def game_loop(cooperative=False):
     asteroid_spawn_interval = 5000  # Initial spawn interval for asteroids
 
     pygame.time.set_timer(ADDENEMY, enemy_spawn_interval)
-    pygame.time.set_timer(ADDPOWERUP, 10000)  # Spawn power-up every 10 seconds
+    pygame.time.set_timer(ADDPOWERUP, 1000)  # Spawn power-up every 10 seconds
     pygame.time.set_timer(ADDASTEROID, asteroid_spawn_interval)
 
     # Background image
@@ -559,4 +559,3 @@ def game_loop(cooperative=False):
     
         pygame.display.flip()
         pygame.time.Clock().tick(60)
-

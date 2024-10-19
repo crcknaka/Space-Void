@@ -159,38 +159,71 @@ def versus_loop():
     # Initialize the pause menu
     pause_menu = PauseMenu(screen, click_sound, hover_sound)
 
+    def unpause_sprites():
+        """ Unpauses all sprites and restores their movement and action. """
+        for sprite in all_sprites:
+            if hasattr(sprite, 'pause') and sprite.paused:  # Check if the sprite is paused
+                sprite.pause()  # Unpause the sprite
+
     while running:
         pygame.time.Clock().tick(60)
 
-        # Event handling
+        if paused:
+            # Draw game elements first (stars, players, bullets, etc.) so they are visible behind the pause menu
+            screen.fill(BLACK)
+
+            # Draw the game background with parallax effect
+            screen.blit(background, (background_x, 0))
+            screen.blit(background, (background_x + WIDTH, 0))
+
+            # Draw star layers for parallax effect
+            for layer in star_layers:
+                for star in layer:
+                    star.draw(screen)
+
+            all_sprites.draw(screen)
+
+            # Draw scores
+            score_text_p1 = game_font.render(f"P1 Score: {player1_score}", True, WHITE)
+            score_text_p2 = game_font.render(f"P2 Score: {player2_score}", True, WHITE)
+            screen.blit(score_text_p1, (10, 10))
+            screen.blit(score_text_p2, (WIDTH - score_text_p2.get_width() - 10, 10))
+
+            # Handle pause menu interactions while the game is paused
+            mouse_pos = pygame.mouse.get_pos()
+            pause_menu.update(mouse_pos)
+            pause_menu.draw()  # Draw the pause menu with the transparent overlay on top of the game
+
+            # Handle pause menu events in one place
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    sys.exit()
+                result = pause_menu.handle_mouse_event(event, mouse_pos) or pause_menu.handle_event(event)
+                if result == "resume":
+                    paused = False
+                    unpause_sprites()  # Unpause the sprites when resuming
+                elif result == "main_menu":
+                    from menu import main_menu
+                    main_menu()  # Go back to the main menu
+                    return  # Exit the current game loop
+
+            # Skip the rest of the loop while paused
+            pygame.display.flip()
+            continue
+
+        # Event handling when game is not paused
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 sys.exit()
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    paused = not paused
-                    for sprite in all_sprites:
-                        if hasattr(sprite, 'pause'):
-                            sprite.pause()
 
-        if paused:
-            mouse_pos = pygame.mouse.get_pos()
-            pause_menu.update(mouse_pos)
-            pause_menu.draw()
-
-            # Handle pause menu events
-            for event in pygame.event.get():
-                if event.type == pygame.KEYDOWN or event.type == pygame.MOUSEBUTTONDOWN:
-                    result = pause_menu.handle_mouse_event(event, mouse_pos) or pause_menu.handle_event(event)
-                    if result == "resume":
-                        paused = False
-                    elif result == "main_menu":
-                        from menu import main_menu
-                        main_menu()
-                        return
-
-            continue  # Skip the rest of the loop if paused
+            # Toggle pause state
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                paused = True  # Set paused state to true
+                for sprite in all_sprites:
+                    if hasattr(sprite, 'pause'):
+                        sprite.pause()
 
         # Game logic when not paused
         if not paused:
@@ -323,7 +356,7 @@ def versus_loop():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 sys.exit()
-            
+
             result = gameover_menu.handle_mouse_event(event, mouse_pos) or gameover_menu.handle_event(event)
             if result == "retry":
                 versus_loop()  # Restart versus mode
@@ -332,3 +365,5 @@ def versus_loop():
                 from menu import main_menu
                 main_menu()  # Return to main menu
                 return
+
+
