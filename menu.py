@@ -1,6 +1,6 @@
+import asyncio
 import pygame
 import random
-import sys
 from game_assets import load_assets
 from settings import WIDTH, HEIGHT, FULLSCREEN  # Import screen dimensions from settings
 
@@ -11,8 +11,8 @@ font = pygame.font.Font(None, 36)  # Default font
 author_font = pygame.font.Font(None, 24)  # Smaller font for author text
 
 # Load sound effects
-hover_sound = pygame.mixer.Sound('assets/sounds/hover.wav')  # Add your hover sound file
-click_sound = pygame.mixer.Sound('assets/sounds/click.wav')  # Add your click sound file
+hover_sound = pygame.mixer.Sound('assets/sounds/hover.ogg')  # Add your hover sound file
+click_sound = pygame.mixer.Sound('assets/sounds/click.ogg')  # Add your click sound file
 
 # Screen dimensions
 # Set screen mode based on FULLSCREEN flag
@@ -198,7 +198,7 @@ class Button:
         self.hovered = is_hovered
 
 
-def main_menu():
+async def main_menu():
     parallax_factor = 0.02  # Adjust this value for more or less parallax effect
 
     # Define buttons
@@ -286,7 +286,7 @@ def main_menu():
                     return
                 elif result == 'exit':
                     pygame.quit()
-                    sys.exit()
+                    
 
         # Reset keyboard selection when the mouse hovers over any button
         for i, button in enumerate(buttons):
@@ -300,7 +300,7 @@ def main_menu():
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
-                sys.exit()
+                
             if event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1:  # Left mouse button
                     if buttons[current_index].hovered:
@@ -321,7 +321,7 @@ def main_menu():
                                 return
                             elif result == 'exit':
                                 pygame.quit()
-                                sys.exit()
+                                
 
         # Calculate offset for parallax effect
         offset_x = -(mouse_pos[0] - WIDTH // -1) * parallax_factor
@@ -361,3 +361,5 @@ def main_menu():
 
         pygame.display.flip()
         pygame.time.Clock().tick(60)
+
+        await asyncio.sleep(0)  # You must include this statement in your main loop. Keep the argument at 0.
