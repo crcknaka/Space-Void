@@ -2,7 +2,7 @@ Game Title: Space Void
 Genre: Space Shooter
 Platform: PC (Python - Pygame)
 Game Type: Arcade/Action
-Developer: Ilja Kovalenko (cRc^)
+Developer: Ilja Kovalenko (cRc^ )
 
 Game Description
 Space Void is an exhilarating 2D space shooter that puts players in command of a sleek spaceship tasked with defending the galaxy from waves of increasingly dangerous enemies. Set in the vast expanse of outer space, Space Void challenges players to survive relentless waves of enemy spacecraft, dodge asteroids, and battle formidable bosses while upgrading their ship's abilities. Featuring fast-paced action, dynamic visuals, and immersive gameplay, Space Void is a thrilling adventure into the unknown void of space.
