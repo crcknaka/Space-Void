@@ -16,6 +16,9 @@ from game_assets import load_assets
 from menu import main_menu
 from settings import WIDTH, HEIGHT  # Import screen dimensions from settings
 from main import screen
+from pause_menu import PauseMenu
+
+
 hover_sound = pygame.mixer.Sound('assets/sounds/hover.wav')  # Add your hover sound file
 click_sound = pygame.mixer.Sound('assets/sounds/click.wav')  # Add your click sound file
 # Colors

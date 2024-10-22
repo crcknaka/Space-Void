@@ -5,7 +5,6 @@ import random
 import math
 from settings import WIDTH, HEIGHT  # Import screen dimensions from settings
 
-# Global variable for game speed multiplier
 game_speed_multiplier = 1.0
 
 def set_game_speed_multiplier(value):
@@ -687,38 +686,3 @@ class Star:
         )
         surface.blit(star_surface, (int(self.x), int(self.y)))
 
-
-class RocketTrailParticle(pygame.sprite.Sprite):
-    def __init__(self, x, y):
-        super().__init__()
-        # Randomize particle properties
-        self.size = random.randint(1, 4)  # Size of the particle
-        self.color = (255, 165, 0, 150)  # Orange color with some transparency
-        self.image = pygame.Surface((self.size*2, self.size*2), pygame.SRCALPHA)
-        pygame.draw.circle(self.image, self.color, (self.size, self.size), self.size)
-        self.rect = self.image.get_rect(center=(x, y))
-        self.speedx = random.uniform(-1, 1)
-        self.speedy = random.uniform(-1, 1)
-        self.lifetime = 500  # Lifetime in milliseconds
-        self.spawn_time = pygame.time.get_ticks()
-        self.fade_rate = 150 / self.lifetime  # Alpha decrement per millisecond
-
-    def update(self):
-        current_time = pygame.time.get_ticks()
-        elapsed_time = current_time - self.spawn_time
-
-        if elapsed_time > self.lifetime:
-            self.kill()
-            return
-
-        # Move the particle
-        self.rect.x += self.speedx
-        self.rect.y += self.speedy
-
-        # Fade out
-        alpha = max(0, self.color[3] - (elapsed_time * self.fade_rate))
-        self.image.set_alpha(alpha)
-
-    def pause(self):
-        # Optional: Implement pause functionality if needed
-        pass
