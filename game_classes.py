@@ -1,4 +1,5 @@
 # game_classes.py
+
 import pygame
 import random
 import math
@@ -15,7 +16,7 @@ class Player(pygame.sprite.Sprite):
     def __init__(self, image, thruster_frames, bullets_group, rockets_group, all_sprites_group, targets_group, assets, controls, facing_left=False):
         super().__init__()
         self.assets = assets
-        self.original_image = image  # Keep a reference to the original ship image
+        self.original_image = image  # Reference to the original ship image
         self.image = self.original_image.copy()
         self.rect = self.image.get_rect()
         self.rect.centerx = 100
@@ -24,30 +25,31 @@ class Player(pygame.sprite.Sprite):
         self.rockets_group = rockets_group
         self.all_sprites_group = all_sprites_group
         self.targets_group = targets_group
-        self.shoot_delay = 500  # Default shoot delay
+        self.shoot_delay = 500  # Default shoot delay in milliseconds
         self.last_shot = pygame.time.get_ticks()
         self.paused = False
         self.powered_up = False
         self.powerup_end_time = 0
-        self.rocket_count = 3  # Starting rockets
-        self.default_speed = 5  # Default speed for movement
+        self.rocket_count = 3  # Starting number of rockets
+        self.default_speed = 5  # Default movement speed
         self.fast_speed = 8  # Speed when speed key is pressed
+
         # Thruster animation attributes
         self.thruster_frames = thruster_frames
         self.current_thruster_frame = 0
         self.last_thruster_update = pygame.time.get_ticks()
-        self.thruster_frame_rate = 50  # milliseconds between frames
+        self.thruster_frame_rate = 50  # Milliseconds between thruster frames
+
         # Controls
         self.controls = controls
         self.alive = True  # Player's alive status
         self.facing_left = facing_left
         self.bullet_speedx = -10 if self.facing_left else 10
         self.last_rocket = pygame.time.get_ticks()
-        self.rocket_delay = 1000  # Delay between rockets
-        
-         # Track the number of bullets to shoot with spread power-up
-        self.spread_bullet_count = 1  # Starts with 1, increased by power-ups
+        self.rocket_delay = 1000  # Delay between rocket launches in milliseconds
 
+        # Track the number of bullets to shoot with spread power-up
+        self.spread_bullet_count = 1  # Starts with 1, increased by power-ups
 
     def update(self):
         if self.paused or not self.alive:
@@ -157,14 +159,16 @@ class Player(pygame.sprite.Sprite):
                 spread_angle = 10  # Angle between each bullet
                 start_angle = -(self.spread_bullet_count - 1) * (spread_angle / 2)
                 for i in range(self.spread_bullet_count):
-                    bullet = Bullet(self.rect.left, self.rect.centery, bullet_img, speedx=-10, angle=start_angle + (i * spread_angle))
+                    angle = start_angle + (i * spread_angle)
+                    bullet = Bullet(self.rect.left, self.rect.centery, bullet_img, speedx=-10, angle=angle)
                     self.bullets_group.add(bullet)
                     self.all_sprites_group.add(bullet)
             else:
                 spread_angle = 10
                 start_angle = -(self.spread_bullet_count - 1) * (spread_angle / 2)
                 for i in range(self.spread_bullet_count):
-                    bullet = Bullet(self.rect.right, self.rect.centery, self.assets['bullet_img'], speedx=10, angle=start_angle + (i * spread_angle))
+                    angle = start_angle + (i * spread_angle)
+                    bullet = Bullet(self.rect.right, self.rect.centery, self.assets['bullet_img'], speedx=10, angle=angle)
                     self.bullets_group.add(bullet)
                     self.all_sprites_group.add(bullet)
             
@@ -181,7 +185,7 @@ class Player(pygame.sprite.Sprite):
 
         now = pygame.time.get_ticks()
         if self.rocket_count > 0 and now - self.last_rocket > self.rocket_delay:
-            rocket = Rocket(self.rect.centerx, self.rect.centery, self.assets['rocket_img'], self.targets_group)
+            rocket = Rocket(self.rect.centerx, self.rect.centery, self.assets['rocket_img'], self.targets_group, self.assets, self.all_sprites_group)
             self.rockets_group.add(rocket)
             self.all_sprites_group.add(rocket)
             self.last_rocket = now
@@ -198,6 +202,7 @@ class Player(pygame.sprite.Sprite):
 
     def add_rockets(self, amount):
         self.rocket_count += amount
+
 
 class Bullet(pygame.sprite.Sprite):
     def __init__(self, x, y, image, speedx=10, angle=0):
@@ -227,10 +232,9 @@ class Bullet(pygame.sprite.Sprite):
     def pause(self):
         self.paused = not self.paused
 
-        
 
 class Rocket(pygame.sprite.Sprite):
-    def __init__(self, x, y, image, targets_group):
+    def __init__(self, x, y, image, targets_group, assets, all_sprites_group):
         super().__init__()
         self.original_image = image
         self.image = self.original_image.copy()
@@ -241,7 +245,9 @@ class Rocket(pygame.sprite.Sprite):
         self.rotation_speed = 2  # Controls how fast the rocket rotates
         self.angle = 0  # Initial angle
         self.targets_group = targets_group
+        self.assets = assets
         self.paused = False
+        self.all_sprites_group = all_sprites_group  # Reference to all_sprites_group
 
     def find_nearest_target(self):
         # Find the nearest target (enemy or asteroid)
@@ -294,6 +300,10 @@ class Rocket(pygame.sprite.Sprite):
             self.rect.x += self.speed * math.cos(rad_angle)
             self.rect.y += self.speed * math.sin(rad_angle)
 
+        # Emit trail particles
+        trail_particle = RocketTrailParticle(self.rect.centerx, self.rect.centery)
+        self.all_sprites_group.add(trail_particle)
+
         # Destroy the rocket if it goes off the screen
         if (self.rect.right < 0 or self.rect.left > WIDTH or
                 self.rect.bottom < 0 or self.rect.top > HEIGHT):
@@ -303,15 +313,47 @@ class Rocket(pygame.sprite.Sprite):
         self.paused = not self.paused
 
 
+class RocketTrailParticle(pygame.sprite.Sprite):
+    def __init__(self, x, y):
+        super().__init__()
+        # Randomize particle properties
+        self.size = random.randint(2, 4)  # Size of the particle
+        self.color = (255, 165, 0, 150)  # Orange color with some transparency
+        self.image = pygame.Surface((self.size*2, self.size*2), pygame.SRCALPHA)
+        pygame.draw.circle(self.image, self.color, (self.size, self.size), self.size)
+        self.rect = self.image.get_rect(center=(x, y))
+        self.speedx = random.uniform(-1, 1)
+        self.speedy = random.uniform(-1, 1)
+        self.lifetime = 500  # Lifetime in milliseconds
+        self.spawn_time = pygame.time.get_ticks()
+        self.fade_rate = 150 / self.lifetime  # Alpha decrement per millisecond
 
+    def update(self):
+        current_time = pygame.time.get_ticks()
+        elapsed_time = current_time - self.spawn_time
 
+        if elapsed_time > self.lifetime:
+            self.kill()
+            return
+
+        # Move the particle
+        self.rect.x += self.speedx
+        self.rect.y += self.speedy
+
+        # Fade out
+        alpha = max(0, self.color[3] - (elapsed_time * self.fade_rate))
+        self.image.set_alpha(alpha)
+
+    def pause(self):
+        # Optional: Implement pause functionality if needed
+        pass
 
 
 class Enemy(pygame.sprite.Sprite):
     def __init__(self, image, enemy_bullets_group, all_sprites_group, assets, move_randomly=False, level=1):
         super().__init__()
         self.assets = assets
-        self.original_image = image  # Keep a reference to the original ship image
+        self.original_image = image  # Reference to the original enemy ship image
         self.image = self.original_image.copy()
         self.rect = self.image.get_rect()
         self.rect.x = WIDTH + random.randint(50, 100)
@@ -320,7 +362,7 @@ class Enemy(pygame.sprite.Sprite):
         self.speedy = 0
         self.enemy_bullets_group = enemy_bullets_group
         self.all_sprites_group = all_sprites_group
-        self.shoot_delay = random.randint(1500, 3000) - (level - 1) * 100  # Faster shooting
+        self.shoot_delay = random.randint(1500, 3000) - (level - 1) * 100  # Faster shooting with level
         self.last_shot = pygame.time.get_ticks()
         self.paused = False
         self.move_randomly = move_randomly
@@ -330,7 +372,7 @@ class Enemy(pygame.sprite.Sprite):
         self.thruster_frames = assets['enemy_thruster_frames']
         self.current_thruster_frame = 0
         self.last_thruster_update = pygame.time.get_ticks()
-        self.thruster_frame_rate = 50  # milliseconds between frames
+        self.thruster_frame_rate = 50  # Milliseconds between thruster frames
 
     def update(self):
         if self.paused:
@@ -392,6 +434,7 @@ class Enemy(pygame.sprite.Sprite):
     def pause(self):
         self.paused = not self.paused
 
+
 class EnemyBullet(pygame.sprite.Sprite):
     def __init__(self, x, y, image, speedx=-8, speedy=0):
         super().__init__()
@@ -416,6 +459,7 @@ class EnemyBullet(pygame.sprite.Sprite):
     def pause(self):
         self.paused = not self.paused
 
+
 class Boss(pygame.sprite.Sprite):
     def __init__(self, image, enemy_bullets_group, all_sprites_group, assets, level=1):
         super().__init__()
@@ -427,11 +471,11 @@ class Boss(pygame.sprite.Sprite):
         self.speedx = -1 - (level - 1) * 0.5  # Increase speed with level
         self.enemy_bullets_group = enemy_bullets_group
         self.all_sprites_group = all_sprites_group
-        self.shoot_delay = max(500, 1000 - (level - 1) * 100)  # Increase shooting rate
+        self.shoot_delay = max(500, 1000 - (level - 1) * 100)  # Increase shooting rate with level
         self.last_shot = pygame.time.get_ticks()
         self.paused = False
         # Adjust health so that at level 1, boss has lower health
-        self.health = 5 + (level - 1) * 5  # Reduced health for level 1 boss
+        self.health = 5 + (level - 1) * 5  # Health increases with level
 
     def update(self):
         if self.paused:
@@ -463,6 +507,7 @@ class Boss(pygame.sprite.Sprite):
 
     def pause(self):
         self.paused = not self.paused
+
 
 class Asteroid(pygame.sprite.Sprite):
     def __init__(self, image, size='large'):
@@ -570,6 +615,7 @@ class PowerUp(pygame.sprite.Sprite):
     def pause(self):
         self.paused = not self.paused
 
+
 class Explosion(pygame.sprite.Sprite):
     def __init__(self, center, spritesheet):
         super().__init__()
@@ -581,7 +627,7 @@ class Explosion(pygame.sprite.Sprite):
         self.rect.center = center
         self.frame_index = 0
         self.last_update = pygame.time.get_ticks()
-        self.frame_rate = 50  # milliseconds between frames
+        self.frame_rate = 50  # Milliseconds between frames
 
     def load_frames(self):
         sheet_width = self.spritesheet.get_width()
@@ -616,6 +662,7 @@ class Explosion(pygame.sprite.Sprite):
                 self.rect = self.image.get_rect()
                 self.rect.center = center
 
+
 class Star:
     def __init__(self, x, y, speed, size, opacity):
         self.x = x
@@ -640,3 +687,38 @@ class Star:
         )
         surface.blit(star_surface, (int(self.x), int(self.y)))
 
+
+class RocketTrailParticle(pygame.sprite.Sprite):
+    def __init__(self, x, y):
+        super().__init__()
+        # Randomize particle properties
+        self.size = random.randint(1, 4)  # Size of the particle
+        self.color = (255, 165, 0, 150)  # Orange color with some transparency
+        self.image = pygame.Surface((self.size*2, self.size*2), pygame.SRCALPHA)
+        pygame.draw.circle(self.image, self.color, (self.size, self.size), self.size)
+        self.rect = self.image.get_rect(center=(x, y))
+        self.speedx = random.uniform(-1, 1)
+        self.speedy = random.uniform(-1, 1)
+        self.lifetime = 500  # Lifetime in milliseconds
+        self.spawn_time = pygame.time.get_ticks()
+        self.fade_rate = 150 / self.lifetime  # Alpha decrement per millisecond
+
+    def update(self):
+        current_time = pygame.time.get_ticks()
+        elapsed_time = current_time - self.spawn_time
+
+        if elapsed_time > self.lifetime:
+            self.kill()
+            return
+
+        # Move the particle
+        self.rect.x += self.speedx
+        self.rect.y += self.speedy
+
+        # Fade out
+        alpha = max(0, self.color[3] - (elapsed_time * self.fade_rate))
+        self.image.set_alpha(alpha)
+
+    def pause(self):
+        # Optional: Implement pause functionality if needed
+        pass
