@@ -19,8 +19,8 @@ from main import screen
 from pause_menu import PauseMenu
 
 
-hover_sound = pygame.mixer.Sound('assets/sounds/hover.wav')  # Add your hover sound file
-click_sound = pygame.mixer.Sound('assets/sounds/click.wav')  # Add your click sound file
+hover_sound = pygame.mixer.Sound('assets/sounds/hover.ogg')  # Add your hover sound file
+click_sound = pygame.mixer.Sound('assets/sounds/click.ogg')  # Add your click sound file
 # Colors
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
@@ -30,7 +30,7 @@ assets = load_assets()
 
 def main():
 
-    pygame.mixer.music.load('assets/sounds/background_music.mp3')
+    pygame.mixer.music.load('assets/sounds/background_music.ogg')
     pygame.mixer.music.play(-1)  # Loop the music indefinitely
 # Fonts
 game_font = pygame.font.Font(None, 36)  # Default font

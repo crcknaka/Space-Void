@@ -34,16 +34,16 @@ def load_assets():
         'game_background': load_image('game_background.png'),  # Game background image
         'versus_background': load_image('versus_background.png'),  # Versus mode background
         'explosion_spritesheet': load_image('explosion_spritesheet.png'),
-        'explosion_sound': load_sound('explosion.wav'),
-        'gun_sound': load_sound('gun.wav'),
-        'powerup_sound': load_sound('powerup.wav'),
-        'rocket_sound': load_sound('rocket.wav'),
+        'explosion_sound': load_sound('explosion.ogg'),
+        'gun_sound': load_sound('gun.ogg'),
+        'powerup_sound': load_sound('powerup.ogg'),
+        'rocket_sound': load_sound('rocket.ogg'),
         'asteroid_img': load_image('asteroid.png'),  # Asteroid image
         'rocket_img': load_image('rocket.png', (20, 10)),  # Rocket image
-        'background_music': 'background_music.mp3',  # Background music file
-        'versus_music': 'versus_music.mp3',  # Versus mode music
-        'player1_kill_sound': load_sound('player1_kill.wav'),
-        'player2_kill_sound': load_sound('player2_kill.wav'),
+        'background_music': 'background_music.ogg',  # Background music file
+        'versus_music': 'versus_music.ogg',  # Versus mode music
+        'player1_kill_sound': load_sound('player1_kill.ogg'),
+        'player2_kill_sound': load_sound('player2_kill.ogg'),
         
     }
     return assets
