@@ -281,7 +281,7 @@ def versus_loop():
                     player1.alive = False
                     all_sprites.remove(player1)
                     player2_score += 1
-                    respawn_timer_p1 = pygame.time.get_ticks() + 2000  # 2 seconds
+                    respawn_timer_p1 = pygame.time.get_ticks() + 1000  # 1 seconds
                     assets['player2_kill_sound'].play()
 
             if player2.alive:
@@ -293,7 +293,7 @@ def versus_loop():
                     player2.alive = False
                     all_sprites.remove(player2)
                     player1_score += 1
-                    respawn_timer_p2 = pygame.time.get_ticks() + 2000  # 2 seconds
+                    respawn_timer_p2 = pygame.time.get_ticks() + 1000  # 1 seconds
                     assets['player1_kill_sound'].play()
 
             # Respawn players
