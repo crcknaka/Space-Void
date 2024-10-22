@@ -45,7 +45,7 @@ class Player(pygame.sprite.Sprite):
         self.facing_left = facing_left
         self.bullet_speedx = -10 if self.facing_left else 10
         self.last_rocket = pygame.time.get_ticks()
-        self.rocket_delay = 1000  # Delay between rocket launches in milliseconds
+        self.rocket_delay = 700  # Delay between rocket launches in milliseconds
 
         # Track the number of bullets to shoot with spread power-up
         self.spread_bullet_count = 1  # Starts with 1, increased by power-ups
