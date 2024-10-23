@@ -1,5 +1,3 @@
-# game_classes.py
-
 import pygame
 import random
 import math
@@ -73,8 +71,8 @@ class Player(pygame.sprite.Sprite):
         if keys[self.controls['right']]:
             self.speedx = current_speed
 
-        self.rect.x += self.speedx * game_speed_multiplier
-        self.rect.y += self.speedy * game_speed_multiplier
+        self.rect.x += self.speedx  # Removed game_speed_multiplier
+        self.rect.y += self.speedy  # Removed game_speed_multiplier
 
         # Keep the player on the screen
         if self.rect.top < 0:
@@ -222,8 +220,8 @@ class Bullet(pygame.sprite.Sprite):
         if self.paused:
             return
 
-        # Update bullet position based on angle and speed
-        self.rect.x += self.speedx  # Bullets not affected by game_speed_multiplier
+        # Bullets not affected by game_speed_multiplier
+        self.rect.x += self.speedx
         self.rect.y += self.speedy
         if self.rect.left > WIDTH or self.rect.right < 0:
             self.kill()
@@ -266,6 +264,7 @@ class Rocket(pygame.sprite.Sprite):
         if self.paused:
             return
 
+        # Rockets not affected by game_speed_multiplier
         # Always find the nearest target every frame
         self.target = self.find_nearest_target()
 
@@ -449,8 +448,9 @@ class EnemyBullet(pygame.sprite.Sprite):
         if self.paused:
             return
 
-        self.rect.x += self.speedx  # Bullets not affected by game_speed_multiplier
-        self.rect.y += self.speedy
+        # Enemy bullets are affected by game_speed_multiplier
+        self.rect.x += self.speedx * game_speed_multiplier
+        self.rect.y += self.speedy * game_speed_multiplier
         if (self.rect.right < 0 or self.rect.left > WIDTH or
                 self.rect.bottom < 0 or self.rect.top > HEIGHT):
             self.kill()
@@ -607,7 +607,7 @@ class PowerUp(pygame.sprite.Sprite):
         if self.paused:
             return
 
-        self.rect.x += self.speedx * game_speed_multiplier
+        self.rect.x += self.speedx  # Not affected by game_speed_multiplier
         if self.rect.right < 0:
             self.kill()
 
@@ -671,7 +671,7 @@ class Star:
         self.opacity = opacity
 
     def update(self):
-        self.x -= self.speed * game_speed_multiplier
+        self.x -= self.speed  # Not affected by game_speed_multiplier
         if self.x < 0:
             self.x = WIDTH
             self.y = random.randint(0, HEIGHT)
@@ -685,4 +685,3 @@ class Star:
             self.size,
         )
         surface.blit(star_surface, (int(self.x), int(self.y)))
-

@@ -1,4 +1,3 @@
-# game.py
 import pygame
 import random
 import sys
@@ -15,9 +14,15 @@ from game_classes import (
 from game_assets import load_assets
 from menu import main_menu
 from settings import WIDTH, HEIGHT  # Import screen dimensions from settings
-from main import screen
 from pause_menu import PauseMenu
 
+pygame.init()
+pygame.mixer.init()
+
+# Initialize screen
+if 'screen' not in globals():
+    screen = pygame.display.set_mode((WIDTH, HEIGHT))
+    pygame.display.set_caption("Space Shooter")
 
 hover_sound = pygame.mixer.Sound('assets/sounds/hover.wav')  # Add your hover sound file
 click_sound = pygame.mixer.Sound('assets/sounds/click.wav')  # Add your click sound file
@@ -28,10 +33,6 @@ RED = (255, 0, 0)
 
 assets = load_assets()
 
-def main():
-
-    pygame.mixer.music.load('assets/sounds/background_music.mp3')
-    pygame.mixer.music.play(-1)  # Loop the music indefinitely
 # Fonts
 game_font = pygame.font.Font(None, 36)  # Default font
 game_over_font = pygame.font.Font(None, 72)
@@ -133,7 +134,7 @@ def game_loop(cooperative=False):
     asteroid_spawn_interval = 5000  # Initial spawn interval for asteroids
 
     pygame.time.set_timer(ADDENEMY, enemy_spawn_interval)
-    pygame.time.set_timer(ADDPOWERUP, 10000)  # Spawn power-up every 10 seconds
+    pygame.time.set_timer(ADDPOWERUP, 1000)  # Spawn power-up every 10 seconds
     pygame.time.set_timer(ADDASTEROID, asteroid_spawn_interval)
 
     # Background image
