@@ -344,7 +344,7 @@ def main_menu():
             star.draw(screen)
 
         # Draw the game title
-        title_text = title_font.render("SPACE VOID v0.7", True, WHITE)
+        title_text = title_font.render("SPACE VOID v0.8", True, WHITE)
         title_rect = title_text.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 240))
         screen.blit(title_text, title_rect)
 
