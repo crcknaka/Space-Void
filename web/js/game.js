@@ -1903,9 +1903,34 @@ class UIManager {
 
 // BEGIN main.js
 
+const container = document.getElementById('game-container');
 const canvas = document.getElementById('game-canvas');
 const ctx = canvas.getContext('2d');
 const overlay = document.getElementById('overlay');
+
+function resizeGameArea() {
+  if (!container) return;
+  const bodyStyles = window.getComputedStyle(document.body);
+  const safeLeft = parseFloat(bodyStyles.paddingLeft) || 0;
+  const safeRight = parseFloat(bodyStyles.paddingRight) || 0;
+  const safeTop = parseFloat(bodyStyles.paddingTop) || 0;
+  const safeBottom = parseFloat(bodyStyles.paddingBottom) || 0;
+  const availableWidth = window.innerWidth - safeLeft - safeRight;
+  const availableHeight = window.innerHeight - safeTop - safeBottom;
+  const scale = Math.min(availableWidth / WIDTH, availableHeight / HEIGHT, 1);
+  const scaledWidth = WIDTH * scale;
+  const scaledHeight = HEIGHT * scale;
+  const offsetX = Math.max((availableWidth - scaledWidth) / 2, 0);
+  const offsetY = Math.max((availableHeight - scaledHeight) / 2, 0);
+
+  container.style.transform = `scale(${scale})`;
+  container.style.left = `${safeLeft + offsetX}px`;
+  container.style.top = `${safeTop + offsetY}px`;
+}
+
+window.addEventListener('resize', resizeGameArea);
+window.addEventListener('orientationchange', resizeGameArea);
+resizeGameArea();
 
 const input = new InputManager();
 const ui = new UIManager(overlay);
