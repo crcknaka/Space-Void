@@ -738,6 +738,7 @@ class Asteroid {
     this.image = this.createScaledImage();
     this.width = this.image.width;
     this.height = this.image.height;
+    this.radius = Math.max(this.width, this.height) / 2;
     this.x = WIDTH + Math.random() * 100;
     this.y = Math.random() * (HEIGHT - this.height);
     this.speedx = 2 + Math.random() * 2;
@@ -755,9 +756,7 @@ class Asteroid {
     canvas.height = height;
     const ctx = canvas.getContext('2d');
     ctx.drawImage(this.baseImage, 0, 0, width, height);
-    const image = new Image();
-    image.src = canvas.toDataURL();
-    return image;
+    return canvas;
   }
 
   update(dt, world) {
@@ -966,16 +965,23 @@ class Player {
     ctx.translate(image.width, 0);
     ctx.scale(-1, 1);
     ctx.drawImage(image, 0, 0);
-    const flipped = new Image();
-    flipped.src = canvas.toDataURL();
-    return flipped;
+    return canvas;
   }
 
   draw(ctx) {
     const thruster = this.thrusterFrames[this.frameIndex];
     if (this.facingLeft) {
-      ctx.drawImage(this.originalImage, this.x + thruster.width, this.y + (this.height - this.originalImage.height) / 2);
-      ctx.drawImage(thruster, this.x, this.y + (this.height - thruster.height) / 2);
+      const thrusterY = this.y + (this.height - thruster.height) / 2;
+      ctx.drawImage(
+        this.originalImage,
+        this.x + thruster.width,
+        this.y + (this.height - this.originalImage.height) / 2,
+      );
+      ctx.save();
+      ctx.translate(this.x + thruster.width / 2, thrusterY + thruster.height / 2);
+      ctx.rotate(Math.PI);
+      ctx.drawImage(thruster, -thruster.width / 2, -thruster.height / 2);
+      ctx.restore();
     } else {
       ctx.drawImage(thruster, this.x, this.y + (this.height - thruster.height) / 2);
       ctx.drawImage(this.originalImage, this.x + thruster.width, this.y + (this.height - this.originalImage.height) / 2);
@@ -1025,7 +1031,7 @@ function bulletAsteroidHit(bullet, asteroid) {
   const end = bullet.getCenter();
   const centerX = asteroid.x + asteroid.width / 2;
   const centerY = asteroid.y + asteroid.height / 2;
-  const radius = Math.max(asteroid.width, asteroid.height) / 2;
+  const radius = asteroid.radius || Math.max(asteroid.width, asteroid.height) / 2;
   const startDistance = Math.hypot(start.x - centerX, start.y - centerY);
   const endDistance = Math.hypot(end.x - centerX, end.y - centerY);
   if (startDistance <= radius || endDistance <= radius) {
@@ -1590,9 +1596,7 @@ function flipImage(image) {
   ctx.translate(image.width, 0);
   ctx.scale(-1, 1);
   ctx.drawImage(image, 0, 0);
-  const flipped = new Image();
-  flipped.src = canvas.toDataURL();
-  return flipped;
+  return canvas;
 }
 
 function flipFrames(frames) {
