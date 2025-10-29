@@ -112,14 +112,13 @@ function loadImage(src, size) {
         canvas.height = height;
         const ctx = canvas.getContext('2d');
         ctx.drawImage(image, 0, 0, width, height);
-        const scaledImage = new Image();
-        scaledImage.onload = () => resolve(scaledImage);
-        scaledImage.src = canvas.toDataURL();
+        resolve(canvas);
       } else {
         resolve(image);
       }
     };
     image.onerror = reject;
+    image.crossOrigin = 'anonymous';
     image.src = `${IMAGE_PATH}${src}`;
   });
 }
