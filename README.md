@@ -1,18 +1,14 @@
 Game Title: Space Void
 Genre: Space Shooter
-Platform: PC (Python - Pygame)
+Platform: Browser (HTML5 Canvas)
 
-## Web Conversion
+## Running the Game
 
-The repository now also contains a full browser-based JavaScript port located in the [`web/`](web) directory. The port recreates the Pygame experience using HTML5 canvas and modern ES modules, supporting single player, co-op, and versus modes directly in the browser.
+1. Open [`web/index.html`](web/index.html) directly in a modern browser or host the `web/` directory with any static file server.
+2. Use the on-screen menu to choose single player, co-op, or versus modes.
 
-### Running the Web Version
+The standalone JavaScript implementation mirrors the original power-ups, boss battles, parallax backgrounds, pause handling, and audio cues while providing configurable sound and music levels via the in-game settings menu.
 
-1. Start a static file server from the project root (for example, `python -m http.server 8000`).
-2. Navigate to `http://localhost:8000/web/` in a browser.
-3. Use the on-screen menu to choose the desired mode.
-
-The JavaScript implementation mirrors the original power-ups, boss battles, parallax backgrounds, pause handling, and audio cues while providing configurable sound and music levels via the in-game settings menu.
 Game Type: Arcade/Action
 Developer: Ilja Kovalenko (cRc^ )
 
