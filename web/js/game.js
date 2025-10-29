@@ -434,6 +434,8 @@ class Bullet {
       this.x = x - this.width;
     }
     this.y = y - this.height / 2;
+    this.prevX = this.x;
+    this.prevY = this.y;
     this.speedx = speedx;
     this.angle = angle;
     this.speedy = speedx * Math.tan((angle * Math.PI) / 180);
@@ -441,6 +443,8 @@ class Bullet {
   }
 
   update(dt) {
+    this.prevX = this.x;
+    this.prevY = this.y;
     this.x += this.speedx * dt * 60;
     this.y += this.speedy * dt * 60;
     if (this.x > WIDTH || this.x + this.width < 0 || this.y + this.height < 0 || this.y > HEIGHT) {
@@ -458,6 +462,14 @@ class Bullet {
 
   getBounds() {
     return { x: this.x, y: this.y, width: this.width, height: this.height };
+  }
+
+  getCenter() {
+    return { x: this.x + this.width / 2, y: this.y + this.height / 2 };
+  }
+
+  getPreviousCenter() {
+    return { x: this.prevX + this.width / 2, y: this.prevY + this.height / 2 };
   }
 }
 
@@ -1007,6 +1019,45 @@ function intersects(a, b) {
     a.y + a.height > b.y
   );
 }
+
+function bulletAsteroidHit(bullet, asteroid) {
+  const start = bullet.getPreviousCenter();
+  const end = bullet.getCenter();
+  const centerX = asteroid.x + asteroid.width / 2;
+  const centerY = asteroid.y + asteroid.height / 2;
+  const radius = Math.max(asteroid.width, asteroid.height) / 2;
+  const startDistance = Math.hypot(start.x - centerX, start.y - centerY);
+  const endDistance = Math.hypot(end.x - centerX, end.y - centerY);
+  if (startDistance <= radius || endDistance <= radius) {
+    return true;
+  }
+  return segmentCircleIntersects(start.x, start.y, end.x, end.y, centerX, centerY, radius);
+}
+
+function segmentCircleIntersects(x1, y1, x2, y2, cx, cy, radius) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  if (dx === 0 && dy === 0) {
+    return Math.hypot(x1 - cx, y1 - cy) <= radius;
+  }
+
+  const fx = x1 - cx;
+  const fy = y1 - cy;
+  const a = dx * dx + dy * dy;
+  const b = 2 * (fx * dx + fy * dy);
+  const c = fx * fx + fy * fy - radius * radius;
+  let discriminant = b * b - 4 * a * c;
+
+  if (discriminant < 0) {
+    return false;
+  }
+
+  discriminant = Math.sqrt(discriminant);
+  const t1 = (-b - discriminant) / (2 * a);
+  const t2 = (-b + discriminant) / (2 * a);
+
+  return (t1 >= 0 && t1 <= 1) || (t2 >= 0 && t2 <= 1);
+}
 // END entities.js
 
 // BEGIN gameWorld.js
@@ -1262,20 +1313,21 @@ class GameWorld {
   }
 
   handleBulletAsteroidCollisions() {
-    this.asteroids.forEach((asteroid) => {
-      if (asteroid.dead) return;
+    for (const asteroid of this.asteroids) {
+      if (asteroid.dead) continue;
       const bounds = asteroid.getBounds();
-      this.bullets.forEach((bullet) => {
-        if (bullet.dead) return;
-        if (intersects(bounds, bullet.getBounds())) {
-          bullet.dead = true;
-          asteroid.dead = true;
-          this.createExplosion(bounds);
-          this.score += 5;
-          asteroid.breakApart().forEach((piece) => this.asteroids.push(piece));
-        }
-      });
-    });
+      for (const bullet of this.bullets) {
+        if (bullet.dead) continue;
+        const collided = intersects(bounds, bullet.getBounds()) || bulletAsteroidHit(bullet, asteroid);
+        if (!collided) continue;
+        bullet.dead = true;
+        asteroid.dead = true;
+        this.createExplosion(bounds);
+        this.score += 5;
+        asteroid.breakApart().forEach((piece) => this.asteroids.push(piece));
+        break;
+      }
+    }
   }
 
   handleRocketCollisions() {
@@ -1907,42 +1959,7 @@ const container = document.getElementById('game-container');
 const canvas = document.getElementById('game-canvas');
 const ctx = canvas.getContext('2d');
 const overlay = document.getElementById('overlay');
-const fullscreenButton = document.getElementById('fullscreen-button');
 const menuButton = document.getElementById('menu-button');
-
-function isFullscreenActive() {
-  return (
-    document.fullscreenElement ||
-    document.webkitFullscreenElement ||
-    document.mozFullScreenElement ||
-    document.msFullscreenElement ||
-    null
-  );
-}
-
-function requestFullscreen(element) {
-  if (!element) return Promise.reject(new Error('No element to fullscreen'));
-  if (element.requestFullscreen) return element.requestFullscreen();
-  if (element.webkitRequestFullscreen) return element.webkitRequestFullscreen();
-  if (element.mozRequestFullScreen) return element.mozRequestFullScreen();
-  if (element.msRequestFullscreen) return element.msRequestFullscreen();
-  return Promise.reject(new Error('Fullscreen API not supported'));
-}
-
-function exitFullscreen() {
-  if (document.exitFullscreen) return document.exitFullscreen();
-  if (document.webkitExitFullscreen) return document.webkitExitFullscreen();
-  if (document.mozCancelFullScreen) return document.mozCancelFullScreen();
-  if (document.msExitFullscreen) return document.msExitFullscreen();
-  return Promise.reject(new Error('Fullscreen API not supported'));
-}
-
-function updateFullscreenButton() {
-  if (!fullscreenButton) return;
-  const active = Boolean(isFullscreenActive());
-  fullscreenButton.textContent = active ? 'EXIT FULL SCREEN' : 'FULL SCREEN';
-  fullscreenButton.setAttribute('aria-pressed', active ? 'true' : 'false');
-}
 
 function resizeGameArea() {
   if (!container) return;
@@ -1966,22 +1983,10 @@ function resizeGameArea() {
 
 window.addEventListener('resize', resizeGameArea);
 window.addEventListener('orientationchange', resizeGameArea);
-document.addEventListener('fullscreenchange', () => {
-  updateFullscreenButton();
-  resizeGameArea();
-});
-document.addEventListener('webkitfullscreenchange', () => {
-  updateFullscreenButton();
-  resizeGameArea();
-});
-document.addEventListener('mozfullscreenchange', () => {
-  updateFullscreenButton();
-  resizeGameArea();
-});
-document.addEventListener('MSFullscreenChange', () => {
-  updateFullscreenButton();
-  resizeGameArea();
-});
+document.addEventListener('fullscreenchange', resizeGameArea);
+document.addEventListener('webkitfullscreenchange', resizeGameArea);
+document.addEventListener('mozfullscreenchange', resizeGameArea);
+document.addEventListener('MSFullscreenChange', resizeGameArea);
 resizeGameArea();
 
 const input = new InputManager();
@@ -1994,21 +1999,6 @@ let lastTimestamp = 0;
 let accumulator = 0;
 let musicVolume = 0.5;
 let soundVolume = 0.7;
-
-if (fullscreenButton) {
-  fullscreenButton.addEventListener('click', () => {
-    const active = Boolean(isFullscreenActive());
-    try {
-      const action = active ? exitFullscreen() : requestFullscreen(container);
-      if (action && typeof action.then === 'function') {
-        action.catch(() => {});
-      }
-    } catch (error) {
-      // Ignore unsupported fullscreen errors.
-    }
-  });
-  updateFullscreenButton();
-}
 
 if (menuButton) {
   menuButton.addEventListener('click', () => {
