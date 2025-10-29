@@ -1907,6 +1907,42 @@ const container = document.getElementById('game-container');
 const canvas = document.getElementById('game-canvas');
 const ctx = canvas.getContext('2d');
 const overlay = document.getElementById('overlay');
+const fullscreenButton = document.getElementById('fullscreen-button');
+const menuButton = document.getElementById('menu-button');
+
+function isFullscreenActive() {
+  return (
+    document.fullscreenElement ||
+    document.webkitFullscreenElement ||
+    document.mozFullScreenElement ||
+    document.msFullscreenElement ||
+    null
+  );
+}
+
+function requestFullscreen(element) {
+  if (!element) return Promise.reject(new Error('No element to fullscreen'));
+  if (element.requestFullscreen) return element.requestFullscreen();
+  if (element.webkitRequestFullscreen) return element.webkitRequestFullscreen();
+  if (element.mozRequestFullScreen) return element.mozRequestFullScreen();
+  if (element.msRequestFullscreen) return element.msRequestFullscreen();
+  return Promise.reject(new Error('Fullscreen API not supported'));
+}
+
+function exitFullscreen() {
+  if (document.exitFullscreen) return document.exitFullscreen();
+  if (document.webkitExitFullscreen) return document.webkitExitFullscreen();
+  if (document.mozCancelFullScreen) return document.mozCancelFullScreen();
+  if (document.msExitFullscreen) return document.msExitFullscreen();
+  return Promise.reject(new Error('Fullscreen API not supported'));
+}
+
+function updateFullscreenButton() {
+  if (!fullscreenButton) return;
+  const active = Boolean(isFullscreenActive());
+  fullscreenButton.textContent = active ? 'EXIT FULL SCREEN' : 'FULL SCREEN';
+  fullscreenButton.setAttribute('aria-pressed', active ? 'true' : 'false');
+}
 
 function resizeGameArea() {
   if (!container) return;
@@ -1917,7 +1953,7 @@ function resizeGameArea() {
   const safeBottom = parseFloat(bodyStyles.paddingBottom) || 0;
   const availableWidth = window.innerWidth - safeLeft - safeRight;
   const availableHeight = window.innerHeight - safeTop - safeBottom;
-  const scale = Math.min(availableWidth / WIDTH, availableHeight / HEIGHT, 1);
+  const scale = Math.min(availableWidth / WIDTH, availableHeight / HEIGHT);
   const scaledWidth = WIDTH * scale;
   const scaledHeight = HEIGHT * scale;
   const offsetX = Math.max((availableWidth - scaledWidth) / 2, 0);
@@ -1930,6 +1966,22 @@ function resizeGameArea() {
 
 window.addEventListener('resize', resizeGameArea);
 window.addEventListener('orientationchange', resizeGameArea);
+document.addEventListener('fullscreenchange', () => {
+  updateFullscreenButton();
+  resizeGameArea();
+});
+document.addEventListener('webkitfullscreenchange', () => {
+  updateFullscreenButton();
+  resizeGameArea();
+});
+document.addEventListener('mozfullscreenchange', () => {
+  updateFullscreenButton();
+  resizeGameArea();
+});
+document.addEventListener('MSFullscreenChange', () => {
+  updateFullscreenButton();
+  resizeGameArea();
+});
 resizeGameArea();
 
 const input = new InputManager();
@@ -1942,6 +1994,27 @@ let lastTimestamp = 0;
 let accumulator = 0;
 let musicVolume = 0.5;
 let soundVolume = 0.7;
+
+if (fullscreenButton) {
+  fullscreenButton.addEventListener('click', () => {
+    const active = Boolean(isFullscreenActive());
+    try {
+      const action = active ? exitFullscreen() : requestFullscreen(container);
+      if (action && typeof action.then === 'function') {
+        action.catch(() => {});
+      }
+    } catch (error) {
+      // Ignore unsupported fullscreen errors.
+    }
+  });
+  updateFullscreenButton();
+}
+
+if (menuButton) {
+  menuButton.addEventListener('click', () => {
+    showMainMenu();
+  });
+}
 
 function stopAllMusic() {
   if (!assets) return;
