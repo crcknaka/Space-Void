@@ -1,6 +1,14 @@
 Game Title: Space Void
 Genre: Space Shooter
-Platform: PC (Python - Pygame)
+Platform: Browser (HTML5 Canvas)
+
+## Running the Game
+
+1. Open [`web/index.html`](web/index.html) directly in a modern browser or host the `web/` directory with any static file server.
+2. Use the on-screen menu to choose single player, co-op, or versus modes.
+
+The standalone JavaScript implementation mirrors the original power-ups, boss battles, parallax backgrounds, pause handling, and audio cues while providing configurable sound and music levels via the in-game settings menu.
+
 Game Type: Arcade/Action
 Developer: Ilja Kovalenko (cRc^ )
 
