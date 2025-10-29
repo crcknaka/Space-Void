@@ -4,18 +4,27 @@
   padding: 0;
 }
 
+html,
+body {
+  height: 100%;
+}
+
 body {
   background: #000;
   color: #fff;
   font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  min-height: 100vh;
+  overflow: hidden;
+  position: relative;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
+  touch-action: none;
 }
 
 #game-container {
-  position: relative;
+  position: absolute;
+  width: 600px;
+  height: 880px;
+  transform-origin: top left;
 }
 
 #game-canvas {
@@ -35,6 +44,162 @@ body {
   color: #fff;
   font-size: 18px;
   font-family: inherit;
+}
+
+#ui-buttons {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  pointer-events: auto;
+  z-index: 2;
+}
+
+.ui-button {
+  background: rgba(20, 32, 64, 0.7);
+  border: 1px solid rgba(55, 147, 255, 0.6);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  padding: 10px 16px;
+  border-radius: 12px;
+  cursor: pointer;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+  text-transform: uppercase;
+  backdrop-filter: blur(6px);
+}
+
+.ui-button:hover,
+.ui-button:focus {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 20px rgba(55, 147, 255, 0.35);
+  outline: none;
+}
+
+.ui-button:active {
+  transform: translateY(1px) scale(0.98);
+}
+
+.ui-button--primary {
+  background: linear-gradient(120deg, rgba(31, 111, 235, 0.95), rgba(55, 147, 255, 0.95));
+  border-color: rgba(55, 147, 255, 0.9);
+}
+
+.ui-button--icon {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.ui-button__label {
+  font-size: 12px;
+  letter-spacing: 2px;
+}
+
+#touch-controls {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  display: none;
+}
+
+.touch-move {
+  position: absolute;
+  bottom: 24px;
+  left: 24px;
+  width: 182px;
+  height: 182px;
+  border-radius: 50%;
+  background: radial-gradient(circle at center, rgba(55, 147, 255, 0.35) 0%, rgba(31, 111, 235, 0.05) 65%, rgba(10, 20, 40, 0.2) 100%);
+  border: 2px solid rgba(55, 147, 255, 0.7);
+  box-shadow: 0 0 22px rgba(55, 147, 255, 0.45);
+  pointer-events: auto;
+  touch-action: none;
+  overflow: hidden;
+}
+
+.touch-move::before,
+.touch-move::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.touch-move::before {
+  width: 70%;
+  height: 70%;
+  border: 2px solid rgba(55, 147, 255, 0.5);
+  box-shadow: 0 0 18px rgba(55, 147, 255, 0.35);
+  animation: joystickPulse 2.4s ease-in-out infinite;
+}
+
+.touch-move::after {
+  width: 26%;
+  height: 26%;
+  background: rgba(55, 147, 255, 0.65);
+  box-shadow: 0 0 20px rgba(55, 147, 255, 0.5);
+}
+
+@keyframes joystickPulse {
+  0% {
+    transform: translate(-50%, -50%) scale(0.95);
+    opacity: 0.9;
+  }
+  50% {
+    transform: translate(-50%, -50%) scale(1.15);
+    opacity: 0.4;
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(1.3);
+    opacity: 0;
+  }
+}
+
+.touch-buttons {
+  position: absolute;
+  bottom: 24px;
+  right: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  pointer-events: auto;
+}
+
+.touch-button {
+  width: 120px;
+  padding: 12px 0;
+  font-size: 18px;
+  color: #fff;
+  background: rgba(55, 147, 255, 0.8);
+  border: 1px solid rgba(55, 147, 255, 0.9);
+  border-radius: 28px;
+  text-transform: uppercase;
+  font-weight: 600;
+  box-shadow: 0 6px 16px rgba(55, 147, 255, 0.35);
+  touch-action: manipulation;
+}
+
+.touch-button:active {
+  transform: scale(0.95);
+}
+
+@media (hover: none) and (pointer: coarse) {
+  #touch-controls {
+    display: block;
+  }
 }
 
 .menu {

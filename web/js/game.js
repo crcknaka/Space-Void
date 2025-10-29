@@ -167,21 +167,17 @@ class InputManager {
   constructor() {
     this.keys = new Set();
     this.listeners = new Map();
+    this.moveTouchId = null;
+    this.touchStart = { x: 0, y: 0 };
     window.addEventListener('keydown', (event) => this.handleKey(event, true));
     window.addEventListener('keyup', (event) => this.handleKey(event, false));
+    this.setupTouchControls();
   }
 
   handleKey(event, pressed) {
     if (event.repeat) return;
     const key = event.code;
-    if (pressed) {
-      this.keys.add(key);
-    } else {
-      this.keys.delete(key);
-    }
-    if (this.listeners.has(key)) {
-      this.listeners.get(key).forEach((callback) => callback(pressed));
-    }
+    this.updateKeyState(key, pressed);
   }
 
   isPressed(code) {
@@ -193,6 +189,104 @@ class InputManager {
       this.listeners.set(code, []);
     }
     this.listeners.get(code).push(callback);
+  }
+
+  updateKeyState(code, pressed) {
+    const hasKey = this.keys.has(code);
+    if (pressed && !hasKey) {
+      this.keys.add(code);
+      if (this.listeners.has(code)) {
+        this.listeners.get(code).forEach((callback) => callback(true));
+      }
+    } else if (!pressed && hasKey) {
+      this.keys.delete(code);
+      if (this.listeners.has(code)) {
+        this.listeners.get(code).forEach((callback) => callback(false));
+      }
+    }
+  }
+
+  setVirtualKey(code, pressed) {
+    this.updateKeyState(code, pressed);
+  }
+
+  setupTouchControls() {
+    const moveArea = document.getElementById('touch-move');
+    const shootButton = document.getElementById('touch-shoot');
+    const rocketButton = document.getElementById('touch-rocket');
+    const isTouchCapable = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    if (!isTouchCapable) return;
+
+    if (moveArea) {
+      const startMove = (event) => {
+        if (this.moveTouchId !== null) return;
+        const touch = event.changedTouches[0];
+        if (!touch) return;
+        this.moveTouchId = touch.identifier;
+        this.touchStart.x = touch.clientX;
+        this.touchStart.y = touch.clientY;
+        this.updateTouchMovement(0, 0);
+      };
+
+      const move = (event) => {
+        if (this.moveTouchId === null) return;
+        const touch = Array.from(event.changedTouches).find((t) => t.identifier === this.moveTouchId);
+        if (!touch) return;
+        const dx = touch.clientX - this.touchStart.x;
+        const dy = touch.clientY - this.touchStart.y;
+        this.updateTouchMovement(dx, dy);
+      };
+
+      const endMove = (event) => {
+        if (this.moveTouchId === null) return;
+        const touch = Array.from(event.changedTouches).find((t) => t.identifier === this.moveTouchId);
+        if (!touch) return;
+        this.moveTouchId = null;
+        this.updateTouchMovement(0, 0);
+      };
+
+      moveArea.addEventListener('touchstart', (event) => {
+        event.preventDefault();
+        startMove(event);
+      }, { passive: false });
+      moveArea.addEventListener('touchmove', (event) => {
+        event.preventDefault();
+        move(event);
+      }, { passive: false });
+      moveArea.addEventListener('touchend', (event) => {
+        event.preventDefault();
+        endMove(event);
+      }, { passive: false });
+      moveArea.addEventListener('touchcancel', (event) => {
+        event.preventDefault();
+        endMove(event);
+      }, { passive: false });
+    }
+
+    const bindButton = (element, code) => {
+      if (!element) return;
+      element.addEventListener('touchstart', (event) => {
+        event.preventDefault();
+        this.setVirtualKey(code, true);
+      }, { passive: false });
+      const release = (event) => {
+        event.preventDefault();
+        this.setVirtualKey(code, false);
+      };
+      element.addEventListener('touchend', release, { passive: false });
+      element.addEventListener('touchcancel', release, { passive: false });
+    };
+
+    bindButton(shootButton, 'Space');
+    bindButton(rocketButton, 'ShiftLeft');
+  }
+
+  updateTouchMovement(dx, dy) {
+    const threshold = 20;
+    this.setVirtualKey('KeyW', dy < -threshold);
+    this.setVirtualKey('KeyS', dy > threshold);
+    this.setVirtualKey('KeyA', dx < -threshold);
+    this.setVirtualKey('KeyD', dx > threshold);
   }
 }
 // END input.js
@@ -340,6 +434,8 @@ class Bullet {
       this.x = x - this.width;
     }
     this.y = y - this.height / 2;
+    this.prevX = this.x;
+    this.prevY = this.y;
     this.speedx = speedx;
     this.angle = angle;
     this.speedy = speedx * Math.tan((angle * Math.PI) / 180);
@@ -347,6 +443,8 @@ class Bullet {
   }
 
   update(dt) {
+    this.prevX = this.x;
+    this.prevY = this.y;
     this.x += this.speedx * dt * 60;
     this.y += this.speedy * dt * 60;
     if (this.x > WIDTH || this.x + this.width < 0 || this.y + this.height < 0 || this.y > HEIGHT) {
@@ -364,6 +462,14 @@ class Bullet {
 
   getBounds() {
     return { x: this.x, y: this.y, width: this.width, height: this.height };
+  }
+
+  getCenter() {
+    return { x: this.x + this.width / 2, y: this.y + this.height / 2 };
+  }
+
+  getPreviousCenter() {
+    return { x: this.prevX + this.width / 2, y: this.prevY + this.height / 2 };
   }
 }
 
@@ -552,7 +658,13 @@ class Enemy {
   draw(ctx) {
     const thruster = this.thrusterFrames[this.frameIndex];
     ctx.drawImage(this.originalImage, this.x, this.y + (this.height - this.originalImage.height) / 2);
-    ctx.drawImage(thruster, this.x + this.originalImage.width, this.y + (this.height - thruster.height) / 2);
+    const thrusterX = this.x + this.originalImage.width;
+    const thrusterY = this.y + (this.height - thruster.height) / 2;
+    ctx.save();
+    ctx.translate(thrusterX + thruster.width / 2, thrusterY + thruster.height / 2);
+    ctx.rotate(Math.PI);
+    ctx.drawImage(thruster, -thruster.width / 2, -thruster.height / 2);
+    ctx.restore();
   }
 
   getBounds() {
@@ -626,6 +738,7 @@ class Asteroid {
     this.image = this.createScaledImage();
     this.width = this.image.width;
     this.height = this.image.height;
+    this.radius = Math.max(this.width, this.height) / 2;
     this.x = WIDTH + Math.random() * 100;
     this.y = Math.random() * (HEIGHT - this.height);
     this.speedx = 2 + Math.random() * 2;
@@ -643,9 +756,7 @@ class Asteroid {
     canvas.height = height;
     const ctx = canvas.getContext('2d');
     ctx.drawImage(this.baseImage, 0, 0, width, height);
-    const image = new Image();
-    image.src = canvas.toDataURL();
-    return image;
+    return canvas;
   }
 
   update(dt, world) {
@@ -854,16 +965,23 @@ class Player {
     ctx.translate(image.width, 0);
     ctx.scale(-1, 1);
     ctx.drawImage(image, 0, 0);
-    const flipped = new Image();
-    flipped.src = canvas.toDataURL();
-    return flipped;
+    return canvas;
   }
 
   draw(ctx) {
     const thruster = this.thrusterFrames[this.frameIndex];
     if (this.facingLeft) {
-      ctx.drawImage(this.originalImage, this.x + thruster.width, this.y + (this.height - this.originalImage.height) / 2);
-      ctx.drawImage(thruster, this.x, this.y + (this.height - thruster.height) / 2);
+      const thrusterY = this.y + (this.height - thruster.height) / 2;
+      ctx.drawImage(
+        this.originalImage,
+        this.x + thruster.width,
+        this.y + (this.height - this.originalImage.height) / 2,
+      );
+      ctx.save();
+      ctx.translate(this.x + thruster.width / 2, thrusterY + thruster.height / 2);
+      ctx.rotate(Math.PI);
+      ctx.drawImage(thruster, -thruster.width / 2, -thruster.height / 2);
+      ctx.restore();
     } else {
       ctx.drawImage(thruster, this.x, this.y + (this.height - thruster.height) / 2);
       ctx.drawImage(this.originalImage, this.x + thruster.width, this.y + (this.height - this.originalImage.height) / 2);
@@ -906,6 +1024,45 @@ function intersects(a, b) {
     a.y < b.y + b.height &&
     a.y + a.height > b.y
   );
+}
+
+function bulletAsteroidHit(bullet, asteroid) {
+  const start = bullet.getPreviousCenter();
+  const end = bullet.getCenter();
+  const centerX = asteroid.x + asteroid.width / 2;
+  const centerY = asteroid.y + asteroid.height / 2;
+  const radius = asteroid.radius || Math.max(asteroid.width, asteroid.height) / 2;
+  const startDistance = Math.hypot(start.x - centerX, start.y - centerY);
+  const endDistance = Math.hypot(end.x - centerX, end.y - centerY);
+  if (startDistance <= radius || endDistance <= radius) {
+    return true;
+  }
+  return segmentCircleIntersects(start.x, start.y, end.x, end.y, centerX, centerY, radius);
+}
+
+function segmentCircleIntersects(x1, y1, x2, y2, cx, cy, radius) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  if (dx === 0 && dy === 0) {
+    return Math.hypot(x1 - cx, y1 - cy) <= radius;
+  }
+
+  const fx = x1 - cx;
+  const fy = y1 - cy;
+  const a = dx * dx + dy * dy;
+  const b = 2 * (fx * dx + fy * dy);
+  const c = fx * fx + fy * fy - radius * radius;
+  let discriminant = b * b - 4 * a * c;
+
+  if (discriminant < 0) {
+    return false;
+  }
+
+  discriminant = Math.sqrt(discriminant);
+  const t1 = (-b - discriminant) / (2 * a);
+  const t2 = (-b + discriminant) / (2 * a);
+
+  return (t1 >= 0 && t1 <= 1) || (t2 >= 0 && t2 <= 1);
 }
 // END entities.js
 
@@ -1162,20 +1319,21 @@ class GameWorld {
   }
 
   handleBulletAsteroidCollisions() {
-    this.asteroids.forEach((asteroid) => {
-      if (asteroid.dead) return;
+    for (const asteroid of this.asteroids) {
+      if (asteroid.dead) continue;
       const bounds = asteroid.getBounds();
-      this.bullets.forEach((bullet) => {
-        if (bullet.dead) return;
-        if (intersects(bounds, bullet.getBounds())) {
-          bullet.dead = true;
-          asteroid.dead = true;
-          this.createExplosion(bounds);
-          this.score += 5;
-          asteroid.breakApart().forEach((piece) => this.asteroids.push(piece));
-        }
-      });
-    });
+      for (const bullet of this.bullets) {
+        if (bullet.dead) continue;
+        const collided = intersects(bounds, bullet.getBounds()) || bulletAsteroidHit(bullet, asteroid);
+        if (!collided) continue;
+        bullet.dead = true;
+        asteroid.dead = true;
+        this.createExplosion(bounds);
+        this.score += 5;
+        asteroid.breakApart().forEach((piece) => this.asteroids.push(piece));
+        break;
+      }
+    }
   }
 
   handleRocketCollisions() {
@@ -1438,9 +1596,7 @@ function flipImage(image) {
   ctx.translate(image.width, 0);
   ctx.scale(-1, 1);
   ctx.drawImage(image, 0, 0);
-  const flipped = new Image();
-  flipped.src = canvas.toDataURL();
-  return flipped;
+  return canvas;
 }
 
 function flipFrames(frames) {
@@ -1803,9 +1959,39 @@ class UIManager {
 
 // BEGIN main.js
 
+const container = document.getElementById('game-container');
 const canvas = document.getElementById('game-canvas');
 const ctx = canvas.getContext('2d');
 const overlay = document.getElementById('overlay');
+const menuButton = document.getElementById('menu-button');
+
+function resizeGameArea() {
+  if (!container) return;
+  const bodyStyles = window.getComputedStyle(document.body);
+  const safeLeft = parseFloat(bodyStyles.paddingLeft) || 0;
+  const safeRight = parseFloat(bodyStyles.paddingRight) || 0;
+  const safeTop = parseFloat(bodyStyles.paddingTop) || 0;
+  const safeBottom = parseFloat(bodyStyles.paddingBottom) || 0;
+  const availableWidth = window.innerWidth - safeLeft - safeRight;
+  const availableHeight = window.innerHeight - safeTop - safeBottom;
+  const scale = Math.min(availableWidth / WIDTH, availableHeight / HEIGHT);
+  const scaledWidth = WIDTH * scale;
+  const scaledHeight = HEIGHT * scale;
+  const offsetX = Math.max((availableWidth - scaledWidth) / 2, 0);
+  const offsetY = Math.max((availableHeight - scaledHeight) / 2, 0);
+
+  container.style.transform = `scale(${scale})`;
+  container.style.left = `${safeLeft + offsetX}px`;
+  container.style.top = `${safeTop + offsetY}px`;
+}
+
+window.addEventListener('resize', resizeGameArea);
+window.addEventListener('orientationchange', resizeGameArea);
+document.addEventListener('fullscreenchange', resizeGameArea);
+document.addEventListener('webkitfullscreenchange', resizeGameArea);
+document.addEventListener('mozfullscreenchange', resizeGameArea);
+document.addEventListener('MSFullscreenChange', resizeGameArea);
+resizeGameArea();
 
 const input = new InputManager();
 const ui = new UIManager(overlay);
@@ -1817,6 +2003,12 @@ let lastTimestamp = 0;
 let accumulator = 0;
 let musicVolume = 0.5;
 let soundVolume = 0.7;
+
+if (menuButton) {
+  menuButton.addEventListener('click', () => {
+    showMainMenu();
+  });
+}
 
 function stopAllMusic() {
   if (!assets) return;

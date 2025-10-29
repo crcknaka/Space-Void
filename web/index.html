@@ -2,7 +2,10 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
     <title>Space Void</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
@@ -10,6 +13,18 @@
     <div id="game-container">
       <canvas id="game-canvas" width="600" height="880"></canvas>
       <div id="overlay"></div>
+      <div id="ui-buttons">
+        <button id="menu-button" class="ui-button ui-button--icon" aria-label="Open menu">
+          <span class="ui-button__label">MENU</span>
+        </button>
+      </div>
+      <div id="touch-controls">
+        <div id="touch-move" class="touch-move"></div>
+        <div class="touch-buttons">
+          <button id="touch-shoot" class="touch-button">Fire</button>
+          <button id="touch-rocket" class="touch-button">Rocket</button>
+        </div>
+      </div>
     </div>
     <script src="./js/game.js"></script>
   </body>
