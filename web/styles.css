@@ -37,6 +37,61 @@ body {
   font-family: inherit;
 }
 
+#touch-controls {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  display: none;
+}
+
+.touch-move {
+  position: absolute;
+  bottom: 24px;
+  left: 24px;
+  width: 140px;
+  height: 140px;
+  border-radius: 50%;
+  background: rgba(31, 111, 235, 0.15);
+  border: 2px solid rgba(55, 147, 255, 0.6);
+  box-shadow: 0 0 12px rgba(55, 147, 255, 0.4);
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.touch-buttons {
+  position: absolute;
+  bottom: 24px;
+  right: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  pointer-events: auto;
+}
+
+.touch-button {
+  width: 120px;
+  padding: 12px 0;
+  font-size: 18px;
+  color: #fff;
+  background: rgba(55, 147, 255, 0.8);
+  border: 1px solid rgba(55, 147, 255, 0.9);
+  border-radius: 28px;
+  text-transform: uppercase;
+  font-weight: 600;
+  box-shadow: 0 6px 16px rgba(55, 147, 255, 0.35);
+  touch-action: manipulation;
+}
+
+.touch-button:active {
+  transform: scale(0.95);
+}
+
+@media (hover: none) and (pointer: coarse) {
+  #touch-controls {
+    display: block;
+  }
+}
+
 .menu {
   background: rgba(0, 0, 0, 0.8);
   padding: 32px 40px;

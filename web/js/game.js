@@ -167,21 +167,17 @@ class InputManager {
   constructor() {
     this.keys = new Set();
     this.listeners = new Map();
+    this.moveTouchId = null;
+    this.touchStart = { x: 0, y: 0 };
     window.addEventListener('keydown', (event) => this.handleKey(event, true));
     window.addEventListener('keyup', (event) => this.handleKey(event, false));
+    this.setupTouchControls();
   }
 
   handleKey(event, pressed) {
     if (event.repeat) return;
     const key = event.code;
-    if (pressed) {
-      this.keys.add(key);
-    } else {
-      this.keys.delete(key);
-    }
-    if (this.listeners.has(key)) {
-      this.listeners.get(key).forEach((callback) => callback(pressed));
-    }
+    this.updateKeyState(key, pressed);
   }
 
   isPressed(code) {
@@ -193,6 +189,104 @@ class InputManager {
       this.listeners.set(code, []);
     }
     this.listeners.get(code).push(callback);
+  }
+
+  updateKeyState(code, pressed) {
+    const hasKey = this.keys.has(code);
+    if (pressed && !hasKey) {
+      this.keys.add(code);
+      if (this.listeners.has(code)) {
+        this.listeners.get(code).forEach((callback) => callback(true));
+      }
+    } else if (!pressed && hasKey) {
+      this.keys.delete(code);
+      if (this.listeners.has(code)) {
+        this.listeners.get(code).forEach((callback) => callback(false));
+      }
+    }
+  }
+
+  setVirtualKey(code, pressed) {
+    this.updateKeyState(code, pressed);
+  }
+
+  setupTouchControls() {
+    const moveArea = document.getElementById('touch-move');
+    const shootButton = document.getElementById('touch-shoot');
+    const rocketButton = document.getElementById('touch-rocket');
+    const isTouchCapable = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    if (!isTouchCapable) return;
+
+    if (moveArea) {
+      const startMove = (event) => {
+        if (this.moveTouchId !== null) return;
+        const touch = event.changedTouches[0];
+        if (!touch) return;
+        this.moveTouchId = touch.identifier;
+        this.touchStart.x = touch.clientX;
+        this.touchStart.y = touch.clientY;
+        this.updateTouchMovement(0, 0);
+      };
+
+      const move = (event) => {
+        if (this.moveTouchId === null) return;
+        const touch = Array.from(event.changedTouches).find((t) => t.identifier === this.moveTouchId);
+        if (!touch) return;
+        const dx = touch.clientX - this.touchStart.x;
+        const dy = touch.clientY - this.touchStart.y;
+        this.updateTouchMovement(dx, dy);
+      };
+
+      const endMove = (event) => {
+        if (this.moveTouchId === null) return;
+        const touch = Array.from(event.changedTouches).find((t) => t.identifier === this.moveTouchId);
+        if (!touch) return;
+        this.moveTouchId = null;
+        this.updateTouchMovement(0, 0);
+      };
+
+      moveArea.addEventListener('touchstart', (event) => {
+        event.preventDefault();
+        startMove(event);
+      }, { passive: false });
+      moveArea.addEventListener('touchmove', (event) => {
+        event.preventDefault();
+        move(event);
+      }, { passive: false });
+      moveArea.addEventListener('touchend', (event) => {
+        event.preventDefault();
+        endMove(event);
+      }, { passive: false });
+      moveArea.addEventListener('touchcancel', (event) => {
+        event.preventDefault();
+        endMove(event);
+      }, { passive: false });
+    }
+
+    const bindButton = (element, code) => {
+      if (!element) return;
+      element.addEventListener('touchstart', (event) => {
+        event.preventDefault();
+        this.setVirtualKey(code, true);
+      }, { passive: false });
+      const release = (event) => {
+        event.preventDefault();
+        this.setVirtualKey(code, false);
+      };
+      element.addEventListener('touchend', release, { passive: false });
+      element.addEventListener('touchcancel', release, { passive: false });
+    };
+
+    bindButton(shootButton, 'Space');
+    bindButton(rocketButton, 'ShiftLeft');
+  }
+
+  updateTouchMovement(dx, dy) {
+    const threshold = 20;
+    this.setVirtualKey('KeyW', dy < -threshold);
+    this.setVirtualKey('KeyS', dy > threshold);
+    this.setVirtualKey('KeyA', dx < -threshold);
+    this.setVirtualKey('KeyD', dx > threshold);
   }
 }
 // END input.js
@@ -552,7 +646,13 @@ class Enemy {
   draw(ctx) {
     const thruster = this.thrusterFrames[this.frameIndex];
     ctx.drawImage(this.originalImage, this.x, this.y + (this.height - this.originalImage.height) / 2);
-    ctx.drawImage(thruster, this.x + this.originalImage.width, this.y + (this.height - thruster.height) / 2);
+    const thrusterX = this.x + this.originalImage.width;
+    const thrusterY = this.y + (this.height - thruster.height) / 2;
+    ctx.save();
+    ctx.translate(thrusterX + thruster.width / 2, thrusterY + thruster.height / 2);
+    ctx.rotate(Math.PI);
+    ctx.drawImage(thruster, -thruster.width / 2, -thruster.height / 2);
+    ctx.restore();
   }
 
   getBounds() {
