@@ -51,10 +51,6 @@
     return canvas;
   }
 
-  function flipFrames(frames) {
-    return frames.map((frame) => flipImage(frame));
-  }
-
   class VersusWorld {
     constructor({ assets, input, onGameOver }) {
       this.assets = assets;
@@ -105,10 +101,9 @@
       this.players.push(player1);
 
       const flippedShip = flipImage(this.assets.player2_img);
-      const flippedThrusters = flipFrames(this.assets.player2_thruster_frames);
       const player2 = new Player({
         image: flippedShip,
-        thrusterFrames: flippedThrusters,
+        thrusterFrames: this.assets.player2_thruster_frames,
         controls: {
           up: 'ArrowUp',
           down: 'ArrowDown',

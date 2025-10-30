@@ -689,21 +689,20 @@ class Player {
 
   draw(ctx) {
     const thruster = this.thrusterFrames[this.frameIndex];
+    const shipY = this.y + (this.height - this.originalImage.height) / 2;
+    const thrusterY = this.y + (this.height - thruster.height) / 2;
     if (this.facingLeft) {
-      const thrusterY = this.y + (this.height - thruster.height) / 2;
-      ctx.drawImage(
-        this.originalImage,
-        this.x + thruster.width,
-        this.y + (this.height - this.originalImage.height) / 2,
-      );
+      const shipX = this.x;
+      const thrusterX = shipX + this.originalImage.width;
+      ctx.drawImage(this.originalImage, shipX, shipY);
       ctx.save();
-      ctx.translate(this.x + thruster.width / 2, thrusterY + thruster.height / 2);
+      ctx.translate(thrusterX + thruster.width / 2, thrusterY + thruster.height / 2);
       ctx.rotate(Math.PI);
       ctx.drawImage(thruster, -thruster.width / 2, -thruster.height / 2);
       ctx.restore();
     } else {
-      ctx.drawImage(thruster, this.x, this.y + (this.height - thruster.height) / 2);
-      ctx.drawImage(this.originalImage, this.x + thruster.width, this.y + (this.height - this.originalImage.height) / 2);
+      ctx.drawImage(thruster, this.x, thrusterY);
+      ctx.drawImage(this.originalImage, this.x + thruster.width, shipY);
     }
   }
 
