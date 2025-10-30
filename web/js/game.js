@@ -490,16 +490,18 @@ function showMainMenu() {
 
 function showSettings() {
   ui.showSettings({
-    onBack: showMainMenu,
-    initialMusicVolume: musicVolume,
-    initialSoundVolume: soundVolume,
-    onChangeMusic: (value) => {
-      musicVolume = value;
-      applyVolumeSettings();
+    settings: {
+      musicVolume,
+      effectsVolume: soundVolume,
     },
-    onChangeSound: (value) => {
-      soundVolume = value;
+    onApply: ({ musicVolume: newMusicVolume, effectsVolume: newEffectsVolume }) => {
+      musicVolume = newMusicVolume;
+      soundVolume = newEffectsVolume;
       applyVolumeSettings();
+      setTimeout(showMainMenu, 0);
+    },
+    onClose: () => {
+      setTimeout(showMainMenu, 0);
     },
   });
 }
