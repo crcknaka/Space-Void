@@ -85,205 +85,157 @@
 
     setupPlayers() {
       const player1 = new Player({
-        id: 1,
-        x: WIDTH * 0.25,
-        y: HEIGHT / 2,
-        controls: shared.PLAYER_CONTROLS.player1,
+        image: this.assets.player1_img,
+        thrusterFrames: this.assets.player1_thruster_frames,
+        controls: {
+          up: 'KeyW',
+          down: 'KeyS',
+          left: 'KeyA',
+          right: 'KeyD',
+          shoot: 'Space',
+          rocket: 'Space',
+          speed: 'ShiftLeft',
+        },
+        facingLeft: false,
         assets: this.assets,
+        autoFire: false,
       });
+      player1.reset({ x: 80, y: HEIGHT / 2 - player1.height / 2 });
+      player1.rocketCount = 0;
+      this.players.push(player1);
+
+      const flippedShip = flipImage(this.assets.player2_img);
+      const flippedThrusters = flipFrames(this.assets.player2_thruster_frames);
       const player2 = new Player({
-        id: 2,
-        x: WIDTH * 0.75,
-        y: HEIGHT / 2,
-        controls: shared.PLAYER_CONTROLS.player2,
+        image: flippedShip,
+        thrusterFrames: flippedThrusters,
+        controls: {
+          up: 'ArrowUp',
+          down: 'ArrowDown',
+          left: 'ArrowLeft',
+          right: 'ArrowRight',
+          shoot: 'Enter',
+          rocket: 'Enter',
+          speed: 'Numpad0',
+        },
+        facingLeft: true,
         assets: this.assets,
+        autoFire: false,
       });
-
-      player1.flipImages();
-      player2.setCustomImages({
-        ship: flipImage(this.assets.player2_img),
-        thrusters: flipFrames(this.assets.player2_thruster_frames),
-      });
-
-      player1.onKill = () => {
-        this.scores[0] += 1;
-        this.checkVictory();
-      };
-      player2.onKill = () => {
-        this.scores[1] += 1;
-        this.checkVictory();
-      };
-
-      this.players = [player1, player2];
-    }
-
-    reset() {
-      this.players.forEach((player, index) => {
-        player.respawn(index === 0 ? WIDTH * 0.25 : WIDTH * 0.75, HEIGHT / 2);
-      });
-      this.bullets = [];
-      this.rockets = [];
-      this.enemies = [];
-      this.asteroids = [];
-      this.particles = [];
-      this.explosions = [];
-      this.starLayers = createStarLayers(3);
-      this.staticStars = createStaticStars();
-      this.backgroundOffset = 0;
-      this.scores = [0, 0];
-      this.respawnTimers = [0, 0];
-      this.state = GAME_STATE.GAME;
-    }
-
-    checkVictory() {
-      if (this.scores.some((score) => score >= this.scoreLimit)) {
-        this.finishGame();
-      }
-    }
-
-    finishGame() {
-      this.state = GAME_STATE.GAME_OVER;
-      this.music.pause();
-      if (this.onGameOver) {
-        this.onGameOver({ scores: [...this.scores] });
-      }
+      player2.reset({ x: WIDTH - player2.width - 80, y: HEIGHT / 2 - player2.height / 2 });
+      player2.rocketCount = 0;
+      this.players.push(player2);
     }
 
     update(dt) {
-      if (this.state !== GAME_STATE.GAME) return;
+      if (this.paused || this.state !== GAME_STATE.GAME) return;
 
-      this.backgroundOffset -= 40 * dt;
+      this.backgroundOffset -= dt * 15;
       if (this.backgroundOffset <= -WIDTH) {
         this.backgroundOffset += WIDTH;
       }
 
-      this.starLayers.forEach((layer, index) => {
-        const speed = 20 * (index + 1);
-        layer.forEach((star) => {
-          star.x -= speed * dt;
-          if (star.x < 0) {
-            star.x = WIDTH;
-            star.y = Math.random() * HEIGHT;
-          }
-        });
-      });
-
+      this.starLayers.forEach((layer) => layer.forEach((star) => star.update(dt)));
       this.staticStars.forEach((star) => star.update(dt));
 
       this.players.forEach((player, index) => {
-        player.update(dt, {
-          bullets: this.bullets,
-          rockets: this.rockets,
-          assets: this.assets,
-          onFire: () => this.assets.gun_sound.play().catch(() => {}),
-          onRocket: () => this.assets.rocket_sound.play().catch(() => {}),
-        });
-
-        if (!player.alive) {
-          this.respawnTimers[index] += dt;
-          if (this.respawnTimers[index] >= 3) {
-            this.respawnPlayer(index);
+        if (player.alive) {
+          player.update(dt, this);
+        } else {
+          this.respawnTimers[index] -= dt;
+          if (this.respawnTimers[index] <= 0) {
+            this.respawn(index);
           }
         }
       });
 
-      this.updateProjectiles(dt);
+      this.bullets.forEach((bullet) => bullet.update(dt));
       this.handleCollisions();
       this.cleanup();
-    }
 
-    respawnPlayer(index) {
-      const player = this.players[index];
-      player.respawn(index === 0 ? WIDTH * 0.25 : WIDTH * 0.75, HEIGHT / 2);
-      this.respawnTimers[index] = 0;
-    }
-
-    updateProjectiles(dt) {
-      this.bullets.forEach((bullet) => bullet.update(dt));
-      this.rockets.forEach((rocket) => rocket.update(dt));
-
-      this.bullets = this.bullets.filter((bullet) => !bullet.dead);
-      this.rockets = this.rockets.filter((rocket) => !rocket.dead);
+      const winnerIndex = this.scores.findIndex((score) => score >= this.scoreLimit);
+      if (winnerIndex !== -1) {
+        this.finishGame(winnerIndex);
+      }
     }
 
     handleCollisions() {
-      for (let i = 0; i < this.players.length; i += 1) {
-        const player = this.players[i];
-        if (!player.alive) continue;
-
-        for (let j = 0; j < this.bullets.length; j += 1) {
-          const bullet = this.bullets[j];
-          if (bullet.owner === player.id) continue;
+      this.bullets.forEach((bullet) => {
+        if (bullet.dead) return;
+        this.players.forEach((player, index) => {
+          if (!player.alive || bullet.owner === player) return;
           if (intersects(player.getBounds(), bullet.getBounds())) {
-            player.kill();
             bullet.dead = true;
-            this.handleKill(player.id === 1 ? 2 : 1);
-            break;
+            player.alive = false;
+            this.scores[(index + 1) % 2] += 1;
+            this.createExplosion(player.getBounds());
+            const killSound = this.assets[`player${index + 1}_kill_sound`];
+            killSound?.play?.();
+            this.respawnTimers[index] = 2;
           }
-        }
+        });
+      });
+    }
 
-        for (let j = 0; j < this.rockets.length; j += 1) {
-          const rocket = this.rockets[j];
-          if (rocket.owner === player.id) continue;
-          if (intersects(player.getBounds(), rocket.getBounds())) {
-            player.kill();
-            rocket.dead = true;
-            this.handleKill(player.id === 1 ? 2 : 1);
-            break;
-          }
-        }
+    respawn(index) {
+      const player = this.players[index];
+      const spawnX = index === 0 ? 80 : WIDTH - player.width - 80;
+      const spawnY = randomRange(80, HEIGHT - 80 - player.height);
+      player.reset({ x: spawnX, y: spawnY });
+      player.rocketCount = 0;
+      this.respawnTimers[index] = 0;
+    }
+
+    cleanup() {
+      this.bullets = this.bullets.filter((bullet) => !bullet.dead);
+      this.explosions = this.explosions.filter((explosion) => !explosion.done);
+    }
+
+    createExplosion(bounds) {
+      const explosion = new Explosion({
+        x: bounds.x + bounds.width / 2,
+        y: bounds.y + bounds.height / 2,
+      }, this.assets.explosion_spritesheet);
+      this.explosions.push(explosion);
+      if (this.assets.explosion_sound) {
+        this.assets.explosion_sound.currentTime = 0;
+        this.assets.explosion_sound.play().catch(() => {});
       }
     }
 
-    handleKill(killerId) {
-      const killer = this.players.find((player) => player.id === killerId);
-      if (!killer) return;
-
-      if (killerId === 1) {
-        this.assets.player1_kill_sound.play().catch(() => {});
-      } else {
-        this.assets.player2_kill_sound.play().catch(() => {});
+    finishGame(winnerIndex) {
+      this.state = GAME_STATE.GAME_OVER;
+      if (this.music && typeof this.music.pause === 'function') {
+        this.music.pause();
       }
-
-      this.assets.explosion_sound.play().catch(() => {});
-      this.explosions.push(new Explosion({
-        x: killer.x,
-        y: killer.y,
-        frames: this.assets.explosion_spritesheet,
-      }));
+      if (this.onGameOver) {
+        this.onGameOver({ winner: winnerIndex + 1, scores: this.scores });
+      }
     }
 
     draw(ctx) {
       ctx.drawImage(this.background, this.backgroundOffset, 0);
       ctx.drawImage(this.background, this.backgroundOffset + WIDTH, 0);
-
       this.starLayers.forEach((layer) => layer.forEach((star) => star.draw(ctx)));
       this.staticStars.forEach((star) => star.draw(ctx));
 
-      this.players.forEach((player) => player.draw(ctx));
+      this.players.forEach((player) => player.alive && player.draw(ctx));
       this.bullets.forEach((bullet) => bullet.draw(ctx));
-      this.rockets.forEach((rocket) => rocket.draw(ctx));
       this.explosions.forEach((explosion) => explosion.draw(ctx));
 
       ctx.fillStyle = '#ffffff';
-      ctx.font = '20px Arial';
-      ctx.fillText(`Player 1: ${this.scores[0]}`, 20, 30);
-      ctx.fillText(`Player 2: ${this.scores[1]}`, WIDTH - 160, 30);
+      ctx.font = '24px Arial';
+      ctx.fillText(`P1 Score: ${this.scores[0]}`, 20, 40);
+      const text = `P2 Score: ${this.scores[1]}`;
+      ctx.fillText(text, WIDTH - ctx.measureText(text).width - 20, 40);
 
-      if (this.state === GAME_STATE.GAME_OVER) {
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+      if (this.paused) {
+        ctx.fillStyle = 'rgba(0,0,0,0.5)';
         ctx.fillRect(0, 0, WIDTH, HEIGHT);
-        ctx.fillStyle = '#ffffff';
-        ctx.font = '36px Arial';
-        const winner = this.scores[0] > this.scores[1] ? 'Player 1 Wins!' : 'Player 2 Wins!';
-        ctx.fillText(winner, WIDTH / 2 - 140, HEIGHT / 2);
+        ctx.fillStyle = '#ff4444';
+        ctx.font = '48px Arial';
+        ctx.fillText('PAUSED', WIDTH / 2 - 80, HEIGHT / 2);
       }
-    }
-
-    cleanup() {
-      this.bullets = this.bullets.filter((bullet) => !bullet.dead);
-      this.rockets = this.rockets.filter((rocket) => !rocket.dead);
-      this.explosions = this.explosions.filter((explosion) => !explosion.done);
     }
   }
 
