@@ -1,11 +1,29 @@
-import { WIDTH, HEIGHT, FRAME_TIME, GAME_STATE } from './shared.js';
-import { createSinglePlayerWorld } from './single-player.js';
-import { createCoopWorld } from './coop.js';
-import { createVersusWorld } from './versus.js';
-import { attachMenuUI } from './menu.js';
-import { attachSettingsUI } from './settings.js';
+(function () {
+  const SpaceVoid = (window.SpaceVoid = window.SpaceVoid || {});
+  const shared = SpaceVoid.shared;
+  if (!shared) {
+    throw new Error('Shared module must be loaded before game bootstrap.');
+  }
 
-const canvas = document.getElementById('game-canvas');
+  const { WIDTH, HEIGHT, FRAME_TIME, GAME_STATE } = shared;
+  const {
+    createSinglePlayerWorld,
+    createCoopWorld,
+    createVersusWorld,
+    attachMenuUI,
+    attachSettingsUI,
+  } = SpaceVoid;
+  if (
+    !createSinglePlayerWorld ||
+    !createCoopWorld ||
+    !createVersusWorld ||
+    !attachMenuUI ||
+    !attachSettingsUI
+  ) {
+    throw new Error('Game modules failed to load.');
+  }
+
+  const canvas = document.getElementById('game-canvas');
 const ctx = canvas?.getContext('2d');
 const overlay = document.getElementById('overlay');
 const container = document.getElementById('game-container');
@@ -530,3 +548,4 @@ bootstrap().catch((error) => {
   overlay.style.display = 'flex';
   overlay.innerHTML = `<div class="menu"><h1 class="menu__title">Error</h1><p>${error.message}</p></div>`;
 });
+})();

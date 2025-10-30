@@ -1,13 +1,20 @@
-import {
-  WIDTH,
-  HEIGHT,
-  POWERUP_TYPES,
-  GAME_STATE,
-  clamp,
-  randomRange,
-  intersects,
-  bulletAsteroidHit,
-} from './shared.js';
+(function (global) {
+  const SpaceVoid = (global.SpaceVoid = global.SpaceVoid || {});
+  const shared = SpaceVoid.shared;
+  if (!shared) {
+    throw new Error('Shared module must be loaded before single-player module.');
+  }
+
+  const {
+    WIDTH,
+    HEIGHT,
+    POWERUP_TYPES,
+    GAME_STATE,
+    clamp,
+    randomRange,
+    intersects,
+    bulletAsteroidHit,
+  } = shared;
 
 class Star {
   constructor(x, y, speed, size, opacity) {
@@ -728,26 +735,6 @@ class Player {
     }
   }
 }
-  return segmentCircleIntersects(start.x, start.y, end.x, end.y, centerX, centerY, radius);
-}
-
-  const fx = x1 - cx;
-  const fy = y1 - cy;
-  const a = dx * dx + dy * dy;
-  const b = 2 * (fx * dx + fy * dy);
-  const c = fx * fx + fy * fy - radius * radius;
-  let discriminant = b * b - 4 * a * c;
-
-  if (discriminant < 0) {
-    return false;
-  }
-
-  discriminant = Math.sqrt(discriminant);
-  const t1 = (-b - discriminant) / (2 * a);
-  const t2 = (-b + discriminant) / (2 * a);
-
-  return (t1 >= 0 && t1 <= 1) || (t2 >= 0 && t2 <= 1);
-}
 
 function createStarLayers(count, width, height) {
   const layers = [];
@@ -1229,8 +1216,15 @@ class GameWorld {
   }
 }
 
-export { Star, StaticStar, Explosion, Player, GameWorld };
+SpaceVoid.Star = Star;
+SpaceVoid.StaticStar = StaticStar;
+SpaceVoid.Explosion = Explosion;
+SpaceVoid.Player = Player;
+SpaceVoid.GameWorld = GameWorld;
 
-export function createSinglePlayerWorld(options) {
+function createSinglePlayerWorld(options) {
   return new GameWorld({ ...options, mode: 'single' });
 }
+
+SpaceVoid.createSinglePlayerWorld = createSinglePlayerWorld;
+})(window);
