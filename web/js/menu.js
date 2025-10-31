@@ -131,7 +131,13 @@
   }
 
   function attachMenuUI(ui) {
-    ui.showMenu = ({ onStartSingle, onStartCoop, onStartVersus, onSettings }) => {
+    ui.showMenu = ({
+      onStartSingle,
+      onStartCoop,
+      onStartVersus,
+      onSettings,
+      onResume,
+    }) => {
       const { overlay } = ui;
       if (typeof ui.resetOverlayState === 'function') {
         ui.resetOverlayState();
@@ -150,6 +156,15 @@
       overlay.style.flexDirection = 'column';
       overlay.style.alignItems = 'center';
       overlay.style.justifyContent = 'center';
+      const resumeButton =
+        typeof onResume === 'function'
+          ? `
+            <div class="menu__resume">
+              <button class="menu__button menu__button--resume" data-action="resume">Resume</button>
+            </div>
+          `
+          : '';
+
       overlay.innerHTML = `
         <div class="menu-scene" role="dialog" aria-labelledby="menu-title">
           <div class="menu-scene__background" aria-hidden="true"></div>
@@ -160,6 +175,7 @@
               <p class="menu__subtitle">Arcade Shooter</p>
               <p class="menu__tagline">Command your starfighter solo, with a wingmate, or face off head-to-head.</p>
             </div>
+            ${resumeButton}
             <div class="menu__actions">
               <button class="menu__button menu__button--primary menu__button--stacked" data-action="single">
                 <span class="menu__button-title">Single Player</span>
@@ -221,6 +237,11 @@
             break;
           case 'settings':
             onSettings();
+            break;
+          case 'resume':
+            if (onResume) {
+              onResume();
+            }
             break;
           default:
             break;

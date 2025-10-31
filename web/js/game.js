@@ -642,7 +642,11 @@ let soundVolume = 0.7;
 
 if (menuButton) {
   menuButton.addEventListener('click', () => {
-    showMainMenu();
+    if (currentWorld && (currentState === GAME_STATE.GAME || currentState === GAME_STATE.PAUSED)) {
+      showMainMenu({ fromGame: true });
+    } else {
+      showMainMenu();
+    }
   });
 }
 
@@ -739,6 +743,17 @@ function startGame(mode) {
   stopAllMusic();
   ui.clear();
 
+  if (currentWorld) {
+    if (currentWorld.music && typeof currentWorld.music.pause === 'function') {
+      try {
+        currentWorld.music.pause();
+      } catch (error) {
+        console.warn('Failed to pause current world music before starting a new game.', error);
+      }
+    }
+    currentWorld = null;
+  }
+
   configureTouchForMode(mode);
 
   if (mode === 'versus') {
@@ -776,18 +791,47 @@ function startGame(mode) {
   currentState = GAME_STATE.GAME;
 }
 
-function showMainMenu() {
-  if (currentWorld) {
-    stopAllMusic();
-    currentWorld = null;
+function showMainMenu(options = {}) {
+  const { fromGame = false } = options;
+  const canResume =
+    Boolean(currentWorld) && fromGame && (currentState === GAME_STATE.GAME || currentState === GAME_STATE.PAUSED);
+
+  if (canResume) {
+    currentWorld.paused = true;
+    if (currentWorld.music && typeof currentWorld.music.pause === 'function') {
+      try {
+        currentWorld.music.pause();
+      } catch (error) {
+        console.warn('Failed to pause current world music while opening the menu.', error);
+      }
+    }
+    currentState = GAME_STATE.PAUSED;
+  } else {
+    if (currentWorld) {
+      stopAllMusic();
+      currentWorld = null;
+    }
+    configureTouchForMode(null);
+    currentState = GAME_STATE.MENU;
   }
-  configureTouchForMode(null);
-  currentState = GAME_STATE.MENU;
+
   ui.showMenu({
     onStartSingle: () => startGame('single'),
     onStartCoop: () => startGame('coop'),
     onStartVersus: () => startGame('versus'),
     onSettings: showSettings,
+    onResume: canResume
+      ? () => {
+          ui.hideOverlay();
+          if (currentWorld) {
+            currentWorld.paused = false;
+            currentState = GAME_STATE.GAME;
+            if (currentWorld.music && typeof currentWorld.music.play === 'function') {
+              currentWorld.music.play().catch(() => {});
+            }
+          }
+        }
+      : undefined,
   });
 }
 

@@ -277,12 +277,12 @@ body {
 .menu {
   position: relative;
   z-index: 3;
-  width: min(480px, 100%);
-  padding: clamp(28px, 5vw, 44px);
+  width: min(420px, 100%);
+  padding: clamp(24px, 5vw, 38px);
   border-radius: 24px;
-  background: linear-gradient(160deg, rgba(12, 20, 40, 0.78), rgba(20, 32, 68, 0.76));
-  border: 1px solid rgba(118, 187, 255, 0.35);
-  box-shadow: 0 30px 60px rgba(6, 12, 30, 0.55);
+  background: linear-gradient(160deg, rgba(12, 20, 40, 0.62), rgba(20, 32, 68, 0.58));
+  border: 1px solid rgba(118, 187, 255, 0.22);
+  box-shadow: 0 26px 52px rgba(6, 12, 30, 0.48);
   backdrop-filter: blur(18px);
   color: #f4f8ff;
   display: flex;
@@ -323,19 +323,15 @@ body {
 }
 
 .menu__actions {
-  display: grid;
-  gap: clamp(14px, 3vw, 18px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(12px, 3vw, 16px);
 }
 
-@media (min-width: 640px) {
-  .menu__actions {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    align-items: stretch;
-  }
-
-  .menu__actions > :nth-child(3) {
-    grid-column: span 2;
-  }
+.menu__resume {
+  display: flex;
+  justify-content: center;
 }
 
 .menu__footer {
@@ -349,21 +345,22 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  width: 100%;
-  padding: 16px 20px;
+  gap: 8px;
+  width: min(260px, 100%);
+  padding: 14px 18px;
   border-radius: 18px;
   border: 1px solid rgba(108, 172, 255, 0.35);
-  background: linear-gradient(140deg, rgba(44, 104, 220, 0.95), rgba(106, 178, 255, 0.95));
+  background: linear-gradient(140deg, rgba(44, 104, 220, 0.9), rgba(106, 178, 255, 0.88));
   color: #ffffff;
-  font-size: 1rem;
+  font-size: 0.95rem;
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  box-shadow: 0 18px 36px rgba(10, 16, 40, 0.45);
+  box-shadow: 0 18px 36px rgba(10, 16, 40, 0.42);
   cursor: pointer;
   transition: transform 180ms ease, box-shadow 180ms ease, border-color 200ms ease,
     background 240ms ease;
+  align-self: center;
 }
 
 .menu__button::before {
@@ -402,10 +399,20 @@ body {
   box-shadow: 0 12px 28px rgba(6, 12, 30, 0.45);
 }
 
+.menu__button--resume {
+  border-color: rgba(116, 226, 176, 0.55);
+  background: linear-gradient(140deg, rgba(76, 213, 150, 0.95), rgba(40, 162, 118, 0.92));
+  box-shadow: 0 18px 36px rgba(12, 46, 32, 0.45);
+}
+
+.menu__resume .menu__button {
+  width: min(220px, 100%);
+}
+
 .menu__button--stacked {
   flex-direction: column;
-  align-items: flex-start;
-  text-align: left;
+  align-items: center;
+  text-align: center;
   letter-spacing: normal;
   text-transform: none;
   padding: 18px 22px;
