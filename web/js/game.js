@@ -482,18 +482,17 @@ class UIManager {
   constructor(overlayElement) {
     this.overlay = overlayElement;
     this.currentHandler = null;
+    this.cleanupOverlay = null;
   }
 
   clear() {
+    this.resetOverlayState();
     this.overlay.innerHTML = '';
     this.overlay.style.display = 'none';
-    if (this.currentHandler) {
-      this.currentHandler();
-      this.currentHandler = null;
-    }
   }
 
   showLoading(progress) {
+    this.resetOverlayState();
     this.overlay.style.display = 'flex';
     this.overlay.style.flexDirection = 'column';
     this.overlay.style.alignItems = 'center';
@@ -509,6 +508,7 @@ class UIManager {
     `;
   }
   showGameOver({ score, level, onRetry, onMenu }) {
+    this.resetOverlayState();
     this.overlay.style.display = 'flex';
     this.overlay.style.flexDirection = 'column';
     this.overlay.style.alignItems = 'center';
@@ -541,6 +541,7 @@ class UIManager {
   }
 
   showVersusGameOver({ winner, scores, onRematch, onMenu }) {
+    this.resetOverlayState();
     this.overlay.style.display = 'flex';
     this.overlay.style.flexDirection = 'column';
     this.overlay.style.alignItems = 'center';
@@ -567,6 +568,20 @@ class UIManager {
     };
     this.overlay.addEventListener('click', handler);
     this.currentHandler = cleanup;
+  }
+
+  resetOverlayState() {
+    if (this.currentHandler) {
+      this.currentHandler();
+      this.currentHandler = null;
+    }
+    if (this.cleanupOverlay) {
+      this.cleanupOverlay();
+      this.cleanupOverlay = null;
+    }
+    this.overlay.style.flexDirection = '';
+    this.overlay.style.alignItems = '';
+    this.overlay.style.justifyContent = '';
   }
 }
 

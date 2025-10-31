@@ -4,6 +4,18 @@
   function attachSettingsUI(ui) {
     ui.showSettings = ({ settings, onApply, onClose }) => {
       const { overlay } = ui;
+      if (typeof ui.resetOverlayState === 'function') {
+        ui.resetOverlayState();
+      } else {
+        if (ui.currentHandler) {
+          ui.currentHandler();
+          ui.currentHandler = null;
+        }
+        if (ui.cleanupOverlay) {
+          ui.cleanupOverlay();
+          ui.cleanupOverlay = null;
+        }
+      }
       overlay.style.display = 'flex';
       overlay.style.flexDirection = 'column';
       overlay.style.alignItems = 'center';
