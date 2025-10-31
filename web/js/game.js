@@ -40,6 +40,14 @@ if (!canvas || !ctx || !overlay || !container) {
   throw new Error('Game canvas or UI elements are missing.');
 }
 
+function setMenuButtonVisible(visible) {
+  if (!menuButton) return;
+  menuButton.classList.toggle('is-hidden', !visible);
+  menuButton.setAttribute('aria-hidden', String(!visible));
+}
+
+setMenuButtonVisible(false);
+
 const IMAGE_PATH = '../assets/images/';
 const SOUND_PATH = '../assets/sounds/';
 
@@ -482,18 +490,17 @@ class UIManager {
   constructor(overlayElement) {
     this.overlay = overlayElement;
     this.currentHandler = null;
+    this.cleanupOverlay = null;
   }
 
   clear() {
+    this.resetOverlayState();
     this.overlay.innerHTML = '';
     this.overlay.style.display = 'none';
-    if (this.currentHandler) {
-      this.currentHandler();
-      this.currentHandler = null;
-    }
   }
 
   showLoading(progress) {
+    this.resetOverlayState();
     this.overlay.style.display = 'flex';
     this.overlay.style.flexDirection = 'column';
     this.overlay.style.alignItems = 'center';
@@ -509,64 +516,224 @@ class UIManager {
     `;
   }
   showGameOver({ score, level, onRetry, onMenu }) {
+    this.resetOverlayState();
     this.overlay.style.display = 'flex';
     this.overlay.style.flexDirection = 'column';
     this.overlay.style.alignItems = 'center';
     this.overlay.style.justifyContent = 'center';
     this.overlay.innerHTML = `
-      <div class="menu">
-        <h1 class="menu__title">Game Over</h1>
-        <p class="menu__subtitle">Score: ${score}</p>
-        <p class="menu__subtitle">Level: ${level}</p>
-        <button class="menu__button" data-action="retry">Retry</button>
-        <button class="menu__button menu__button--secondary" data-action="menu">Main Menu</button>
+      <div class="menu menu--modal glass-panel" role="dialog" aria-labelledby="game-over-title">
+        <div class="menu__header">
+          <h1 class="menu__title" id="game-over-title">Game Over</h1>
+          <p class="menu__subtitle menu__subtitle--muted">Mission failed, but data was recovered.</p>
+        </div>
+        <div class="menu__stats">
+          <div class="menu__stat">
+            <span class="menu__stat-label">Score</span>
+            <span class="menu__stat-value">${score}</span>
+          </div>
+          <div class="menu__stat">
+            <span class="menu__stat-label">Level</span>
+            <span class="menu__stat-value">${level}</span>
+          </div>
+        </div>
+        <div class="menu__actions menu__actions--modal">
+          <button class="menu__button glass-button glass-button--primary" data-action="retry">Retry Mission</button>
+          <button class="menu__button glass-button glass-button--secondary" data-action="menu">Main Menu</button>
+        </div>
       </div>
     `;
+    const buttons = Array.from(
+      this.overlay.querySelectorAll('button[data-action]')
+    );
+    let focusedIndex = buttons.length ? 0 : -1;
+
+    const focusListeners = buttons.map((button, index) => {
+      const listener = () => {
+        focusedIndex = index;
+      };
+      button.addEventListener('focus', listener);
+      return listener;
+    });
+
+    const focusButton = (index) => {
+      if (!buttons.length) return;
+      const safeIndex = (index + buttons.length) % buttons.length;
+      const target = buttons[safeIndex];
+      if (!target) return;
+      focusedIndex = safeIndex;
+      target.focus({ preventScroll: true });
+    };
+
+    if (buttons.length) {
+      window.requestAnimationFrame(() => {
+        focusButton(focusedIndex);
+      });
+    }
+
+    const keyHandler = (event) => {
+      if (!buttons.length) return;
+      const { key } = event;
+      if (key === 'ArrowDown' || key === 'ArrowRight') {
+        event.preventDefault();
+        focusButton(focusedIndex + 1);
+      } else if (key === 'ArrowUp' || key === 'ArrowLeft') {
+        event.preventDefault();
+        focusButton(focusedIndex - 1);
+      } else if (key === 'Home') {
+        event.preventDefault();
+        focusButton(0);
+      } else if (key === 'End') {
+        event.preventDefault();
+        focusButton(buttons.length - 1);
+      } else if (key === 'Enter' || key === ' ' || key === 'Space' || key === 'Spacebar') {
+        const activeElement = document.activeElement;
+        if (activeElement instanceof HTMLElement && buttons.includes(activeElement)) {
+          event.preventDefault();
+          activeElement.click();
+        }
+      }
+    };
+
+    this.overlay.addEventListener('keydown', keyHandler);
+
     const handler = (event) => {
       if (!(event.target instanceof HTMLElement)) return;
-      const action = event.target.dataset.action;
-      if (!action) return;
+      const button = event.target.closest('button[data-action]');
+      if (!button) return;
+      const action = button.dataset.action;
+      cleanup();
       if (action === 'retry') {
         onRetry();
       } else if (action === 'menu') {
         onMenu();
       }
-      cleanup();
     };
     const cleanup = () => {
       this.overlay.removeEventListener('click', handler);
+      this.overlay.removeEventListener('keydown', keyHandler);
+      buttons.forEach((button, index) => {
+        button.removeEventListener('focus', focusListeners[index]);
+      });
     };
     this.overlay.addEventListener('click', handler);
     this.currentHandler = cleanup;
   }
 
   showVersusGameOver({ winner, scores, onRematch, onMenu }) {
+    this.resetOverlayState();
     this.overlay.style.display = 'flex';
     this.overlay.style.flexDirection = 'column';
     this.overlay.style.alignItems = 'center';
     this.overlay.style.justifyContent = 'center';
     this.overlay.innerHTML = `
-      <div class="menu">
-        <h1 class="menu__title">Versus Complete</h1>
-        <p class="menu__subtitle">Winner: Player ${winner}</p>
-        <p class="menu__subtitle">P1 ${scores[0]} - P2 ${scores[1]}</p>
-        <button class="menu__button" data-action="rematch">Rematch</button>
-        <button class="menu__button menu__button--secondary" data-action="menu">Main Menu</button>
+      <div class="menu menu--modal glass-panel" role="dialog" aria-labelledby="versus-complete-title">
+        <div class="menu__header">
+          <h1 class="menu__title" id="versus-complete-title">Versus Complete</h1>
+          <p class="menu__subtitle menu__subtitle--muted">Battle report ready.</p>
+        </div>
+        <div class="menu__stats menu__stats--wide">
+          <div class="menu__stat">
+            <span class="menu__stat-label">Winner</span>
+            <span class="menu__stat-value">Player ${winner}</span>
+          </div>
+          <div class="menu__stat menu__stat--full">
+            <span class="menu__stat-label">Final Score</span>
+            <span class="menu__stat-value">P1 ${scores[0]} — P2 ${scores[1]}</span>
+          </div>
+        </div>
+        <div class="menu__actions menu__actions--modal">
+          <button class="menu__button glass-button glass-button--accent" data-action="rematch">Rematch</button>
+          <button class="menu__button glass-button glass-button--secondary" data-action="menu">Main Menu</button>
+        </div>
       </div>
     `;
+    const buttons = Array.from(
+      this.overlay.querySelectorAll('button[data-action]')
+    );
+    let focusedIndex = buttons.length ? 0 : -1;
+
+    const focusListeners = buttons.map((button, index) => {
+      const listener = () => {
+        focusedIndex = index;
+      };
+      button.addEventListener('focus', listener);
+      return listener;
+    });
+
+    const focusButton = (index) => {
+      if (!buttons.length) return;
+      const safeIndex = (index + buttons.length) % buttons.length;
+      const target = buttons[safeIndex];
+      if (!target) return;
+      focusedIndex = safeIndex;
+      target.focus({ preventScroll: true });
+    };
+
+    if (buttons.length) {
+      window.requestAnimationFrame(() => {
+        focusButton(focusedIndex);
+      });
+    }
+
+    const keyHandler = (event) => {
+      if (!buttons.length) return;
+      const { key } = event;
+      if (key === 'ArrowDown' || key === 'ArrowRight') {
+        event.preventDefault();
+        focusButton(focusedIndex + 1);
+      } else if (key === 'ArrowUp' || key === 'ArrowLeft') {
+        event.preventDefault();
+        focusButton(focusedIndex - 1);
+      } else if (key === 'Home') {
+        event.preventDefault();
+        focusButton(0);
+      } else if (key === 'End') {
+        event.preventDefault();
+        focusButton(buttons.length - 1);
+      } else if (key === 'Enter' || key === ' ' || key === 'Space' || key === 'Spacebar') {
+        const activeElement = document.activeElement;
+        if (activeElement instanceof HTMLElement && buttons.includes(activeElement)) {
+          event.preventDefault();
+          activeElement.click();
+        }
+      }
+    };
+
+    this.overlay.addEventListener('keydown', keyHandler);
+
     const handler = (event) => {
       if (!(event.target instanceof HTMLElement)) return;
-      const action = event.target.dataset.action;
-      if (!action) return;
+      const button = event.target.closest('button[data-action]');
+      if (!button) return;
+      const action = button.dataset.action;
+      cleanup();
       if (action === 'rematch') onRematch();
       if (action === 'menu') onMenu();
-      cleanup();
     };
     const cleanup = () => {
       this.overlay.removeEventListener('click', handler);
+      this.overlay.removeEventListener('keydown', keyHandler);
+      buttons.forEach((button, index) => {
+        button.removeEventListener('focus', focusListeners[index]);
+      });
     };
     this.overlay.addEventListener('click', handler);
     this.currentHandler = cleanup;
+  }
+
+  resetOverlayState() {
+    if (this.currentHandler) {
+      this.currentHandler();
+      this.currentHandler = null;
+    }
+    if (this.cleanupOverlay) {
+      this.cleanupOverlay();
+      this.cleanupOverlay = null;
+    }
+    this.overlay.style.flexDirection = '';
+    this.overlay.style.alignItems = '';
+    this.overlay.style.justifyContent = '';
   }
 }
 
@@ -619,15 +786,21 @@ configureTouchForMode(null);
 
 let assets = null;
 let currentWorld = null;
+let currentMode = null;
 let currentState = GAME_STATE.LOADING;
 let lastTimestamp = 0;
 let accumulator = 0;
 let musicVolume = 0.5;
 let soundVolume = 0.7;
+let lastResumeHandler = null;
 
 if (menuButton) {
   menuButton.addEventListener('click', () => {
-    showMainMenu();
+    if (currentWorld && (currentState === GAME_STATE.GAME || currentState === GAME_STATE.PAUSED)) {
+      showMainMenu({ fromGame: true });
+    } else {
+      showMainMenu();
+    }
   });
 }
 
@@ -666,6 +839,13 @@ function configureTouchForMode(mode) {
   const joysticks = [];
   const buttons = [];
 
+  if (touchControls) {
+    touchControls.classList.remove('touch-controls--single', 'touch-controls--coop', 'touch-controls--versus');
+    if (mode) {
+      touchControls.classList.add(`touch-controls--${mode}`);
+    }
+  }
+
   const playerOneBindings = {
     up: 'KeyW',
     down: 'KeyS',
@@ -698,16 +878,12 @@ function configureTouchForMode(mode) {
     case 'coop':
       addJoystick(primaryJoystick, playerOneBindings);
       addJoystick(secondaryJoystick, playerTwoBindings);
-      addButton(shootButton, 'Space');
       addButton(rocketButton, 'ShiftLeft');
       addButton(rocketButton2, 'Numpad0');
       break;
     case 'versus':
       addJoystick(primaryJoystick, playerOneBindings);
       addJoystick(secondaryJoystick, playerTwoBindings);
-      addButton(shootButton, 'Space');
-      addButton(rocketButton, 'Space');
-      addButton(rocketButton2, 'Enter');
       break;
     default:
       break;
@@ -720,6 +896,20 @@ function startGame(mode) {
   if (!assets) return;
   stopAllMusic();
   ui.clear();
+  setMenuButtonVisible(true);
+  lastResumeHandler = null;
+  currentMode = mode;
+
+  if (currentWorld) {
+    if (currentWorld.music && typeof currentWorld.music.pause === 'function') {
+      try {
+        currentWorld.music.pause();
+      } catch (error) {
+        console.warn('Failed to pause current world music before starting a new game.', error);
+      }
+    }
+    currentWorld = null;
+  }
 
   configureTouchForMode(mode);
 
@@ -758,18 +948,65 @@ function startGame(mode) {
   currentState = GAME_STATE.GAME;
 }
 
-function showMainMenu() {
-  if (currentWorld) {
-    stopAllMusic();
-    currentWorld = null;
+function showMainMenu(options = {}) {
+  const { fromGame = false } = options;
+  const canResume =
+    Boolean(currentWorld) && fromGame && (currentState === GAME_STATE.GAME || currentState === GAME_STATE.PAUSED);
+
+  setMenuButtonVisible(false);
+  lastResumeHandler = null;
+
+  if (canResume) {
+    currentWorld.paused = true;
+    if (currentWorld.music && typeof currentWorld.music.pause === 'function') {
+      try {
+        currentWorld.music.pause();
+      } catch (error) {
+        console.warn('Failed to pause current world music while opening the menu.', error);
+      }
+    }
+    if (typeof input.setTouchContainerVisible === 'function') {
+      input.setTouchContainerVisible(false);
+    }
+    currentState = GAME_STATE.PAUSED;
+  } else {
+    if (currentWorld) {
+      stopAllMusic();
+      currentWorld = null;
+    }
+    configureTouchForMode(null);
+    currentMode = null;
+    currentState = GAME_STATE.MENU;
   }
-  configureTouchForMode(null);
-  currentState = GAME_STATE.MENU;
+
+  let resumeHandler = null;
+  if (canResume) {
+    resumeHandler = () => {
+      ui.hideOverlay();
+      if (currentWorld) {
+        currentWorld.paused = false;
+        currentState = GAME_STATE.GAME;
+        if (currentWorld.music && typeof currentWorld.music.play === 'function') {
+          currentWorld.music.play().catch(() => {});
+        }
+      }
+      if (currentMode) {
+        configureTouchForMode(currentMode);
+      } else {
+        configureTouchForMode(null);
+      }
+      setMenuButtonVisible(true);
+      lastResumeHandler = null;
+    };
+  }
+  lastResumeHandler = resumeHandler;
+
   ui.showMenu({
     onStartSingle: () => startGame('single'),
     onStartCoop: () => startGame('coop'),
     onStartVersus: () => startGame('versus'),
     onSettings: showSettings,
+    onResume: resumeHandler,
   });
 }
 
@@ -792,12 +1029,13 @@ function showSettings() {
 }
 
 input.onKey('Escape', (pressed) => {
-  if (!pressed || !currentWorld) return;
-  currentWorld.paused = !currentWorld.paused;
-  if (currentWorld.paused) {
-    currentState = GAME_STATE.PAUSED;
-  } else {
-    currentState = GAME_STATE.GAME;
+  if (!pressed) return;
+  if (currentState === GAME_STATE.PAUSED && typeof lastResumeHandler === 'function') {
+    lastResumeHandler();
+    return;
+  }
+  if (currentWorld) {
+    showMainMenu({ fromGame: true });
   }
 });
 

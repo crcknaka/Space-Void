@@ -6,38 +6,9 @@
   }
 
   const { WIDTH, HEIGHT, GAME_STATE, randomRange, intersects } = shared;
-  const { Player, Star, StaticStar, Explosion } = SpaceVoid;
-  if (!Player || !Star || !StaticStar || !Explosion) {
+  const { Player, Star, StaticStar, Explosion, createStarLayers, createStaticStars } = SpaceVoid;
+  if (!Player || !Star || !StaticStar || !Explosion || !createStarLayers || !createStaticStars) {
     throw new Error('Single-player module must be loaded before versus module.');
-  }
-
-  function createStarLayers(count) {
-    const layers = [];
-    for (let i = 0; i < count; i += 1) {
-      const stars = [];
-      for (let j = 0; j < 50; j += 1) {
-        stars.push(new Star(
-          Math.random() * WIDTH,
-          Math.random() * HEIGHT,
-          randomRange(0.1 * (i + 1), 1.1 * (i + 1)),
-          Math.floor(randomRange(1, 2)),
-          Math.floor(randomRange(30, 100)),
-        ));
-      }
-      layers.push(stars);
-    }
-    return layers;
-  }
-
-  function createStaticStars() {
-    const colors = ['#ffffff', '#66aaff', '#aaccff'];
-    return Array.from({ length: 100 }, () => new StaticStar(
-      Math.random() * WIDTH,
-      Math.random() * HEIGHT,
-      Math.floor(randomRange(1, 3)),
-      Math.floor(randomRange(50, 200)),
-      colors[Math.floor(Math.random() * colors.length)],
-    ));
   }
 
   function flipImage(image) {
@@ -63,8 +34,8 @@
       this.asteroids = [];
       this.particles = [];
       this.explosions = [];
-      this.starLayers = createStarLayers(3);
-      this.staticStars = createStaticStars();
+      this.starLayers = createStarLayers(3, WIDTH, HEIGHT);
+      this.staticStars = createStaticStars(WIDTH, HEIGHT);
       this.background = this.assets.versus_background;
       this.backgroundOffset = 0;
       this.scoreLimit = 10;
@@ -94,7 +65,7 @@
         },
         facingLeft: false,
         assets: this.assets,
-        autoFire: false,
+        autoFire: true,
       });
       player1.reset({ x: 80, y: HEIGHT / 2 - player1.height / 2 });
       player1.rocketCount = 0;
@@ -115,7 +86,7 @@
         },
         facingLeft: true,
         assets: this.assets,
-        autoFire: false,
+        autoFire: true,
       });
       player2.reset({ x: WIDTH - player2.width - 80, y: HEIGHT / 2 - player2.height / 2 });
       player2.rocketCount = 0;
@@ -123,34 +94,40 @@
     }
 
     update(dt) {
-      if (this.paused || this.state !== GAME_STATE.GAME) return;
+      if (this.paused) return;
 
-      this.backgroundOffset -= dt * 15;
-      if (this.backgroundOffset <= -WIDTH) {
-        this.backgroundOffset += WIDTH;
-      }
-
-      this.starLayers.forEach((layer) => layer.forEach((star) => star.update(dt)));
-      this.staticStars.forEach((star) => star.update(dt));
-
-      this.players.forEach((player, index) => {
-        if (player.alive) {
-          player.update(dt, this);
-        } else {
-          this.respawnTimers[index] -= dt;
-          if (this.respawnTimers[index] <= 0) {
-            this.respawn(index);
-          }
+      if (this.state === GAME_STATE.GAME) {
+        this.backgroundOffset -= dt * 15;
+        if (this.backgroundOffset <= -WIDTH) {
+          this.backgroundOffset += WIDTH;
         }
-      });
 
-      this.bullets.forEach((bullet) => bullet.update(dt));
-      this.handleCollisions();
-      this.cleanup();
+        this.starLayers.forEach((layer) => layer.forEach((star) => star.update(dt)));
+        this.staticStars.forEach((star) => star.update(dt));
 
-      const winnerIndex = this.scores.findIndex((score) => score >= this.scoreLimit);
-      if (winnerIndex !== -1) {
-        this.finishGame(winnerIndex);
+        this.players.forEach((player, index) => {
+          if (player.alive) {
+            player.update(dt, this);
+          } else {
+            this.respawnTimers[index] -= dt;
+            if (this.respawnTimers[index] <= 0) {
+              this.respawn(index);
+            }
+          }
+        });
+
+        this.bullets.forEach((bullet) => bullet.update(dt));
+        this.explosions.forEach((explosion) => explosion.update(dt));
+        this.handleCollisions();
+        this.cleanup();
+
+        const winnerIndex = this.scores.findIndex((score) => score >= this.scoreLimit);
+        if (winnerIndex !== -1) {
+          this.finishGame(winnerIndex);
+        }
+      } else if (this.state === GAME_STATE.GAME_OVER) {
+        this.explosions.forEach((explosion) => explosion.update(dt));
+        this.cleanupExplosions();
       }
     }
 
@@ -183,6 +160,10 @@
 
     cleanup() {
       this.bullets = this.bullets.filter((bullet) => !bullet.dead);
+      this.cleanupExplosions();
+    }
+
+    cleanupExplosions() {
       this.explosions = this.explosions.filter((explosion) => !explosion.done);
     }
 
@@ -224,13 +205,6 @@
       const text = `P2 Score: ${this.scores[1]}`;
       ctx.fillText(text, WIDTH - ctx.measureText(text).width - 20, 40);
 
-      if (this.paused) {
-        ctx.fillStyle = 'rgba(0,0,0,0.5)';
-        ctx.fillRect(0, 0, WIDTH, HEIGHT);
-        ctx.fillStyle = '#ff4444';
-        ctx.font = '48px Arial';
-        ctx.fillText('PAUSED', WIDTH / 2 - 80, HEIGHT / 2);
-      }
     }
   }
 
