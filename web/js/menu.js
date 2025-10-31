@@ -111,8 +111,8 @@
       if (!rect.width || !rect.height) return;
       const normalizedX = (event.clientX - rect.left) / rect.width - 0.5;
       const normalizedY = (event.clientY - rect.top) / rect.height - 0.5;
-      const offsetX = normalizedX * 40;
-      const offsetY = normalizedY * 30;
+      const offsetX = normalizedX * 80;
+      const offsetY = normalizedY * 60;
       updateParallax(offsetX, offsetY);
     };
 
