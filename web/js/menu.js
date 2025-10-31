@@ -1,13 +1,21 @@
 (function (global) {
   const SpaceVoid = (global.SpaceVoid = global.SpaceVoid || {});
+  const shared = SpaceVoid.shared || {};
+  const { WIDTH = 600, HEIGHT = 880 } = shared;
+  const createLayers = SpaceVoid.createStarLayers;
+  const createStatics = SpaceVoid.createStaticStars;
 
   function createStarfield(scene, canvas) {
     if (!canvas) return () => {};
     const ctx = canvas.getContext('2d');
     if (!ctx) return () => {};
 
-    const colors = ['#ffffff', '#9ecbff', '#ffe4a3'];
-    let stars = [];
+    if (typeof createLayers !== 'function' || typeof createStatics !== 'function') {
+      return () => {};
+    }
+
+    let starLayers = [];
+    let staticStars = [];
     let width = 0;
     let height = 0;
     let rafId = null;
@@ -20,6 +28,8 @@
       if (width === 0 || height === 0) {
         canvas.width = 0;
         canvas.height = 0;
+        starLayers = [];
+        staticStars = [];
         return;
       }
 
@@ -31,17 +41,13 @@
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.scale(dpr, dpr);
 
-      const starCount = Math.max(60, Math.floor((width * height) / 2500));
-      stars = Array.from({ length: starCount }, () => ({
-        x: Math.random() * width,
-        y: Math.random() * height,
-        depth: Math.random() * 2.2 + 0.6,
-        size: Math.random() * 1.1 + 0.5,
-        speed: 10 + Math.random() * 20,
-        twinklePhase: Math.random() * Math.PI * 2,
-        twinkleSpeed: 0.6 + Math.random() * 1.2,
-        color: colors[Math.floor(Math.random() * colors.length)],
-      }));
+      const baseArea = WIDTH * HEIGHT;
+      const area = width * height;
+      const densityScale = baseArea > 0 ? Math.max(0.8, area / baseArea) : 1;
+      const perLayer = Math.max(30, Math.round(50 * densityScale));
+      const staticCount = Math.max(60, Math.round(100 * densityScale));
+      starLayers = createLayers(3, width, height, { perLayer });
+      staticStars = createStatics(width, height, { count: staticCount });
     };
 
     const draw = (timestamp) => {
@@ -57,22 +63,16 @@
       lastTime = timestamp;
 
       ctx.clearRect(0, 0, width, height);
-      stars.forEach((star) => {
-        star.x -= star.speed * star.depth * delta;
-        if (star.x < -2) {
-          star.x = width + Math.random() * 10;
-          star.y = Math.random() * height;
-        }
-        star.twinklePhase += star.twinkleSpeed * delta;
-        const alpha = 0.25 + Math.abs(Math.sin(star.twinklePhase)) * 0.75;
-        ctx.globalAlpha = Math.min(1, alpha);
-        ctx.fillStyle = star.color;
-        const radius = star.size * star.depth;
-        ctx.beginPath();
-        ctx.arc(star.x, star.y, radius, 0, Math.PI * 2);
-        ctx.fill();
+      starLayers.forEach((layer) => {
+        layer.forEach((star) => {
+          star.update(delta);
+          star.draw(ctx);
+        });
       });
-      ctx.globalAlpha = 1;
+      staticStars.forEach((star) => {
+        star.update(delta);
+        star.draw(ctx);
+      });
 
       rafId = window.requestAnimationFrame(draw);
     };
@@ -91,7 +91,8 @@
         window.cancelAnimationFrame(rafId);
         rafId = null;
       }
-      stars = [];
+      starLayers = [];
+      staticStars = [];
       lastTime = 0;
     };
   }

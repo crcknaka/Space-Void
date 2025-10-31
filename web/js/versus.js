@@ -6,38 +6,9 @@
   }
 
   const { WIDTH, HEIGHT, GAME_STATE, randomRange, intersects } = shared;
-  const { Player, Star, StaticStar, Explosion } = SpaceVoid;
-  if (!Player || !Star || !StaticStar || !Explosion) {
+  const { Player, Star, StaticStar, Explosion, createStarLayers, createStaticStars } = SpaceVoid;
+  if (!Player || !Star || !StaticStar || !Explosion || !createStarLayers || !createStaticStars) {
     throw new Error('Single-player module must be loaded before versus module.');
-  }
-
-  function createStarLayers(count) {
-    const layers = [];
-    for (let i = 0; i < count; i += 1) {
-      const stars = [];
-      for (let j = 0; j < 50; j += 1) {
-        stars.push(new Star(
-          Math.random() * WIDTH,
-          Math.random() * HEIGHT,
-          randomRange(0.1 * (i + 1), 1.1 * (i + 1)),
-          Math.floor(randomRange(1, 2)),
-          Math.floor(randomRange(30, 100)),
-        ));
-      }
-      layers.push(stars);
-    }
-    return layers;
-  }
-
-  function createStaticStars() {
-    const colors = ['#ffffff', '#66aaff', '#aaccff'];
-    return Array.from({ length: 100 }, () => new StaticStar(
-      Math.random() * WIDTH,
-      Math.random() * HEIGHT,
-      Math.floor(randomRange(1, 3)),
-      Math.floor(randomRange(50, 200)),
-      colors[Math.floor(Math.random() * colors.length)],
-    ));
   }
 
   function flipImage(image) {
@@ -63,8 +34,8 @@
       this.asteroids = [];
       this.particles = [];
       this.explosions = [];
-      this.starLayers = createStarLayers(3);
-      this.staticStars = createStaticStars();
+      this.starLayers = createStarLayers(3, WIDTH, HEIGHT);
+      this.staticStars = createStaticStars(WIDTH, HEIGHT);
       this.background = this.assets.versus_background;
       this.backgroundOffset = 0;
       this.scoreLimit = 10;

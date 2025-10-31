@@ -17,19 +17,21 @@
   } = shared;
 
 class Star {
-  constructor(x, y, speed, size, opacity) {
+  constructor(x, y, speed, size, opacity, boundsWidth = WIDTH, boundsHeight = HEIGHT) {
     this.x = x;
     this.y = y;
     this.speed = speed;
     this.size = size;
     this.opacity = opacity;
+    this.boundsWidth = boundsWidth;
+    this.boundsHeight = boundsHeight;
   }
 
   update(dt) {
     this.x -= this.speed * dt * 60;
-    if (this.x < 0) {
-      this.x = WIDTH;
-      this.y = Math.random() * HEIGHT;
+    if (this.x < -this.size) {
+      this.x = this.boundsWidth + Math.random() * this.boundsWidth * 0.1;
+      this.y = Math.random() * this.boundsHeight;
     }
   }
 
@@ -202,10 +204,14 @@ class EnemyBullet {
     this.speedx = speedx;
     this.speedy = speedy;
     this.dead = false;
+    this.prevX = this.x;
+    this.prevY = this.y;
   }
 
   update(dt, world) {
     const speedMultiplier = world.gameSpeedMultiplier;
+    this.prevX = this.x;
+    this.prevY = this.y;
     this.x += this.speedx * dt * 60 * speedMultiplier;
     this.y += this.speedy * dt * 60 * speedMultiplier;
     if (this.x + this.width < 0 || this.x > WIDTH || this.y + this.height < 0 || this.y > HEIGHT) {
@@ -219,6 +225,14 @@ class EnemyBullet {
 
   getBounds() {
     return { x: this.x, y: this.y, width: this.width, height: this.height };
+  }
+
+  getCenter() {
+    return { x: this.x + this.width / 2, y: this.y + this.height / 2 };
+  }
+
+  getPreviousCenter() {
+    return { x: this.prevX + this.width / 2, y: this.prevY + this.height / 2 };
   }
 }
 
@@ -746,11 +760,12 @@ class Player {
   }
 }
 
-function createStarLayers(count, width, height) {
+function createStarLayers(count, width = WIDTH, height = HEIGHT, options = {}) {
   const layers = [];
+  const perLayer = options.perLayer ?? 50;
   for (let layerIndex = 0; layerIndex < count; layerIndex += 1) {
     const stars = [];
-    for (let i = 0; i < 50; i += 1) {
+    for (let i = 0; i < perLayer; i += 1) {
       stars.push(
         new Star(
           Math.random() * width,
@@ -758,6 +773,8 @@ function createStarLayers(count, width, height) {
           randomRange(0.1 * (layerIndex + 1), 1.1 * (layerIndex + 1)),
           Math.floor(randomRange(1, 3)),
           Math.floor(randomRange(30, 100)),
+          width,
+          height,
         ),
       );
     }
@@ -766,12 +783,13 @@ function createStarLayers(count, width, height) {
   return layers;
 }
 
-function createStaticStars(width, height) {
+function createStaticStars(width = WIDTH, height = HEIGHT, options = {}) {
   const colors = ['#ffffff', '#66aaff', '#aaccff'];
-  return Array.from({ length: 100 }, () => new StaticStar(
+  const count = options.count ?? 100;
+  return Array.from({ length: count }, () => new StaticStar(
     Math.random() * width,
     Math.random() * height,
-    Math.floor(randomRange(1, 4)),
+    Math.floor(randomRange(1, 3)),
     Math.floor(randomRange(50, 200)),
     colors[Math.floor(Math.random() * colors.length)],
   ));
@@ -855,7 +873,7 @@ class GameWorld {
           left: 'ArrowLeft',
           right: 'ArrowRight',
           shoot: 'Enter',
-          rocket: 'Numpad0',
+          rocket: 'Enter',
           speed: 'Numpad0',
         },
         facingLeft: false,
@@ -962,6 +980,7 @@ class GameWorld {
   handleCollisions() {
     this.handleBulletEnemyCollisions();
     this.handleBulletAsteroidCollisions();
+    this.handleEnemyBulletAsteroidCollisions();
     this.handleRocketCollisions();
     this.handleEnemyBulletPlayerCollisions();
     this.handleEnemyPlayerCollisions();
@@ -1004,6 +1023,23 @@ class GameWorld {
         asteroid.dead = true;
         this.createExplosion(bounds);
         this.score += 5;
+        asteroid.breakApart().forEach((piece) => this.asteroids.push(piece));
+        break;
+      }
+    }
+  }
+
+  handleEnemyBulletAsteroidCollisions() {
+    for (const asteroid of this.asteroids) {
+      if (asteroid.dead) continue;
+      const bounds = asteroid.getBounds();
+      for (const bullet of this.enemyBullets) {
+        if (bullet.dead) continue;
+        const collided = intersects(bounds, bullet.getBounds()) || bulletAsteroidHit(bullet, asteroid);
+        if (!collided) continue;
+        bullet.dead = true;
+        asteroid.dead = true;
+        this.createExplosion(bounds);
         asteroid.breakApart().forEach((piece) => this.asteroids.push(piece));
         break;
       }
@@ -1224,6 +1260,8 @@ SpaceVoid.StaticStar = StaticStar;
 SpaceVoid.Explosion = Explosion;
 SpaceVoid.Player = Player;
 SpaceVoid.GameWorld = GameWorld;
+SpaceVoid.createStarLayers = createStarLayers;
+SpaceVoid.createStaticStars = createStaticStars;
 
 function createSinglePlayerWorld(options) {
   return new GameWorld({ ...options, mode: 'single' });
