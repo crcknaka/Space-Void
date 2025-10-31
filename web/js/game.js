@@ -28,6 +28,8 @@ const ctx = canvas?.getContext('2d');
 const overlay = document.getElementById('overlay');
 const container = document.getElementById('game-container');
 const menuButton = document.getElementById('menu-button');
+const shootButton = document.getElementById('touch-shoot');
+const rocketButton = document.getElementById('touch-rocket');
 
 if (!canvas || !ctx || !overlay || !container) {
   throw new Error('Game canvas or UI elements are missing.');
