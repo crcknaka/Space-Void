@@ -522,18 +522,32 @@ class UIManager {
     this.overlay.style.alignItems = 'center';
     this.overlay.style.justifyContent = 'center';
     this.overlay.innerHTML = `
-      <div class="menu">
-        <h1 class="menu__title">Game Over</h1>
-        <p class="menu__subtitle">Score: ${score}</p>
-        <p class="menu__subtitle">Level: ${level}</p>
-        <button class="menu__button" data-action="retry">Retry</button>
-        <button class="menu__button menu__button--secondary" data-action="menu">Main Menu</button>
+      <div class="menu menu--modal glass-panel" role="dialog" aria-labelledby="game-over-title">
+        <div class="menu__header">
+          <h1 class="menu__title" id="game-over-title">Game Over</h1>
+          <p class="menu__subtitle menu__subtitle--muted">Mission failed, but data was recovered.</p>
+        </div>
+        <div class="menu__stats">
+          <div class="menu__stat">
+            <span class="menu__stat-label">Score</span>
+            <span class="menu__stat-value">${score}</span>
+          </div>
+          <div class="menu__stat">
+            <span class="menu__stat-label">Level</span>
+            <span class="menu__stat-value">${level}</span>
+          </div>
+        </div>
+        <div class="menu__actions menu__actions--modal">
+          <button class="menu__button glass-button glass-button--primary" data-action="retry">Retry Mission</button>
+          <button class="menu__button glass-button glass-button--secondary" data-action="menu">Main Menu</button>
+        </div>
       </div>
     `;
     const handler = (event) => {
       if (!(event.target instanceof HTMLElement)) return;
-      const action = event.target.dataset.action;
-      if (!action) return;
+      const button = event.target.closest('button[data-action]');
+      if (!button) return;
+      const action = button.dataset.action;
       if (action === 'retry') {
         onRetry();
       } else if (action === 'menu') {
@@ -555,18 +569,32 @@ class UIManager {
     this.overlay.style.alignItems = 'center';
     this.overlay.style.justifyContent = 'center';
     this.overlay.innerHTML = `
-      <div class="menu">
-        <h1 class="menu__title">Versus Complete</h1>
-        <p class="menu__subtitle">Winner: Player ${winner}</p>
-        <p class="menu__subtitle">P1 ${scores[0]} - P2 ${scores[1]}</p>
-        <button class="menu__button" data-action="rematch">Rematch</button>
-        <button class="menu__button menu__button--secondary" data-action="menu">Main Menu</button>
+      <div class="menu menu--modal glass-panel" role="dialog" aria-labelledby="versus-complete-title">
+        <div class="menu__header">
+          <h1 class="menu__title" id="versus-complete-title">Versus Complete</h1>
+          <p class="menu__subtitle menu__subtitle--muted">Battle report ready.</p>
+        </div>
+        <div class="menu__stats menu__stats--wide">
+          <div class="menu__stat">
+            <span class="menu__stat-label">Winner</span>
+            <span class="menu__stat-value">Player ${winner}</span>
+          </div>
+          <div class="menu__stat menu__stat--full">
+            <span class="menu__stat-label">Final Score</span>
+            <span class="menu__stat-value">P1 ${scores[0]} — P2 ${scores[1]}</span>
+          </div>
+        </div>
+        <div class="menu__actions menu__actions--modal">
+          <button class="menu__button glass-button glass-button--accent" data-action="rematch">Rematch</button>
+          <button class="menu__button glass-button glass-button--secondary" data-action="menu">Main Menu</button>
+        </div>
       </div>
     `;
     const handler = (event) => {
       if (!(event.target instanceof HTMLElement)) return;
-      const action = event.target.dataset.action;
-      if (!action) return;
+      const button = event.target.closest('button[data-action]');
+      if (!button) return;
+      const action = button.dataset.action;
       if (action === 'rematch') onRematch();
       if (action === 'menu') onMenu();
       cleanup();
@@ -642,11 +670,13 @@ configureTouchForMode(null);
 
 let assets = null;
 let currentWorld = null;
+let currentMode = null;
 let currentState = GAME_STATE.LOADING;
 let lastTimestamp = 0;
 let accumulator = 0;
 let musicVolume = 0.5;
 let soundVolume = 0.7;
+let lastResumeHandler = null;
 
 if (menuButton) {
   menuButton.addEventListener('click', () => {
@@ -751,6 +781,8 @@ function startGame(mode) {
   stopAllMusic();
   ui.clear();
   setMenuButtonVisible(true);
+  lastResumeHandler = null;
+  currentMode = mode;
 
   if (currentWorld) {
     if (currentWorld.music && typeof currentWorld.music.pause === 'function') {
@@ -806,6 +838,7 @@ function showMainMenu(options = {}) {
     Boolean(currentWorld) && fromGame && (currentState === GAME_STATE.GAME || currentState === GAME_STATE.PAUSED);
 
   setMenuButtonVisible(false);
+  lastResumeHandler = null;
 
   if (canResume) {
     currentWorld.paused = true;
@@ -816,6 +849,9 @@ function showMainMenu(options = {}) {
         console.warn('Failed to pause current world music while opening the menu.', error);
       }
     }
+    if (typeof input.setTouchContainerVisible === 'function') {
+      input.setTouchContainerVisible(false);
+    }
     currentState = GAME_STATE.PAUSED;
   } else {
     if (currentWorld) {
@@ -823,27 +859,38 @@ function showMainMenu(options = {}) {
       currentWorld = null;
     }
     configureTouchForMode(null);
+    currentMode = null;
     currentState = GAME_STATE.MENU;
   }
+
+  let resumeHandler = null;
+  if (canResume) {
+    resumeHandler = () => {
+      ui.hideOverlay();
+      if (currentWorld) {
+        currentWorld.paused = false;
+        currentState = GAME_STATE.GAME;
+        if (currentWorld.music && typeof currentWorld.music.play === 'function') {
+          currentWorld.music.play().catch(() => {});
+        }
+      }
+      if (currentMode) {
+        configureTouchForMode(currentMode);
+      } else {
+        configureTouchForMode(null);
+      }
+      setMenuButtonVisible(true);
+      lastResumeHandler = null;
+    };
+  }
+  lastResumeHandler = resumeHandler;
 
   ui.showMenu({
     onStartSingle: () => startGame('single'),
     onStartCoop: () => startGame('coop'),
     onStartVersus: () => startGame('versus'),
     onSettings: showSettings,
-    onResume: canResume
-      ? () => {
-          ui.hideOverlay();
-          if (currentWorld) {
-            currentWorld.paused = false;
-            currentState = GAME_STATE.GAME;
-            if (currentWorld.music && typeof currentWorld.music.play === 'function') {
-              currentWorld.music.play().catch(() => {});
-            }
-          }
-          setMenuButtonVisible(true);
-        }
-      : undefined,
+    onResume: resumeHandler,
   });
 }
 
@@ -866,8 +913,14 @@ function showSettings() {
 }
 
 input.onKey('Escape', (pressed) => {
-  if (!pressed || !currentWorld) return;
-  showMainMenu({ fromGame: true });
+  if (!pressed) return;
+  if (currentState === GAME_STATE.PAUSED && typeof lastResumeHandler === 'function') {
+    lastResumeHandler();
+    return;
+  }
+  if (currentWorld) {
+    showMainMenu({ fromGame: true });
+  }
 });
 
 function loop(timestamp) {

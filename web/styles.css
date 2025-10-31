@@ -416,6 +416,12 @@ body {
   animation: menuFloat 9s ease-in-out infinite alternate;
 }
 
+.menu--modal {
+  width: min(380px, 94%);
+  gap: clamp(20px, 4vw, 28px);
+  backdrop-filter: blur(22px);
+}
+
 .menu__header {
   display: flex;
   flex-direction: column;
@@ -437,6 +443,12 @@ body {
   text-transform: uppercase;
 }
 
+.menu__subtitle--muted {
+  color: rgba(198, 224, 255, 0.82);
+  letter-spacing: 0.28em;
+  font-size: clamp(0.95rem, 2.2vw, 1.1rem);
+}
+
 .menu__tagline {
   font-size: clamp(0.95rem, 2.2vw, 1.05rem);
   color: var(--glass-text-muted);
@@ -448,6 +460,56 @@ body {
   flex-direction: column;
   align-items: center;
   gap: clamp(12px, 3vw, 16px);
+}
+
+.menu__actions--modal {
+  gap: clamp(14px, 3vw, 18px);
+}
+
+.menu__stats {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: clamp(12px, 3vw, 20px);
+}
+
+.menu__stats--wide {
+  width: 100%;
+}
+
+.menu__stats--wide .menu__stat {
+  flex: 1 1 160px;
+}
+
+.menu__stat {
+  flex: 1 1 140px;
+  min-width: 140px;
+  padding: clamp(12px, 3vw, 18px);
+  border-radius: 18px;
+  background: rgba(46, 84, 148, 0.14);
+  border: 1px solid rgba(140, 204, 255, 0.26);
+  box-shadow: inset 0 0 0 1px rgba(210, 236, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.menu__stat--full {
+  flex-basis: 100%;
+}
+
+.menu__stat-label {
+  font-size: 0.85rem;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: rgba(178, 218, 255, 0.72);
+}
+
+.menu__stat-value {
+  font-size: clamp(1.2rem, 3vw, 1.5rem);
+  font-weight: 700;
+  color: #ffffff;
+  text-shadow: 0 0 18px rgba(118, 182, 255, 0.45);
 }
 
 .menu__resume {
