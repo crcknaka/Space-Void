@@ -401,7 +401,7 @@ class Enemy {
   }
 
   getBounds() {
-    const reduction = 0.15; // Reduced hitbox by 15%
+    const reduction = 0.3; // Reduced hitbox by 30%
     const reducedWidth = this.width * (1 - reduction);
     const reducedHeight = this.height * (1 - reduction);
     const offsetX = (this.width - reducedWidth) / 2;
