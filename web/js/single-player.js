@@ -732,7 +732,17 @@ class Player {
   }
 
   getBounds() {
-    return { x: this.x, y: this.y, width: this.width, height: this.height };
+    const reduction = 0.15;
+    const reducedWidth = this.width * (1 - reduction);
+    const reducedHeight = this.height * (1 - reduction);
+    const offsetX = (this.width - reducedWidth) / 2;
+    const offsetY = (this.height - reducedHeight) / 2;
+    return {
+      x: this.x + offsetX,
+      y: this.y + offsetY,
+      width: reducedWidth,
+      height: reducedHeight,
+    };
   }
 
   applyPowerUp(type) {
