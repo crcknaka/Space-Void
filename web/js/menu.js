@@ -161,7 +161,7 @@
         typeof onResume === 'function'
           ? `
             <div class="menu__resume">
-              <button class="menu__button glass-button glass-button--accent menu__button--resume" data-action="resume">Resume</button>
+              <button class="menu__button glass-button glass-button--accent menu__button--resume" data-action="resume" data-ui-sound="button">Resume</button>
             </div>
           `
           : '';
@@ -178,21 +178,21 @@
             </div>
             ${resumeButton}
             <div class="menu__actions">
-              <button class="menu__button glass-button glass-button--primary menu__button--stacked" data-action="single">
+              <button class="menu__button glass-button glass-button--primary menu__button--stacked" data-action="single" data-ui-sound="button">
                 <span class="menu__button-title">Single Player</span>
                 <span class="menu__button-meta">Solo arcade campaign</span>
               </button>
-              <button class="menu__button glass-button glass-button--primary menu__button--stacked" data-action="coop">
+              <button class="menu__button glass-button glass-button--primary menu__button--stacked" data-action="coop" data-ui-sound="button">
                 <span class="menu__button-title">Co-op Mode</span>
                 <span class="menu__button-meta">Team up on one screen</span>
               </button>
-              <button class="menu__button glass-button glass-button--primary menu__button--stacked" data-action="versus">
+              <button class="menu__button glass-button glass-button--primary menu__button--stacked" data-action="versus" data-ui-sound="button">
                 <span class="menu__button-title">Versus Mode</span>
                 <span class="menu__button-meta">Duel for galactic glory</span>
               </button>
             </div>
             <div class="menu__footer">
-              <button class="menu__button glass-button glass-button--secondary" data-action="settings">Settings</button>
+              <button class="menu__button glass-button glass-button--secondary" data-action="settings" data-ui-sound="button">Settings</button>
             </div>
           </div>
         </div>
