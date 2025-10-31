@@ -94,7 +94,7 @@
         },
         facingLeft: false,
         assets: this.assets,
-        autoFire: false,
+        autoFire: true,
       });
       player1.reset({ x: 80, y: HEIGHT / 2 - player1.height / 2 });
       player1.rocketCount = 0;
@@ -115,7 +115,7 @@
         },
         facingLeft: true,
         assets: this.assets,
-        autoFire: false,
+        autoFire: true,
       });
       player2.reset({ x: WIDTH - player2.width - 80, y: HEIGHT / 2 - player2.height / 2 });
       player2.rocketCount = 0;
@@ -145,6 +145,7 @@
       });
 
       this.bullets.forEach((bullet) => bullet.update(dt));
+      this.explosions.forEach((explosion) => explosion.update(dt));
       this.handleCollisions();
       this.cleanup();
 

@@ -666,6 +666,13 @@ function configureTouchForMode(mode) {
   const joysticks = [];
   const buttons = [];
 
+  if (touchControls) {
+    touchControls.classList.remove('touch-controls--single', 'touch-controls--coop', 'touch-controls--versus');
+    if (mode) {
+      touchControls.classList.add(`touch-controls--${mode}`);
+    }
+  }
+
   const playerOneBindings = {
     up: 'KeyW',
     down: 'KeyS',
@@ -698,16 +705,12 @@ function configureTouchForMode(mode) {
     case 'coop':
       addJoystick(primaryJoystick, playerOneBindings);
       addJoystick(secondaryJoystick, playerTwoBindings);
-      addButton(shootButton, 'Space');
       addButton(rocketButton, 'ShiftLeft');
       addButton(rocketButton2, 'Numpad0');
       break;
     case 'versus':
       addJoystick(primaryJoystick, playerOneBindings);
       addJoystick(secondaryJoystick, playerTwoBindings);
-      addButton(shootButton, 'Space');
-      addButton(rocketButton, 'Space');
-      addButton(rocketButton2, 'Enter');
       break;
     default:
       break;

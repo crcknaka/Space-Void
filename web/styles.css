@@ -178,6 +178,25 @@ body {
   transform: scale(0.96);
 }
 
+#touch-controls.touch-controls--coop .touch-buttons {
+  position: static;
+  display: contents;
+}
+
+#touch-controls.touch-controls--coop #touch-rocket,
+#touch-controls.touch-controls--coop #touch-rocket-2 {
+  position: absolute;
+  bottom: calc(24px + 172px + 20px);
+}
+
+#touch-controls.touch-controls--coop #touch-rocket {
+  left: 24px;
+}
+
+#touch-controls.touch-controls--coop #touch-rocket-2 {
+  right: 24px;
+}
+
 .is-hidden {
   display: none !important;
 }
