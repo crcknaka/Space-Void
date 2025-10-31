@@ -17,10 +17,10 @@
     return;
   }
 
-  const BASE_GAIN = 0.8;
+  const BASE_GAIN = 0.55;
   const MAX_DELAY_TIME = 0.4;
-  const HOVER_DEBOUNCE_MS = 40;
-  const ADJUST_DEBOUNCE_MS = 70;
+  const HOVER_DEBOUNCE_MS = 120;
+  const ADJUST_DEBOUNCE_MS = 140;
 
   let context = null;
   let masterGain = null;
@@ -43,12 +43,12 @@
     masterGain.gain.value = currentVolume * BASE_GAIN;
 
     effectInput = context.createGain();
-    effectInput.gain.value = 1;
+    effectInput.gain.value = 0.85;
 
     filterNode = context.createBiquadFilter();
-    filterNode.type = 'bandpass';
-    filterNode.frequency.value = 3200;
-    filterNode.Q.value = 0.8;
+    filterNode.type = 'lowpass';
+    filterNode.frequency.value = 2300;
+    filterNode.Q.value = 0.7;
 
     compressor = context.createDynamicsCompressor();
     compressor.threshold.value = -18;
@@ -58,13 +58,13 @@
     compressor.release.value = 0.1;
 
     delayNode = context.createDelay(MAX_DELAY_TIME);
-    delayNode.delayTime.value = 0.11;
+    delayNode.delayTime.value = 0.09;
 
     delayFeedback = context.createGain();
-    delayFeedback.gain.value = 0.18;
+    delayFeedback.gain.value = 0.12;
 
     delayWet = context.createGain();
-    delayWet.gain.value = 0.32;
+    delayWet.gain.value = 0.18;
 
     effectInput.connect(filterNode);
     filterNode.connect(compressor);
@@ -133,16 +133,16 @@
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
 
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(880, now);
-    osc.frequency.exponentialRampToValueAtTime(1320, now + 0.18);
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(600, now);
+    osc.frequency.exponentialRampToValueAtTime(880, now + 0.16);
 
     const stopTime = scheduleGainEnvelope(gain, now, {
-      attack: 0.008,
-      decay: 0.06,
-      sustain: 0.25,
-      release: 0.1,
-      duration: 0.18,
+      attack: 0.01,
+      decay: 0.05,
+      sustain: 0.22,
+      release: 0.08,
+      duration: 0.16,
     });
 
     osc.connect(gain);
@@ -160,16 +160,16 @@
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
 
-    osc.type = 'triangle';
-    osc.frequency.setValueAtTime(520, now);
-    osc.frequency.linearRampToValueAtTime(760, now + 0.08);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(420, now);
+    osc.frequency.linearRampToValueAtTime(620, now + 0.07);
 
     const stopTime = scheduleGainEnvelope(gain, now, {
-      attack: 0.002,
+      attack: 0.003,
       decay: 0.05,
-      sustain: 0.3,
-      release: 0.1,
-      duration: 0.16,
+      sustain: 0.24,
+      release: 0.08,
+      duration: 0.14,
     });
 
     osc.connect(gain);
@@ -188,22 +188,22 @@
     gain.connect(effectInput);
 
     const oscA = ctx.createOscillator();
-    oscA.type = 'square';
-    oscA.frequency.setValueAtTime(640, now);
-    oscA.frequency.linearRampToValueAtTime(820, now + 0.12);
+    oscA.type = 'triangle';
+    oscA.frequency.setValueAtTime(520, now);
+    oscA.frequency.linearRampToValueAtTime(700, now + 0.12);
 
     const oscB = ctx.createOscillator();
     oscB.type = 'sine';
-    const secondStart = now + 0.09;
-    oscB.frequency.setValueAtTime(980, secondStart);
-    oscB.frequency.linearRampToValueAtTime(1220, secondStart + 0.12);
+    const secondStart = now + 0.08;
+    oscB.frequency.setValueAtTime(720, secondStart);
+    oscB.frequency.linearRampToValueAtTime(940, secondStart + 0.12);
 
     const stopTime = scheduleGainEnvelope(gain, now, {
-      attack: 0.005,
-      decay: 0.08,
-      sustain: 0.35,
-      release: 0.2,
-      duration: 0.28,
+      attack: 0.006,
+      decay: 0.07,
+      sustain: 0.3,
+      release: 0.16,
+      duration: 0.24,
     });
 
     oscA.connect(gain);
@@ -226,16 +226,16 @@
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
 
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(320, now);
-    osc.frequency.linearRampToValueAtTime(180, now + 0.22);
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(260, now);
+    osc.frequency.linearRampToValueAtTime(150, now + 0.2);
 
     const stopTime = scheduleGainEnvelope(gain, now, {
-      attack: 0.01,
-      decay: 0.12,
-      sustain: 0.2,
-      release: 0.18,
-      duration: 0.24,
+      attack: 0.012,
+      decay: 0.1,
+      sustain: 0.18,
+      release: 0.16,
+      duration: 0.22,
     });
 
     osc.connect(gain);
@@ -254,18 +254,18 @@
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
 
-    osc.type = 'sawtooth';
-    const startFreq = rising ? 540 : 420;
-    const endFreq = rising ? 900 : 280;
+    osc.type = 'triangle';
+    const startFreq = rising ? 480 : 360;
+    const endFreq = rising ? 720 : 240;
     osc.frequency.setValueAtTime(startFreq, now);
     osc.frequency.linearRampToValueAtTime(endFreq, now + 0.15);
 
     const stopTime = scheduleGainEnvelope(gain, now, {
-      attack: 0.004,
-      decay: 0.08,
-      sustain: 0.25,
-      release: 0.18,
-      duration: 0.2,
+      attack: 0.005,
+      decay: 0.07,
+      sustain: 0.22,
+      release: 0.16,
+      duration: 0.18,
     });
 
     osc.connect(gain);
@@ -286,15 +286,15 @@
 
     source.buffer = getNoiseBuffer();
     filter.type = 'bandpass';
-    filter.frequency.value = 260;
-    filter.Q.value = 12;
+    filter.frequency.value = 180;
+    filter.Q.value = 6;
 
     const stopTime = scheduleGainEnvelope(gain, now, {
       attack: 0.003,
-      decay: 0.05,
-      sustain: 0.22,
-      release: 0.12,
-      duration: 0.12,
+      decay: 0.04,
+      sustain: 0.18,
+      release: 0.1,
+      duration: 0.1,
     });
 
     source.connect(filter);
@@ -315,15 +315,15 @@
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
 
-    osc.type = 'triangle';
-    osc.frequency.setValueAtTime(700, now);
-    osc.frequency.linearRampToValueAtTime(760, now + 0.04);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(540, now);
+    osc.frequency.linearRampToValueAtTime(620, now + 0.05);
 
     const stopTime = scheduleGainEnvelope(gain, now, {
-      attack: 0.001,
+      attack: 0.002,
       decay: 0.03,
-      sustain: 0.2,
-      release: 0.08,
+      sustain: 0.18,
+      release: 0.07,
       duration: 0.08,
     });
 
