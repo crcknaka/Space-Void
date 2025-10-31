@@ -605,12 +605,23 @@ class Player {
     const input = world.input;
     const speedKey = input.isPressed(this.controls.speed);
     const currentSpeed = speedKey ? this.fastSpeed : this.speed;
-    let velX = 0;
-    let velY = 0;
-    if (input.isPressed(this.controls.up)) velY -= currentSpeed;
-    if (input.isPressed(this.controls.down)) velY += currentSpeed;
-    if (input.isPressed(this.controls.left)) velX -= currentSpeed;
-    if (input.isPressed(this.controls.right)) velX += currentSpeed;
+    let analogX = 0;
+    let analogY = 0;
+    if (typeof input.getAnalogMovement === 'function') {
+      const vector = input.getAnalogMovement(this.controls);
+      analogX = vector.x;
+      analogY = vector.y;
+    }
+    let velX = analogX * currentSpeed;
+    let velY = analogY * currentSpeed;
+    if (Math.abs(analogY) < 0.01) {
+      if (input.isPressed(this.controls.up)) velY -= currentSpeed;
+      if (input.isPressed(this.controls.down)) velY += currentSpeed;
+    }
+    if (Math.abs(analogX) < 0.01) {
+      if (input.isPressed(this.controls.left)) velX -= currentSpeed;
+      if (input.isPressed(this.controls.right)) velX += currentSpeed;
+    }
     this.x += velX * dt * 60;
     this.y += velY * dt * 60;
     this.x = clamp(this.x, 0, WIDTH - this.width);

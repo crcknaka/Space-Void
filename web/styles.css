@@ -117,83 +117,69 @@ body {
   position: absolute;
   bottom: 24px;
   left: 24px;
-  width: 182px;
-  height: 182px;
+  width: 172px;
+  height: 172px;
   border-radius: 50%;
-  background: radial-gradient(circle at center, rgba(55, 147, 255, 0.35) 0%, rgba(31, 111, 235, 0.05) 65%, rgba(10, 20, 40, 0.2) 100%);
-  border: 2px solid rgba(55, 147, 255, 0.7);
-  box-shadow: 0 0 22px rgba(55, 147, 255, 0.45);
+  background: rgba(40, 96, 160, 0.15);
+  border: 2px solid rgba(120, 180, 255, 0.35);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
   pointer-events: auto;
   touch-action: none;
   overflow: hidden;
+  backdrop-filter: blur(2px);
 }
 
-.touch-move::before,
-.touch-move::after {
-  content: '';
+.touch-move--secondary {
+  left: auto;
+  right: 24px;
+}
+
+.touch-thumb {
   position: absolute;
-  border-radius: 50%;
   top: 50%;
   left: 50%;
-  transform: translate(-50%, -50%);
-}
-
-.touch-move::before {
-  width: 70%;
-  height: 70%;
-  border: 2px solid rgba(55, 147, 255, 0.5);
-  box-shadow: 0 0 18px rgba(55, 147, 255, 0.35);
-  animation: joystickPulse 2.4s ease-in-out infinite;
-}
-
-.touch-move::after {
-  width: 26%;
-  height: 26%;
-  background: rgba(55, 147, 255, 0.65);
-  box-shadow: 0 0 20px rgba(55, 147, 255, 0.5);
-}
-
-@keyframes joystickPulse {
-  0% {
-    transform: translate(-50%, -50%) scale(0.95);
-    opacity: 0.9;
-  }
-  50% {
-    transform: translate(-50%, -50%) scale(1.15);
-    opacity: 0.4;
-  }
-  100% {
-    transform: translate(-50%, -50%) scale(1.3);
-    opacity: 0;
-  }
+  width: 68px;
+  height: 68px;
+  background: rgba(120, 180, 255, 0.25);
+  border: 2px solid rgba(120, 180, 255, 0.4);
+  border-radius: 50%;
+  transform: translate(calc(-50% + var(--offset-x, 0px)), calc(-50% + var(--offset-y, 0px)));
+  transition: transform 0.08s ease-out;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
 }
 
 .touch-buttons {
   position: absolute;
-  bottom: 24px;
+  bottom: 220px;
   right: 24px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   pointer-events: auto;
 }
 
 .touch-button {
-  width: 120px;
-  padding: 12px 0;
-  font-size: 18px;
+  width: 136px;
+  padding: 10px 0;
+  font-size: 16px;
   color: #fff;
-  background: rgba(55, 147, 255, 0.8);
-  border: 1px solid rgba(55, 147, 255, 0.9);
-  border-radius: 28px;
+  background: rgba(55, 147, 255, 0.72);
+  border: 1px solid rgba(55, 147, 255, 0.6);
+  border-radius: 26px;
   text-transform: uppercase;
   font-weight: 600;
-  box-shadow: 0 6px 16px rgba(55, 147, 255, 0.35);
+  letter-spacing: 1px;
+  box-shadow: 0 4px 14px rgba(8, 20, 40, 0.35);
   touch-action: manipulation;
+  backdrop-filter: blur(2px);
 }
 
 .touch-button:active {
-  transform: scale(0.95);
+  transform: scale(0.96);
+}
+
+.is-hidden {
+  display: none !important;
 }
 
 @media (hover: none) and (pointer: coarse) {
@@ -201,7 +187,6 @@ body {
     display: block;
   }
 }
-
 .menu {
   background: rgba(0, 0, 0, 0.8);
   padding: 32px 40px;

@@ -27,9 +27,14 @@
 const ctx = canvas?.getContext('2d');
 const overlay = document.getElementById('overlay');
 const container = document.getElementById('game-container');
+const touchControls = document.getElementById('touch-controls');
+const primaryJoystick = document.getElementById('touch-move');
+const secondaryJoystick = document.getElementById('touch-move-2');
 const menuButton = document.getElementById('menu-button');
 const shootButton = document.getElementById('touch-shoot');
 const rocketButton = document.getElementById('touch-rocket');
+const rocketButton2 = document.getElementById('touch-rocket-2');
+const touchButtonsContainer = touchControls?.querySelector('.touch-buttons') ?? null;
 
 if (!canvas || !ctx || !overlay || !container) {
   throw new Error('Game canvas or UI elements are missing.');
@@ -141,20 +146,45 @@ async function loadAssets(updateProgress) {
 }
 
 class InputManager {
-  constructor() {
+  constructor(touchElements = null) {
     this.keys = new Set();
     this.listeners = new Map();
-    this.moveTouchId = null;
-    this.touchStart = { x: 0, y: 0 };
+    this.touchJoysticks = [];
+    this.touchButtons = [];
+    this.touchElements = null;
+    this.isTouchCapable = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    this.updateTouchAxes = this.updateTouchAxes.bind(this);
+    this.rafId = null;
+
     window.addEventListener('keydown', (event) => this.handleKey(event, true));
     window.addEventListener('keyup', (event) => this.handleKey(event, false));
-    this.setupTouchControls();
+
+    if (touchElements) {
+      this.attachTouchElements(touchElements);
+    }
+  }
+
+  attachTouchElements({ container, primaryJoystick, secondaryJoystick, buttonsContainer, buttons = {} }) {
+    this.touchElements = {
+      container,
+      primaryJoystick,
+      secondaryJoystick,
+      buttonsContainer,
+      buttons,
+    };
+
+    if (!this.isTouchCapable && container) {
+      container.style.display = 'none';
+    }
+
+    if (this.isTouchCapable && this.rafId === null) {
+      this.rafId = window.requestAnimationFrame(this.updateTouchAxes);
+    }
   }
 
   handleKey(event, pressed) {
     if (event.repeat) return;
-    const key = event.code;
-    this.updateKeyState(key, pressed);
+    this.updateKeyState(event.code, pressed);
   }
 
   isPressed(code) {
@@ -169,6 +199,7 @@ class InputManager {
   }
 
   updateKeyState(code, pressed) {
+    if (!code) return;
     const hasKey = this.keys.has(code);
     if (pressed && !hasKey) {
       this.keys.add(code);
@@ -187,81 +218,262 @@ class InputManager {
     this.updateKeyState(code, pressed);
   }
 
-  setupTouchControls() {
-    const moveArea = document.getElementById('touch-move');
-            const isTouchCapable = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-    if (!isTouchCapable) return;
+  configureTouchControls({ joysticks = [], buttons = [] } = {}) {
+    if (!this.touchElements) return;
 
-    if (moveArea) {
-      const startMove = (event) => {
-        if (this.moveTouchId !== null) return;
-        const touch = event.changedTouches[0];
-        if (!touch) return;
-        this.moveTouchId = touch.identifier;
-        this.touchStart.x = touch.clientX;
-        this.touchStart.y = touch.clientY;
-        this.updateTouchMovement(0, 0);
-      };
+    this.clearTouchBindings();
 
-      const move = (event) => {
-        if (this.moveTouchId === null) return;
-        const touch = Array.from(event.changedTouches).find((t) => t.identifier === this.moveTouchId);
-        if (!touch) return;
-        const dx = touch.clientX - this.touchStart.x;
-        const dy = touch.clientY - this.touchStart.y;
-        this.updateTouchMovement(dx, dy);
-      };
+    const { container, primaryJoystick, secondaryJoystick, buttonsContainer, buttons: buttonElements } = this.touchElements;
 
-      const endMove = (event) => {
-        if (this.moveTouchId === null) return;
-        const touch = Array.from(event.changedTouches).find((t) => t.identifier === this.moveTouchId);
-        if (!touch) return;
-        this.moveTouchId = null;
-        this.updateTouchMovement(0, 0);
-      };
+    const allJoysticks = [primaryJoystick, secondaryJoystick];
+    allJoysticks.forEach((element) => this.toggleElement(element, false));
 
-      moveArea.addEventListener('touchstart', (event) => {
-        event.preventDefault();
-        startMove(event);
-      }, { passive: false });
-      moveArea.addEventListener('touchmove', (event) => {
-        event.preventDefault();
-        move(event);
-      }, { passive: false });
-      moveArea.addEventListener('touchend', (event) => {
-        event.preventDefault();
-        endMove(event);
-      }, { passive: false });
-      moveArea.addEventListener('touchcancel', (event) => {
-        event.preventDefault();
-        endMove(event);
-      }, { passive: false });
+    if (buttonsContainer) {
+      this.toggleElement(buttonsContainer, false);
+    }
+    if (buttonElements) {
+      Object.values(buttonElements).forEach((element) => this.toggleElement(element, false));
     }
 
-    const bindButton = (element, code) => {
-      if (!element) return;
-      element.addEventListener('touchstart', (event) => {
-        event.preventDefault();
-        this.setVirtualKey(code, true);
-      }, { passive: false });
-      const release = (event) => {
-        event.preventDefault();
-        this.setVirtualKey(code, false);
-      };
-      element.addEventListener('touchend', release, { passive: false });
-      element.addEventListener('touchcancel', release, { passive: false });
-    };
+    if (!this.isTouchCapable || (!joysticks.length && !buttons.length)) {
+      this.setTouchContainerVisible(false);
+      return;
+    }
 
-    bindButton(shootButton, 'Space');
-    bindButton(rocketButton, 'ShiftLeft');
+    this.setTouchContainerVisible(true);
+
+    const activeJoysticks = [];
+    joysticks.forEach((config) => {
+      if (!config || !config.element || !config.bindings) return;
+      const joystick = this.registerJoystick(config);
+      if (joystick) {
+        activeJoysticks.push(joystick);
+      }
+    });
+    this.touchJoysticks = activeJoysticks;
+
+    const activeButtons = [];
+    buttons.forEach((config) => {
+      if (!config || !config.element || !config.code) return;
+      const binding = this.bindButton(config.element, config.code);
+      if (binding) {
+        activeButtons.push(binding);
+      }
+    });
+    this.touchButtons = activeButtons;
+
+    if (buttonsContainer) {
+      this.toggleElement(buttonsContainer, activeButtons.length > 0);
+    }
   }
 
-  updateTouchMovement(dx, dy) {
-    const threshold = 20;
-    this.setVirtualKey('KeyW', dy < -threshold);
-    this.setVirtualKey('KeyS', dy > threshold);
-    this.setVirtualKey('KeyA', dx < -threshold);
-    this.setVirtualKey('KeyD', dx > threshold);
+  clearTouchBindings() {
+    this.touchJoysticks.forEach((joystick) => {
+      if (joystick.cleanup) {
+        joystick.cleanup();
+      }
+    });
+    this.touchJoysticks = [];
+
+    this.touchButtons.forEach((binding) => {
+      if (binding.cleanup) {
+        binding.cleanup();
+      }
+    });
+    this.touchButtons = [];
+  }
+
+  registerJoystick({ element, bindings }) {
+    const joystick = {
+      element,
+      bindings,
+      pointerId: null,
+      origin: { x: 0, y: 0 },
+      axis: {
+        current: { x: 0, y: 0 },
+        target: { x: 0, y: 0 },
+      },
+      keyState: { up: false, down: false, left: false, right: false },
+      thumb: element.querySelector('.touch-thumb'),
+    };
+
+    this.toggleElement(element, true);
+
+    const start = (event) => {
+      if (joystick.pointerId !== null) return;
+      const touch = event.changedTouches[0];
+      if (!touch) return;
+      joystick.pointerId = touch.identifier;
+      joystick.origin.x = touch.clientX;
+      joystick.origin.y = touch.clientY;
+      joystick.axis.target.x = 0;
+      joystick.axis.target.y = 0;
+      event.preventDefault();
+    };
+
+    const move = (event) => {
+      if (joystick.pointerId === null) return;
+      const touch = Array.from(event.changedTouches).find((t) => t.identifier === joystick.pointerId);
+      if (!touch) return;
+      const rect = element.getBoundingClientRect();
+      const radius = Math.max(1, Math.min(rect.width, rect.height) / 2);
+      const dx = touch.clientX - joystick.origin.x;
+      const dy = touch.clientY - joystick.origin.y;
+      const clampedX = Math.max(-radius, Math.min(radius, dx));
+      const clampedY = Math.max(-radius, Math.min(radius, dy));
+      let nx = clampedX / radius;
+      let ny = clampedY / radius;
+      const length = Math.sqrt(nx * nx + ny * ny);
+      if (length > 1) {
+        nx /= length;
+        ny /= length;
+      }
+      joystick.axis.target.x = nx;
+      joystick.axis.target.y = ny;
+      event.preventDefault();
+    };
+
+    const end = (event) => {
+      if (joystick.pointerId === null) return;
+      const touch = Array.from(event.changedTouches).find((t) => t.identifier === joystick.pointerId);
+      if (!touch) return;
+      joystick.pointerId = null;
+      joystick.axis.target.x = 0;
+      joystick.axis.target.y = 0;
+      event.preventDefault();
+    };
+
+    element.addEventListener('touchstart', start, { passive: false });
+    element.addEventListener('touchmove', move, { passive: false });
+    element.addEventListener('touchend', end, { passive: false });
+    element.addEventListener('touchcancel', end, { passive: false });
+
+    joystick.cleanup = () => {
+      element.removeEventListener('touchstart', start);
+      element.removeEventListener('touchmove', move);
+      element.removeEventListener('touchend', end);
+      element.removeEventListener('touchcancel', end);
+      joystick.pointerId = null;
+      joystick.axis.target.x = 0;
+      joystick.axis.target.y = 0;
+      joystick.axis.current.x = 0;
+      joystick.axis.current.y = 0;
+      this.releaseJoystickKeys(joystick);
+      this.updateThumbPosition(joystick);
+    };
+
+    return joystick;
+  }
+
+  bindButton(element, code) {
+    this.toggleElement(element, true);
+    const press = (event) => {
+      event.preventDefault();
+      this.setVirtualKey(code, true);
+    };
+    const release = (event) => {
+      event.preventDefault();
+      this.setVirtualKey(code, false);
+    };
+    element.addEventListener('touchstart', press, { passive: false });
+    element.addEventListener('touchend', release, { passive: false });
+    element.addEventListener('touchcancel', release, { passive: false });
+
+    return {
+      element,
+      code,
+      cleanup: () => {
+        element.removeEventListener('touchstart', press);
+        element.removeEventListener('touchend', release);
+        element.removeEventListener('touchcancel', release);
+        this.setVirtualKey(code, false);
+        this.toggleElement(element, false);
+      },
+    };
+  }
+
+  updateTouchAxes() {
+    this.touchJoysticks.forEach((joystick) => {
+      const { axis } = joystick;
+      axis.current.x += (axis.target.x - axis.current.x) * 0.2;
+      axis.current.y += (axis.target.y - axis.current.y) * 0.2;
+
+      if (Math.abs(axis.current.x) < 0.01) axis.current.x = 0;
+      if (Math.abs(axis.current.y) < 0.01) axis.current.y = 0;
+
+      this.updateJoystickKeys(joystick);
+      this.updateThumbPosition(joystick);
+    });
+
+    this.rafId = window.requestAnimationFrame(this.updateTouchAxes);
+  }
+
+  updateThumbPosition(joystick) {
+    const { element, thumb, axis } = joystick;
+    if (!element || !thumb) return;
+    const rect = element.getBoundingClientRect();
+    const halfWidth = Math.max(0, rect.width / 2 - thumb.offsetWidth / 2);
+    const halfHeight = Math.max(0, rect.height / 2 - thumb.offsetHeight / 2);
+    thumb.style.setProperty('--offset-x', `${axis.current.x * halfWidth}px`);
+    thumb.style.setProperty('--offset-y', `${axis.current.y * halfHeight}px`);
+  }
+
+  updateJoystickKeys(joystick) {
+    const threshold = 0.35;
+    const { axis, bindings, keyState } = joystick;
+    this.applyDirectionalState(bindings.left, axis.current.x <= -threshold, keyState, 'left');
+    this.applyDirectionalState(bindings.right, axis.current.x >= threshold, keyState, 'right');
+    this.applyDirectionalState(bindings.up, axis.current.y <= -threshold, keyState, 'up');
+    this.applyDirectionalState(bindings.down, axis.current.y >= threshold, keyState, 'down');
+  }
+
+  applyDirectionalState(code, pressed, keyState, key) {
+    if (!code) return;
+    if (keyState[key] === pressed) return;
+    keyState[key] = pressed;
+    this.setVirtualKey(code, pressed);
+  }
+
+  releaseJoystickKeys(joystick) {
+    const { bindings, keyState } = joystick;
+    ['up', 'down', 'left', 'right'].forEach((key) => {
+      if (keyState[key]) {
+        this.setVirtualKey(bindings[key], false);
+        keyState[key] = false;
+      }
+    });
+  }
+
+  toggleElement(element, visible) {
+    if (!element) return;
+    element.classList.toggle('is-hidden', !visible);
+  }
+
+  setTouchContainerVisible(visible) {
+    const container = this.touchElements?.container;
+    if (!container) return;
+    if (!visible) {
+      container.style.display = 'none';
+      container.classList.add('is-hidden');
+    } else {
+      container.style.display = 'block';
+      container.classList.remove('is-hidden');
+    }
+  }
+
+  getAnalogMovement(controls) {
+    for (const joystick of this.touchJoysticks) {
+      const bindings = joystick.bindings;
+      if (
+        bindings.up === controls.up &&
+        bindings.down === controls.down &&
+        bindings.left === controls.left &&
+        bindings.right === controls.right
+      ) {
+        return { x: joystick.axis.current.x, y: joystick.axis.current.y };
+      }
+    }
+    return { x: 0, y: 0 };
   }
 }
 
@@ -387,10 +599,22 @@ document.addEventListener('mozfullscreenchange', resizeGameArea);
 document.addEventListener('MSFullscreenChange', resizeGameArea);
 resizeGameArea();
 
-const input = new InputManager();
+const input = new InputManager({
+  container: touchControls,
+  primaryJoystick,
+  secondaryJoystick,
+  buttonsContainer: touchButtonsContainer,
+  buttons: {
+    shoot: shootButton,
+    rocket: rocketButton,
+    rocket2: rocketButton2,
+  },
+});
 const ui = new UIManager(overlay);
 attachMenuUI(ui);
 attachSettingsUI(ui);
+
+configureTouchForMode(null);
 
 
 let assets = null;
@@ -436,10 +660,68 @@ function applyVolumeSettings() {
   });
 }
 
+function configureTouchForMode(mode) {
+  if (typeof input.configureTouchControls !== 'function') return;
+
+  const joysticks = [];
+  const buttons = [];
+
+  const playerOneBindings = {
+    up: 'KeyW',
+    down: 'KeyS',
+    left: 'KeyA',
+    right: 'KeyD',
+  };
+
+  const playerTwoBindings = {
+    up: 'ArrowUp',
+    down: 'ArrowDown',
+    left: 'ArrowLeft',
+    right: 'ArrowRight',
+  };
+
+  const addJoystick = (element, bindings) => {
+    if (!element) return;
+    joysticks.push({ element, bindings });
+  };
+
+  const addButton = (element, code) => {
+    if (!element) return;
+    buttons.push({ element, code });
+  };
+
+  switch (mode) {
+    case 'single':
+      addJoystick(primaryJoystick, playerOneBindings);
+      addButton(rocketButton, 'ShiftLeft');
+      break;
+    case 'coop':
+      addJoystick(primaryJoystick, playerOneBindings);
+      addJoystick(secondaryJoystick, playerTwoBindings);
+      addButton(shootButton, 'Space');
+      addButton(rocketButton, 'ShiftLeft');
+      addButton(rocketButton2, 'Numpad0');
+      break;
+    case 'versus':
+      addJoystick(primaryJoystick, playerOneBindings);
+      addJoystick(secondaryJoystick, playerTwoBindings);
+      addButton(shootButton, 'Space');
+      addButton(rocketButton, 'Space');
+      addButton(rocketButton2, 'Enter');
+      break;
+    default:
+      break;
+  }
+
+  input.configureTouchControls({ joysticks, buttons });
+}
+
 function startGame(mode) {
   if (!assets) return;
   stopAllMusic();
   ui.clear();
+
+  configureTouchForMode(mode);
 
   if (mode === 'versus') {
     currentWorld = createVersusWorld({
@@ -481,6 +763,7 @@ function showMainMenu() {
     stopAllMusic();
     currentWorld = null;
   }
+  configureTouchForMode(null);
   currentState = GAME_STATE.MENU;
   ui.showMenu({
     onStartSingle: () => startGame('single'),
