@@ -415,7 +415,6 @@ body {
 
 .menu--main {
   gap: clamp(24px, 5vw, 36px);
-  animation: menuFloat 9s ease-in-out infinite alternate;
 }
 
 .menu.menu--main.glass-panel {
@@ -613,14 +612,5 @@ body {
 
   .menu__button {
     padding: 14px 18px;
-  }
-}
-
-@keyframes menuFloat {
-  0% {
-    transform: translate3d(0, 0, 0);
-  }
-  100% {
-    transform: translate3d(0, -8px, 0);
   }
 }
