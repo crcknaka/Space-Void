@@ -543,20 +543,78 @@ class UIManager {
         </div>
       </div>
     `;
+    const buttons = Array.from(
+      this.overlay.querySelectorAll('button[data-action]')
+    );
+    let focusedIndex = buttons.length ? 0 : -1;
+
+    const focusListeners = buttons.map((button, index) => {
+      const listener = () => {
+        focusedIndex = index;
+      };
+      button.addEventListener('focus', listener);
+      return listener;
+    });
+
+    const focusButton = (index) => {
+      if (!buttons.length) return;
+      const safeIndex = (index + buttons.length) % buttons.length;
+      const target = buttons[safeIndex];
+      if (!target) return;
+      focusedIndex = safeIndex;
+      target.focus({ preventScroll: true });
+    };
+
+    if (buttons.length) {
+      window.requestAnimationFrame(() => {
+        focusButton(focusedIndex);
+      });
+    }
+
+    const keyHandler = (event) => {
+      if (!buttons.length) return;
+      const { key } = event;
+      if (key === 'ArrowDown' || key === 'ArrowRight') {
+        event.preventDefault();
+        focusButton(focusedIndex + 1);
+      } else if (key === 'ArrowUp' || key === 'ArrowLeft') {
+        event.preventDefault();
+        focusButton(focusedIndex - 1);
+      } else if (key === 'Home') {
+        event.preventDefault();
+        focusButton(0);
+      } else if (key === 'End') {
+        event.preventDefault();
+        focusButton(buttons.length - 1);
+      } else if (key === 'Enter' || key === ' ' || key === 'Space' || key === 'Spacebar') {
+        const activeElement = document.activeElement;
+        if (activeElement instanceof HTMLElement && buttons.includes(activeElement)) {
+          event.preventDefault();
+          activeElement.click();
+        }
+      }
+    };
+
+    this.overlay.addEventListener('keydown', keyHandler);
+
     const handler = (event) => {
       if (!(event.target instanceof HTMLElement)) return;
       const button = event.target.closest('button[data-action]');
       if (!button) return;
       const action = button.dataset.action;
+      cleanup();
       if (action === 'retry') {
         onRetry();
       } else if (action === 'menu') {
         onMenu();
       }
-      cleanup();
     };
     const cleanup = () => {
       this.overlay.removeEventListener('click', handler);
+      this.overlay.removeEventListener('keydown', keyHandler);
+      buttons.forEach((button, index) => {
+        button.removeEventListener('focus', focusListeners[index]);
+      });
     };
     this.overlay.addEventListener('click', handler);
     this.currentHandler = cleanup;
@@ -590,17 +648,75 @@ class UIManager {
         </div>
       </div>
     `;
+    const buttons = Array.from(
+      this.overlay.querySelectorAll('button[data-action]')
+    );
+    let focusedIndex = buttons.length ? 0 : -1;
+
+    const focusListeners = buttons.map((button, index) => {
+      const listener = () => {
+        focusedIndex = index;
+      };
+      button.addEventListener('focus', listener);
+      return listener;
+    });
+
+    const focusButton = (index) => {
+      if (!buttons.length) return;
+      const safeIndex = (index + buttons.length) % buttons.length;
+      const target = buttons[safeIndex];
+      if (!target) return;
+      focusedIndex = safeIndex;
+      target.focus({ preventScroll: true });
+    };
+
+    if (buttons.length) {
+      window.requestAnimationFrame(() => {
+        focusButton(focusedIndex);
+      });
+    }
+
+    const keyHandler = (event) => {
+      if (!buttons.length) return;
+      const { key } = event;
+      if (key === 'ArrowDown' || key === 'ArrowRight') {
+        event.preventDefault();
+        focusButton(focusedIndex + 1);
+      } else if (key === 'ArrowUp' || key === 'ArrowLeft') {
+        event.preventDefault();
+        focusButton(focusedIndex - 1);
+      } else if (key === 'Home') {
+        event.preventDefault();
+        focusButton(0);
+      } else if (key === 'End') {
+        event.preventDefault();
+        focusButton(buttons.length - 1);
+      } else if (key === 'Enter' || key === ' ' || key === 'Space' || key === 'Spacebar') {
+        const activeElement = document.activeElement;
+        if (activeElement instanceof HTMLElement && buttons.includes(activeElement)) {
+          event.preventDefault();
+          activeElement.click();
+        }
+      }
+    };
+
+    this.overlay.addEventListener('keydown', keyHandler);
+
     const handler = (event) => {
       if (!(event.target instanceof HTMLElement)) return;
       const button = event.target.closest('button[data-action]');
       if (!button) return;
       const action = button.dataset.action;
+      cleanup();
       if (action === 'rematch') onRematch();
       if (action === 'menu') onMenu();
-      cleanup();
     };
     const cleanup = () => {
       this.overlay.removeEventListener('click', handler);
+      this.overlay.removeEventListener('keydown', keyHandler);
+      buttons.forEach((button, index) => {
+        button.removeEventListener('focus', focusListeners[index]);
+      });
     };
     this.overlay.addEventListener('click', handler);
     this.currentHandler = cleanup;

@@ -38,6 +38,82 @@
         </div>
       `;
 
+      const focusables = Array.from(
+        overlay.querySelectorAll('input[type="range"], button[data-action]')
+      );
+      let focusedIndex = focusables.length ? 0 : -1;
+
+      const focusListeners = focusables.map((element, index) => {
+        const listener = () => {
+          focusedIndex = index;
+        };
+        element.addEventListener('focus', listener);
+        return listener;
+      });
+
+      const focusElement = (index) => {
+        if (!focusables.length) return;
+        const safeIndex = (index + focusables.length) % focusables.length;
+        const target = focusables[safeIndex];
+        if (!target) return;
+        focusedIndex = safeIndex;
+        target.focus({ preventScroll: true });
+      };
+
+      if (focusables.length) {
+        window.requestAnimationFrame(() => {
+          focusElement(focusedIndex);
+        });
+      }
+
+      const keyHandler = (event) => {
+        if (!focusables.length) return;
+        const { key } = event;
+        const activeElement = document.activeElement;
+        const isRange =
+          activeElement instanceof HTMLElement &&
+          activeElement.matches('input[type="range"]');
+
+        if (key === 'ArrowDown') {
+          event.preventDefault();
+          focusElement(focusedIndex + 1);
+        } else if (key === 'ArrowUp') {
+          event.preventDefault();
+          focusElement(focusedIndex - 1);
+        } else if (!isRange && (key === 'ArrowRight' || key === 'ArrowLeft')) {
+          event.preventDefault();
+          focusElement(focusedIndex + (key === 'ArrowRight' ? 1 : -1));
+        } else if (!isRange && key === 'Home') {
+          event.preventDefault();
+          focusElement(0);
+        } else if (!isRange && key === 'End') {
+          event.preventDefault();
+          focusElement(focusables.length - 1);
+        } else if (key === 'Enter' || key === ' ' || key === 'Space' || key === 'Spacebar') {
+          if (
+            activeElement instanceof HTMLElement &&
+            activeElement.matches('button[data-action]')
+          ) {
+            event.preventDefault();
+            activeElement.click();
+          }
+        }
+      };
+
+      overlay.addEventListener('keydown', keyHandler);
+
+      let handler = null;
+      const detach = () => {
+        if (handler) {
+          overlay.removeEventListener('click', handler);
+          handler = null;
+        }
+        overlay.removeEventListener('keydown', keyHandler);
+        focusables.forEach((element, index) => {
+          element.removeEventListener('focus', focusListeners[index]);
+        });
+      };
+
       const applySettings = () => {
         const musicInput = overlay.querySelector('input[data-setting="music"]');
         const effectsInput = overlay.querySelector('input[data-setting="effects"]');
@@ -45,17 +121,17 @@
           musicVolume: musicInput ? Number(musicInput.value) : settings.musicVolume,
           effectsVolume: effectsInput ? Number(effectsInput.value) : settings.effectsVolume,
         });
-        overlay.removeEventListener('click', handler);
+        detach();
         ui.hideOverlay();
       };
 
       const closeSettings = () => {
-        overlay.removeEventListener('click', handler);
+        detach();
         ui.hideOverlay();
         onClose();
       };
 
-      const handler = (event) => {
+      handler = (event) => {
         if (!(event.target instanceof HTMLElement)) return;
         const button = event.target.closest('button[data-action]');
         if (!button) return;
@@ -69,7 +145,7 @@
       };
 
       overlay.addEventListener('click', handler);
-      ui.currentHandler = () => overlay.removeEventListener('click', handler);
+      ui.currentHandler = detach;
     };
   }
 
