@@ -21,7 +21,7 @@
       overlay.style.alignItems = 'center';
       overlay.style.justifyContent = 'center';
       overlay.innerHTML = `
-        <div class="menu settings">
+        <div class="menu settings glass-panel">
           <h2 class="menu__title">Settings</h2>
           <label class="settings__label">
             <span>Music Volume</span>
@@ -32,8 +32,8 @@
             <input type="range" min="0" max="1" step="0.05" value="${settings.effectsVolume}" data-setting="effects" />
           </label>
           <div class="settings__buttons">
-            <button class="menu__button" data-action="apply">Apply</button>
-            <button class="menu__button menu__button--secondary" data-action="close">Close</button>
+            <button class="menu__button glass-button glass-button--primary" data-action="apply">Apply</button>
+            <button class="menu__button glass-button glass-button--secondary" data-action="close">Close</button>
           </div>
         </div>
       `;

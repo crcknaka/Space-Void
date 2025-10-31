@@ -161,7 +161,7 @@
         typeof onResume === 'function'
           ? `
             <div class="menu__resume">
-              <button class="menu__button menu__button--resume" data-action="resume">Resume</button>
+              <button class="menu__button glass-button glass-button--accent menu__button--resume" data-action="resume">Resume</button>
             </div>
           `
           : '';
@@ -170,7 +170,7 @@
         <div class="menu-scene" role="dialog" aria-labelledby="menu-title">
           <div class="menu-scene__background" aria-hidden="true"></div>
           <canvas class="menu-scene__stars" id="menu-stars" aria-hidden="true"></canvas>
-          <div class="menu menu--main">
+          <div class="menu menu--main glass-panel">
             <div class="menu__header">
               <h1 class="menu__title" id="menu-title">Space Void</h1>
               <p class="menu__subtitle">Arcade Shooter</p>
@@ -178,21 +178,21 @@
             </div>
             ${resumeButton}
             <div class="menu__actions">
-              <button class="menu__button menu__button--primary menu__button--stacked" data-action="single">
+              <button class="menu__button glass-button glass-button--primary menu__button--stacked" data-action="single">
                 <span class="menu__button-title">Single Player</span>
                 <span class="menu__button-meta">Solo arcade campaign</span>
               </button>
-              <button class="menu__button menu__button--primary menu__button--stacked" data-action="coop">
+              <button class="menu__button glass-button glass-button--primary menu__button--stacked" data-action="coop">
                 <span class="menu__button-title">Co-op Mode</span>
                 <span class="menu__button-meta">Team up on one screen</span>
               </button>
-              <button class="menu__button menu__button--primary menu__button--stacked" data-action="versus">
+              <button class="menu__button glass-button glass-button--primary menu__button--stacked" data-action="versus">
                 <span class="menu__button-title">Versus Mode</span>
                 <span class="menu__button-meta">Duel for galactic glory</span>
               </button>
             </div>
             <div class="menu__footer">
-              <button class="menu__button menu__button--secondary" data-action="settings">Settings</button>
+              <button class="menu__button glass-button glass-button--secondary" data-action="settings">Settings</button>
             </div>
           </div>
         </div>
@@ -218,6 +218,61 @@
           scene.classList.remove('menu-scene--visible');
         }
       };
+
+      const buttons = Array.from(overlay.querySelectorAll('button[data-action]'));
+      let focusedIndex = buttons.findIndex((button) => button.getAttribute('data-action') === 'resume');
+      if (focusedIndex < 0) {
+        focusedIndex = 0;
+      }
+
+      const focusListeners = buttons.map((button, index) => {
+        const listener = () => {
+          focusedIndex = index;
+        };
+        button.addEventListener('focus', listener);
+        return listener;
+      });
+
+      const focusButton = (index) => {
+        if (!buttons.length) return;
+        const safeIndex = (index + buttons.length) % buttons.length;
+        const target = buttons[safeIndex];
+        if (!target) return;
+        focusedIndex = safeIndex;
+        target.focus({ preventScroll: true });
+      };
+
+      if (buttons.length) {
+        window.requestAnimationFrame(() => {
+          focusButton(focusedIndex);
+        });
+      }
+
+      const keyHandler = (event) => {
+        if (!buttons.length) return;
+        const { key } = event;
+        if (key === 'ArrowDown' || key === 'ArrowRight') {
+          event.preventDefault();
+          focusButton(focusedIndex + 1);
+        } else if (key === 'ArrowUp' || key === 'ArrowLeft') {
+          event.preventDefault();
+          focusButton(focusedIndex - 1);
+        } else if (key === 'Home') {
+          event.preventDefault();
+          focusButton(0);
+        } else if (key === 'End') {
+          event.preventDefault();
+          focusButton(buttons.length - 1);
+        } else if (key === 'Enter' || key === ' ' || key === 'Space' || key === 'Spacebar') {
+          const activeElement = document.activeElement;
+          if (activeElement && buttons.includes(activeElement)) {
+            event.preventDefault();
+            activeElement.click();
+          }
+        }
+      };
+
+      overlay.addEventListener('keydown', keyHandler);
 
       const handler = (event) => {
         if (!(event.target instanceof HTMLElement)) return;
@@ -249,8 +304,14 @@
         }
       };
 
-      overlay.addEventListener('click', handler, { once: true });
-      ui.currentHandler = () => overlay.removeEventListener('click', handler);
+      overlay.addEventListener('click', handler);
+      ui.currentHandler = () => {
+        overlay.removeEventListener('click', handler);
+        overlay.removeEventListener('keydown', keyHandler);
+        buttons.forEach((button, index) => {
+          button.removeEventListener('focus', focusListeners[index]);
+        });
+      };
     };
 
     ui.hideOverlay = () => {

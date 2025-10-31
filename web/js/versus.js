@@ -94,35 +94,40 @@
     }
 
     update(dt) {
-      if (this.paused || this.state !== GAME_STATE.GAME) return;
+      if (this.paused) return;
 
-      this.backgroundOffset -= dt * 15;
-      if (this.backgroundOffset <= -WIDTH) {
-        this.backgroundOffset += WIDTH;
-      }
-
-      this.starLayers.forEach((layer) => layer.forEach((star) => star.update(dt)));
-      this.staticStars.forEach((star) => star.update(dt));
-
-      this.players.forEach((player, index) => {
-        if (player.alive) {
-          player.update(dt, this);
-        } else {
-          this.respawnTimers[index] -= dt;
-          if (this.respawnTimers[index] <= 0) {
-            this.respawn(index);
-          }
+      if (this.state === GAME_STATE.GAME) {
+        this.backgroundOffset -= dt * 15;
+        if (this.backgroundOffset <= -WIDTH) {
+          this.backgroundOffset += WIDTH;
         }
-      });
 
-      this.bullets.forEach((bullet) => bullet.update(dt));
-      this.explosions.forEach((explosion) => explosion.update(dt));
-      this.handleCollisions();
-      this.cleanup();
+        this.starLayers.forEach((layer) => layer.forEach((star) => star.update(dt)));
+        this.staticStars.forEach((star) => star.update(dt));
 
-      const winnerIndex = this.scores.findIndex((score) => score >= this.scoreLimit);
-      if (winnerIndex !== -1) {
-        this.finishGame(winnerIndex);
+        this.players.forEach((player, index) => {
+          if (player.alive) {
+            player.update(dt, this);
+          } else {
+            this.respawnTimers[index] -= dt;
+            if (this.respawnTimers[index] <= 0) {
+              this.respawn(index);
+            }
+          }
+        });
+
+        this.bullets.forEach((bullet) => bullet.update(dt));
+        this.explosions.forEach((explosion) => explosion.update(dt));
+        this.handleCollisions();
+        this.cleanup();
+
+        const winnerIndex = this.scores.findIndex((score) => score >= this.scoreLimit);
+        if (winnerIndex !== -1) {
+          this.finishGame(winnerIndex);
+        }
+      } else if (this.state === GAME_STATE.GAME_OVER) {
+        this.explosions.forEach((explosion) => explosion.update(dt));
+        this.cleanupExplosions();
       }
     }
 
@@ -155,6 +160,10 @@
 
     cleanup() {
       this.bullets = this.bullets.filter((bullet) => !bullet.dead);
+      this.cleanupExplosions();
+    }
+
+    cleanupExplosions() {
       this.explosions = this.explosions.filter((explosion) => !explosion.done);
     }
 

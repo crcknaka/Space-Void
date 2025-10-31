@@ -11,13 +11,34 @@ body {
 
 body {
   background: #000;
-  color: #fff;
+  color: #e9f3ff;
   font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
   overflow: hidden;
   position: relative;
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
     env(safe-area-inset-left);
   touch-action: none;
+}
+
+:root {
+  --glass-text-primary: #e9f3ff;
+  --glass-text-muted: rgba(233, 243, 255, 0.68);
+  --glass-panel-bg: rgba(18, 34, 64, 0.34);
+  --glass-panel-bg-accent: rgba(48, 82, 148, 0.18);
+  --glass-panel-border: rgba(132, 196, 255, 0.32);
+  --glass-panel-highlight: rgba(220, 235, 255, 0.12);
+  --glass-panel-shadow: 0 32px 70px rgba(6, 12, 30, 0.58);
+  --glass-button-bg: rgba(60, 110, 200, 0.08);
+  --glass-button-bg-strong: rgba(76, 136, 228, 0.16);
+  --glass-button-border: rgba(126, 198, 255, 0.48);
+  --glass-button-shadow: 0 20px 42px rgba(8, 14, 36, 0.55);
+  --glass-button-hover-shadow: 0 26px 52px rgba(10, 20, 48, 0.62);
+  --glass-button-focus-ring: rgba(178, 230, 255, 0.75);
+  --glass-button-glow: rgba(120, 190, 255, 0.65);
+  --glass-button-pressed: rgba(72, 128, 214, 0.18);
+  --glass-green-border: rgba(134, 248, 200, 0.55);
+  --glass-green-glow: rgba(116, 226, 176, 0.75);
+  --glass-touch-shadow: 0 18px 40px rgba(10, 16, 42, 0.52);
 }
 
 #game-container {
@@ -41,7 +62,7 @@ body {
   width: 100%;
   height: 100%;
   pointer-events: auto;
-  color: #fff;
+  color: var(--glass-text-primary);
   font-size: 18px;
   font-family: inherit;
 }
@@ -54,56 +75,140 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
   pointer-events: auto;
   z-index: 2;
 }
 
-.ui-button {
-  background: rgba(20, 32, 64, 0.7);
-  border: 1px solid rgba(55, 147, 255, 0.6);
-  color: #fff;
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: 1px;
-  padding: 10px 16px;
-  border-radius: 12px;
-  cursor: pointer;
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
-  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
-  text-transform: uppercase;
-  backdrop-filter: blur(6px);
-}
-
-.ui-button:hover,
-.ui-button:focus {
-  transform: translateY(-1px);
-  box-shadow: 0 10px 20px rgba(55, 147, 255, 0.35);
-  outline: none;
-}
-
-.ui-button:active {
-  transform: translateY(1px) scale(0.98);
-}
-
-.ui-button--primary {
-  background: linear-gradient(120deg, rgba(31, 111, 235, 0.95), rgba(55, 147, 255, 0.95));
-  border-color: rgba(55, 147, 255, 0.9);
-}
-
-.ui-button--icon {
-  width: 64px;
-  height: 64px;
-  border-radius: 50%;
-  display: flex;
+.glass-button {
+  --glass-button-surface: linear-gradient(140deg, rgba(70, 124, 224, 0.1), rgba(32, 78, 166, 0.1));
+  --glass-button-surface-hover: linear-gradient(140deg, rgba(70, 124, 224, 0.12), rgba(32, 78, 166, 0.16));
+  --glass-button-surface-active: linear-gradient(140deg, var(--glass-button-pressed), rgba(38, 86, 188, 0.24));
+  --button-shadow: var(--glass-button-shadow);
+  --button-hover-shadow: var(--glass-button-hover-shadow);
+  --button-hover-glow: var(--glass-button-glow);
+  --button-pressed-shadow: 0 16px 32px rgba(6, 14, 34, 0.6);
+  --button-focus-glow: rgba(82, 150, 255, 0.35);
+  position: relative;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 0.5rem;
+  min-height: 48px;
+  padding: 12px 20px;
+  border-radius: 20px;
+  border: 1px solid var(--glass-button-border);
+  background: var(--glass-button-surface);
+  color: var(--glass-text-primary);
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  backdrop-filter: blur(18px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), var(--button-shadow);
+  transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease, border-color 160ms ease;
+  text-decoration: none;
+  will-change: transform;
+}
+
+.glass-button::before {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  border-radius: inherit;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.1), transparent 62%);
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+@media (hover: hover) {
+  .glass-button:hover {
+    transform: scale(1.04);
+    background: var(--glass-button-surface-hover);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), var(--button-hover-shadow),
+      0 0 24px var(--button-hover-glow);
+  }
+
+  .glass-button:hover::before {
+    opacity: 0.9;
+  }
+}
+
+.glass-button:active {
+  transform: scale(0.96);
+  background: var(--glass-button-surface-active);
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.25), var(--button-pressed-shadow);
+  transition-duration: 80ms;
+}
+
+.glass-button:focus-visible {
+  outline: none;
+  transform: scale(1.02);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 0 0 2px rgba(233, 243, 255, 0.42),
+    0 0 0 6px var(--button-focus-glow), var(--button-hover-shadow);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .glass-button,
+  .glass-button:active,
+  .glass-button:focus-visible {
+    transition: none;
+    transform: none;
+  }
+}
+
+.glass-button--primary {
+  --glass-button-surface: linear-gradient(150deg, rgba(74, 136, 230, 0.22), rgba(42, 90, 194, 0.18));
+  --glass-button-surface-hover: linear-gradient(150deg, rgba(94, 156, 252, 0.26), rgba(50, 108, 222, 0.22));
+  border-color: rgba(138, 206, 255, 0.52);
+}
+
+.glass-button--secondary {
+  --glass-button-surface: linear-gradient(150deg, rgba(24, 52, 104, 0.28), rgba(14, 32, 70, 0.24));
+  --glass-button-surface-hover: linear-gradient(150deg, rgba(36, 68, 134, 0.32), rgba(16, 40, 82, 0.28));
+  border-color: rgba(132, 198, 255, 0.34);
+  letter-spacing: 0.12em;
+}
+
+.glass-button--accent {
+  --glass-button-surface: linear-gradient(150deg, rgba(70, 210, 160, 0.9), rgba(28, 160, 118, 0.9));
+  --glass-button-surface-hover: linear-gradient(150deg, rgba(94, 232, 182, 0.94), rgba(36, 178, 132, 0.96));
+  --glass-button-surface-active: linear-gradient(150deg, rgba(58, 186, 140, 0.9), rgba(22, 142, 104, 0.94));
+  --button-shadow: 0 26px 48px rgba(20, 54, 40, 0.62);
+  --button-hover-shadow: 0 32px 56px rgba(24, 72, 52, 0.66);
+  --button-hover-glow: var(--glass-green-glow);
+  --button-pressed-shadow: 0 20px 36px rgba(18, 46, 36, 0.6);
+  --button-focus-glow: rgba(86, 216, 166, 0.42);
+  border-color: var(--glass-green-border);
+}
+
+.glass-button--icon {
+  min-height: 0;
+  width: 68px;
+  height: 68px;
   padding: 0;
+  border-radius: 50%;
+  letter-spacing: 0.18em;
+}
+
+.glass-button--pill {
+  border-radius: 999px;
+  min-width: 140px;
+  padding-inline: 20px;
+  letter-spacing: 0.16em;
+  font-size: 0.85rem;
+}
+
+.ui-button {
+  padding: 0;
+  border-radius: 50%;
 }
 
 .ui-button__label {
-  font-size: 12px;
-  letter-spacing: 2px;
+  font-size: 0.7rem;
+  letter-spacing: 0.24em;
+  pointer-events: none;
 }
 
 #touch-controls {
@@ -120,13 +225,13 @@ body {
   width: 172px;
   height: 172px;
   border-radius: 50%;
-  background: rgba(40, 96, 160, 0.15);
-  border: 2px solid rgba(120, 180, 255, 0.35);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  background: linear-gradient(160deg, rgba(22, 46, 88, 0.24), rgba(10, 24, 52, 0.18));
+  border: 1px solid rgba(128, 198, 255, 0.35);
+  box-shadow: 0 18px 40px rgba(4, 12, 28, 0.55);
   pointer-events: auto;
   touch-action: none;
   overflow: hidden;
-  backdrop-filter: blur(2px);
+  backdrop-filter: blur(12px);
 }
 
 .touch-move--secondary {
@@ -140,12 +245,12 @@ body {
   left: 50%;
   width: 68px;
   height: 68px;
-  background: rgba(120, 180, 255, 0.25);
-  border: 2px solid rgba(120, 180, 255, 0.4);
+  background: linear-gradient(150deg, rgba(120, 188, 255, 0.32), rgba(86, 148, 222, 0.22));
+  border: 1px solid rgba(150, 210, 255, 0.55);
   border-radius: 50%;
   transform: translate(calc(-50% + var(--offset-x, 0px)), calc(-50% + var(--offset-y, 0px)));
   transition: transform 0.08s ease-out;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.18), 0 12px 22px rgba(4, 10, 24, 0.4);
 }
 
 .touch-buttons {
@@ -154,28 +259,19 @@ body {
   right: 24px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 14px;
   pointer-events: auto;
 }
 
 .touch-button {
-  width: 136px;
-  padding: 10px 0;
-  font-size: 16px;
-  color: #fff;
-  background: rgba(55, 147, 255, 0.72);
-  border: 1px solid rgba(55, 147, 255, 0.6);
-  border-radius: 26px;
-  text-transform: uppercase;
-  font-weight: 600;
-  letter-spacing: 1px;
-  box-shadow: 0 4px 14px rgba(8, 20, 40, 0.35);
+  --button-shadow: var(--glass-touch-shadow);
+  --button-hover-shadow: var(--glass-touch-shadow);
+  --button-hover-glow: rgba(120, 190, 255, 0.48);
+  --button-focus-glow: rgba(120, 190, 255, 0.48);
+  width: 148px;
+  font-size: 0.85rem;
+  letter-spacing: 0.16em;
   touch-action: manipulation;
-  backdrop-filter: blur(2px);
-}
-
-.touch-button:active {
-  transform: scale(0.96);
 }
 
 #touch-controls.touch-controls--coop .touch-buttons {
@@ -229,9 +325,9 @@ body {
   content: '';
   position: absolute;
   inset: 0;
-  background: radial-gradient(circle at 20% 20%, rgba(90, 150, 255, 0.25), transparent 65%),
-    radial-gradient(circle at 80% 30%, rgba(255, 150, 255, 0.18), transparent 60%),
-    linear-gradient(180deg, rgba(10, 18, 38, 0.65), rgba(4, 7, 16, 0.85));
+  background: radial-gradient(circle at 18% 22%, rgba(90, 150, 255, 0.22), transparent 68%),
+    radial-gradient(circle at 78% 28%, rgba(200, 140, 255, 0.16), transparent 60%),
+    linear-gradient(185deg, rgba(6, 12, 30, 0.68), rgba(2, 6, 14, 0.84));
   z-index: 1;
   pointer-events: none;
 }
@@ -258,7 +354,7 @@ body {
   content: '';
   position: absolute;
   inset: 0;
-  background: linear-gradient(120deg, rgba(6, 12, 24, 0.65), rgba(8, 14, 32, 0.25));
+  background: linear-gradient(120deg, rgba(6, 12, 24, 0.55), rgba(8, 14, 32, 0.18));
 }
 
 .menu-scene__stars {
@@ -274,17 +370,41 @@ body {
   z-index: 2;
 }
 
+.glass-panel {
+  position: relative;
+  border-radius: 26px;
+  background: linear-gradient(160deg, rgba(18, 36, 68, 0.28), rgba(28, 52, 100, 0.22));
+  border: 1px solid var(--glass-panel-border);
+  box-shadow: var(--glass-panel-shadow);
+  backdrop-filter: blur(24px);
+  color: var(--glass-text-primary);
+  overflow: hidden;
+}
+
+.glass-panel::before {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  border-radius: inherit;
+  background: linear-gradient(160deg, rgba(226, 236, 255, 0.16), rgba(120, 170, 255, 0.05));
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.glass-panel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  pointer-events: none;
+}
+
 .menu {
   position: relative;
   z-index: 3;
   width: min(420px, 100%);
-  padding: clamp(24px, 5vw, 38px);
-  border-radius: 24px;
-  background: linear-gradient(160deg, rgba(12, 20, 40, 0.62), rgba(20, 32, 68, 0.58));
-  border: 1px solid rgba(118, 187, 255, 0.22);
-  box-shadow: 0 26px 52px rgba(6, 12, 30, 0.48);
-  backdrop-filter: blur(18px);
-  color: #f4f8ff;
+  padding: clamp(26px, 5vw, 40px);
   display: flex;
   flex-direction: column;
   gap: clamp(18px, 4vw, 28px);
@@ -307,18 +427,19 @@ body {
   letter-spacing: 0.18em;
   text-transform: uppercase;
   font-weight: 700;
+  text-shadow: 0 0 28px rgba(118, 182, 255, 0.42);
 }
 
 .menu__subtitle {
   font-size: clamp(1rem, 2.4vw, 1.25rem);
-  color: #9ecbff;
+  color: rgba(158, 206, 255, 0.88);
   letter-spacing: 0.4em;
   text-transform: uppercase;
 }
 
 .menu__tagline {
   font-size: clamp(0.95rem, 2.2vw, 1.05rem);
-  color: rgba(220, 234, 255, 0.82);
+  color: var(--glass-text-muted);
   line-height: 1.6;
 }
 
@@ -339,70 +460,14 @@ body {
   justify-content: center;
 }
 
+
 .menu__button {
-  position: relative;
-  overflow: hidden;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  width: min(260px, 100%);
-  padding: 14px 18px;
-  border-radius: 18px;
-  border: 1px solid rgba(108, 172, 255, 0.35);
-  background: linear-gradient(140deg, rgba(44, 104, 220, 0.9), rgba(106, 178, 255, 0.88));
-  color: #ffffff;
-  font-size: 0.95rem;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  box-shadow: 0 18px 36px rgba(10, 16, 40, 0.42);
-  cursor: pointer;
-  transition: transform 180ms ease, box-shadow 180ms ease, border-color 200ms ease,
-    background 240ms ease;
+  width: min(240px, 100%);
   align-self: center;
 }
 
-.menu__button::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(120deg, rgba(255, 255, 255, 0.22), transparent 42%);
-  opacity: 0;
-  transition: opacity 220ms ease;
-}
-
-.menu__button:hover,
-.menu__button:focus {
-  transform: translateY(-2px);
-  box-shadow: 0 20px 38px rgba(20, 32, 76, 0.55);
-}
-
-.menu__button:hover::before,
-.menu__button:focus::before {
-  opacity: 0.85;
-}
-
-.menu__button:active {
-  transform: translateY(0) scale(0.98);
-  box-shadow: 0 12px 24px rgba(10, 18, 42, 0.5);
-}
-
-.menu__button:focus-visible {
-  outline: 2px solid rgba(255, 255, 255, 0.8);
-  outline-offset: 3px;
-}
-
-.menu__button--secondary {
-  background: rgba(20, 30, 60, 0.65);
-  border-color: rgba(148, 206, 255, 0.4);
-  box-shadow: 0 12px 28px rgba(6, 12, 30, 0.45);
-}
-
 .menu__button--resume {
-  border-color: rgba(116, 226, 176, 0.55);
-  background: linear-gradient(140deg, rgba(76, 213, 150, 0.95), rgba(40, 162, 118, 0.92));
-  box-shadow: 0 18px 36px rgba(12, 46, 32, 0.45);
+  letter-spacing: 0.14em;
 }
 
 .menu__resume .menu__button {
@@ -421,12 +486,16 @@ body {
 .menu__button-title {
   font-size: clamp(1.05rem, 2.8vw, 1.2rem);
   font-weight: 700;
+  color: #ffffff;
+  text-transform: none;
+  letter-spacing: 0.08em;
 }
 
 .menu__button-meta {
   font-size: 0.85rem;
-  opacity: 0.75;
-  letter-spacing: 0.02em;
+  opacity: 0.78;
+  letter-spacing: 0.04em;
+  text-transform: none;
 }
 
 .menu.settings {

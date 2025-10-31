@@ -922,47 +922,53 @@ class GameWorld {
   }
 
   update(dt) {
-    if (this.paused || this.state !== GAME_STATE.GAME) return;
+    if (this.paused) return;
 
-    this.backgroundOffset -= dt * 10 * this.gameSpeedMultiplier;
-    if (this.backgroundOffset <= -WIDTH) {
-      this.backgroundOffset += WIDTH;
-    }
+    if (this.state === GAME_STATE.GAME) {
+      this.backgroundOffset -= dt * 10 * this.gameSpeedMultiplier;
+      if (this.backgroundOffset <= -WIDTH) {
+        this.backgroundOffset += WIDTH;
+      }
 
-    this.starLayers.forEach((layer) => layer.forEach((star) => star.update(dt)));
-    this.staticStars.forEach((star) => star.update(dt));
+      this.starLayers.forEach((layer) => layer.forEach((star) => star.update(dt)));
+      this.staticStars.forEach((star) => star.update(dt));
 
-    this.players.forEach((player) => player.update(dt, this));
+      this.players.forEach((player) => player.update(dt, this));
 
-    this.enemySpawnTimer += dt;
-    if (this.enemySpawnTimer >= this.enemySpawnInterval) {
-      this.enemySpawnTimer = 0;
-      this.spawnEnemy();
-    }
+      this.enemySpawnTimer += dt;
+      if (this.enemySpawnTimer >= this.enemySpawnInterval) {
+        this.enemySpawnTimer = 0;
+        this.spawnEnemy();
+      }
 
-    this.powerupSpawnTimer += dt;
-    if (this.powerupSpawnTimer >= this.powerupSpawnInterval) {
-      this.powerupSpawnTimer = 0;
-      this.spawnPowerUp();
-    }
+      this.powerupSpawnTimer += dt;
+      if (this.powerupSpawnTimer >= this.powerupSpawnInterval) {
+        this.powerupSpawnTimer = 0;
+        this.spawnPowerUp();
+      }
 
-    this.asteroidSpawnTimer += dt;
-    if (this.asteroidSpawnTimer >= this.asteroidSpawnInterval) {
-      this.asteroidSpawnTimer = 0;
-      this.spawnAsteroid();
-    }
+      this.asteroidSpawnTimer += dt;
+      if (this.asteroidSpawnTimer >= this.asteroidSpawnInterval) {
+        this.asteroidSpawnTimer = 0;
+        this.spawnAsteroid();
+      }
 
-    if (!this.boss && this.score >= this.nextBossScore) {
-      this.spawnBoss();
-    }
+      if (!this.boss && this.score >= this.nextBossScore) {
+        this.spawnBoss();
+      }
 
-    this.updateEntities(dt);
-    this.handleCollisions();
-    this.updateSlowMotion(dt);
-    this.cleanup();
+      this.updateEntities(dt);
+      this.handleCollisions();
+      this.updateSlowMotion(dt);
+      this.cleanup();
 
-    if (this.players.every((player) => !player.alive)) {
-      this.finishGame();
+      if (this.players.every((player) => !player.alive)) {
+        this.finishGame();
+      }
+    } else if (this.state === GAME_STATE.GAME_OVER) {
+      this.explosions.forEach((explosion) => explosion.update(dt));
+      this.particles.forEach((particle) => particle.update(dt));
+      this.cleanupAftermath();
     }
   }
 
@@ -1217,6 +1223,10 @@ class GameWorld {
     this.enemies = this.enemies.filter((enemy) => !enemy.dead);
     this.asteroids = this.asteroids.filter((asteroid) => !asteroid.dead);
     this.powerups = this.powerups.filter((powerup) => !powerup.dead);
+    this.cleanupAftermath();
+  }
+
+  cleanupAftermath() {
     this.explosions = this.explosions.filter((explosion) => !explosion.done);
     this.particles = this.particles.filter((particle) => !particle.dead);
   }
