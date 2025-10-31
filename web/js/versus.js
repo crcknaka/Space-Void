@@ -225,13 +225,6 @@
       const text = `P2 Score: ${this.scores[1]}`;
       ctx.fillText(text, WIDTH - ctx.measureText(text).width - 20, 40);
 
-      if (this.paused) {
-        ctx.fillStyle = 'rgba(0,0,0,0.5)';
-        ctx.fillRect(0, 0, WIDTH, HEIGHT);
-        ctx.fillStyle = '#ff4444';
-        ctx.font = '48px Arial';
-        ctx.fillText('PAUSED', WIDTH / 2 - 80, HEIGHT / 2);
-      }
     }
   }
 

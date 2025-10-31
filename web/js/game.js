@@ -40,6 +40,14 @@ if (!canvas || !ctx || !overlay || !container) {
   throw new Error('Game canvas or UI elements are missing.');
 }
 
+function setMenuButtonVisible(visible) {
+  if (!menuButton) return;
+  menuButton.classList.toggle('is-hidden', !visible);
+  menuButton.setAttribute('aria-hidden', String(!visible));
+}
+
+setMenuButtonVisible(false);
+
 const IMAGE_PATH = '../assets/images/';
 const SOUND_PATH = '../assets/sounds/';
 
@@ -742,6 +750,7 @@ function startGame(mode) {
   if (!assets) return;
   stopAllMusic();
   ui.clear();
+  setMenuButtonVisible(true);
 
   if (currentWorld) {
     if (currentWorld.music && typeof currentWorld.music.pause === 'function') {
@@ -796,6 +805,8 @@ function showMainMenu(options = {}) {
   const canResume =
     Boolean(currentWorld) && fromGame && (currentState === GAME_STATE.GAME || currentState === GAME_STATE.PAUSED);
 
+  setMenuButtonVisible(false);
+
   if (canResume) {
     currentWorld.paused = true;
     if (currentWorld.music && typeof currentWorld.music.pause === 'function') {
@@ -830,6 +841,7 @@ function showMainMenu(options = {}) {
               currentWorld.music.play().catch(() => {});
             }
           }
+          setMenuButtonVisible(true);
         }
       : undefined,
   });
@@ -855,12 +867,7 @@ function showSettings() {
 
 input.onKey('Escape', (pressed) => {
   if (!pressed || !currentWorld) return;
-  currentWorld.paused = !currentWorld.paused;
-  if (currentWorld.paused) {
-    currentState = GAME_STATE.PAUSED;
-  } else {
-    currentState = GAME_STATE.GAME;
-  }
+  showMainMenu({ fromGame: true });
 });
 
 function loop(timestamp) {
