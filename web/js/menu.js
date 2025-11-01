@@ -179,20 +179,21 @@
             ${resumeButton}
             <div class="menu__actions">
               <button class="menu__button glass-button glass-button--primary menu__button--stacked" data-action="single" data-ui-sound="button">
-                <span class="menu__button-title">Single Player</span>
+                <span class="menu__button-title">SINGLE PLAYER</span>
                 <span class="menu__button-meta">Solo arcade campaign</span>
               </button>
               <button class="menu__button glass-button glass-button--primary menu__button--stacked" data-action="coop" data-ui-sound="button">
-                <span class="menu__button-title">Co-op Mode</span>
+                <span class="menu__button-title">CO-OP MODE</span>
                 <span class="menu__button-meta">Team up on one screen</span>
               </button>
               <button class="menu__button glass-button glass-button--primary menu__button--stacked" data-action="versus" data-ui-sound="button">
-                <span class="menu__button-title">Versus Mode</span>
+                <span class="menu__button-title">VS MODE</span>
                 <span class="menu__button-meta">Duel for galactic glory</span>
               </button>
             </div>
             <div class="menu__footer">
               <button class="menu__button glass-button glass-button--secondary" data-action="settings" data-ui-sound="button">Settings</button>
+              <button class="menu__button glass-button glass-button--secondary" data-action="totals" data-ui-sound="button">Stats</button>
             </div>
           </div>
         </div>
@@ -274,6 +275,16 @@
 
       overlay.addEventListener('keydown', keyHandler);
 
+      const reopenMenu = () => {
+        ui.showMenu({
+          onStartSingle,
+          onStartCoop,
+          onStartVersus,
+          onSettings,
+          onResume,
+        });
+      };
+
       const handler = (event) => {
         if (!(event.target instanceof HTMLElement)) return;
 
@@ -293,6 +304,12 @@
             break;
           case 'settings':
             onSettings();
+            break;
+          case 'totals':
+            if (SpaceVoid.uiAudio && typeof SpaceVoid.uiAudio.play === 'function') {
+              SpaceVoid.uiAudio.play('button');
+            }
+            ui.showTotalStats({ onClose: reopenMenu });
             break;
           case 'resume':
             if (onResume) {

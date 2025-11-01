@@ -515,14 +515,226 @@ class UIManager {
       </div>
     `;
   }
-  showGameOver({ score, level, onRetry, onMenu }) {
+
+  showTotalStats({ totals, onClose } = {}) {
     this.resetOverlayState();
+    const sanitizeValue = (value) => {
+      const number = Number(value);
+      if (!Number.isFinite(number)) return 0;
+      return Math.max(0, Math.floor(number));
+    };
+    const defaultTotals = {
+      enemiesDestroyed: 0,
+      asteroidsSmashed: 0,
+      bossesKilled: 0,
+      deathCount: 0,
+      playtimeSeconds: 0,
+    };
+    const sanitizeTotals = (value) => {
+      if (!value || typeof value !== 'object') {
+        return { ...defaultTotals };
+      }
+      return {
+        enemiesDestroyed: sanitizeValue(value.enemiesDestroyed),
+        asteroidsSmashed: sanitizeValue(value.asteroidsSmashed),
+        bossesKilled: sanitizeValue(value.bossesKilled),
+        deathCount: sanitizeValue(value.deathCount),
+        playtimeSeconds: sanitizeValue(value.playtimeSeconds),
+      };
+    };
+
+    let resolvedTotals = totals && typeof totals === 'object' ? sanitizeTotals(totals) : null;
+    if (!resolvedTotals) {
+      if (SpaceVoid.stats && typeof SpaceVoid.stats.getTotals === 'function') {
+        resolvedTotals = sanitizeTotals(SpaceVoid.stats.getTotals());
+      } else if (SpaceVoid.stats && SpaceVoid.stats.DEFAULT_TOTALS) {
+        resolvedTotals = sanitizeTotals(SpaceVoid.stats.DEFAULT_TOTALS);
+      } else {
+        resolvedTotals = { ...defaultTotals };
+      }
+    }
+
+    const formatPlaytime =
+      SpaceVoid.stats && typeof SpaceVoid.stats.formatPlaytime === 'function'
+        ? SpaceVoid.stats.formatPlaytime
+        : (seconds) => {
+            const safeSeconds = sanitizeValue(seconds);
+            const mins = Math.floor(safeSeconds / 60);
+            const secs = safeSeconds % 60;
+            return `${mins}m ${secs}s`;
+          };
+
     this.overlay.style.display = 'flex';
     this.overlay.style.flexDirection = 'column';
     this.overlay.style.alignItems = 'center';
     this.overlay.style.justifyContent = 'center';
     this.overlay.innerHTML = `
-      <div class="menu menu--modal glass-panel" role="dialog" aria-labelledby="game-over-title">
+      <div class="menu menu--modal menu--compact glass-panel" role="dialog" aria-labelledby="stats-title">
+        <div class="menu__header">
+          <h1 class="menu__title" id="stats-title">Stats</h1>
+          <p class="menu__subtitle menu__subtitle--muted">Lifetime performance across all missions.</p>
+        </div>
+        <div class="menu__stats menu__stats--wide">
+          <div class="menu__stat">
+            <span class="menu__stat-label">Total Enemies Destroyed</span>
+            <span class="menu__stat-value">${resolvedTotals.enemiesDestroyed}</span>
+          </div>
+          <div class="menu__stat">
+            <span class="menu__stat-label">Total Asteroids Smashed</span>
+            <span class="menu__stat-value">${resolvedTotals.asteroidsSmashed}</span>
+          </div>
+          <div class="menu__stat">
+            <span class="menu__stat-label">Total Bosses Defeated</span>
+            <span class="menu__stat-value">${resolvedTotals.bossesKilled}</span>
+          </div>
+          <div class="menu__stat">
+            <span class="menu__stat-label">Total Deaths</span>
+            <span class="menu__stat-value">${resolvedTotals.deathCount}</span>
+          </div>
+          <div class="menu__stat menu__stat--full">
+            <span class="menu__stat-label">Total Playtime</span>
+            <span class="menu__stat-value">${formatPlaytime(resolvedTotals.playtimeSeconds)}</span>
+          </div>
+        </div>
+        <div class="menu__actions menu__actions--modal">
+          <button class="menu__button glass-button glass-button--secondary" data-action="close" data-ui-sound="button">${
+            onClose ? 'Back' : 'Close'
+          }</button>
+        </div>
+      </div>
+    `;
+
+    const buttons = Array.from(this.overlay.querySelectorAll('button[data-action]'));
+    let focusedIndex = buttons.length ? 0 : -1;
+
+    const focusListeners = buttons.map((button, index) => {
+      const listener = () => {
+        focusedIndex = index;
+      };
+      button.addEventListener('focus', listener);
+      return listener;
+    });
+
+    const focusButton = (index) => {
+      if (!buttons.length) return;
+      const safeIndex = (index + buttons.length) % buttons.length;
+      const target = buttons[safeIndex];
+      if (!target) return;
+      focusedIndex = safeIndex;
+      target.focus({ preventScroll: true });
+    };
+
+    if (buttons.length) {
+      window.requestAnimationFrame(() => {
+        focusButton(focusedIndex);
+      });
+    }
+
+    const keyHandler = (event) => {
+      if (!buttons.length) return;
+      const { key } = event;
+      if (key === 'ArrowDown' || key === 'ArrowRight' || key === 'ArrowUp' || key === 'ArrowLeft') {
+        event.preventDefault();
+        focusButton(focusedIndex + (key === 'ArrowDown' || key === 'ArrowRight' ? 1 : -1));
+      } else if (key === 'Home') {
+        event.preventDefault();
+        focusButton(0);
+      } else if (key === 'End') {
+        event.preventDefault();
+        focusButton(buttons.length - 1);
+      } else if (key === 'Enter' || key === ' ' || key === 'Space' || key === 'Spacebar') {
+        const activeElement = document.activeElement;
+        if (activeElement instanceof HTMLElement && buttons.includes(activeElement)) {
+          event.preventDefault();
+          activeElement.click();
+        }
+      }
+    };
+
+    this.overlay.addEventListener('keydown', keyHandler);
+
+    const handler = (event) => {
+      if (!(event.target instanceof HTMLElement)) return;
+      const button = event.target.closest('button[data-action="close"]');
+      if (!button) return;
+      if (SpaceVoid.uiAudio && typeof SpaceVoid.uiAudio.play === 'function') {
+        SpaceVoid.uiAudio.play('cancel');
+      }
+      cleanup();
+      if (typeof onClose === 'function') {
+        onClose();
+      } else if (typeof this.hideOverlay === 'function') {
+        this.hideOverlay();
+      } else {
+        this.overlay.style.display = 'none';
+      }
+    };
+
+    const cleanup = () => {
+      this.overlay.removeEventListener('click', handler);
+      this.overlay.removeEventListener('keydown', keyHandler);
+      buttons.forEach((button, index) => {
+        button.removeEventListener('focus', focusListeners[index]);
+      });
+    };
+
+    this.overlay.addEventListener('click', handler);
+    this.currentHandler = cleanup;
+  }
+  showGameOver({ score, level, stats = {}, totals = null, onRetry, onMenu }) {
+    this.resetOverlayState();
+    const sanitizeValue = (value) => {
+      const number = Number(value);
+      if (!Number.isFinite(number)) return 0;
+      return Math.max(0, Math.floor(number));
+    };
+    const sanitizedStats = {
+      enemiesDestroyed: sanitizeValue(stats.enemiesDestroyed),
+      asteroidsSmashed: sanitizeValue(stats.asteroidsSmashed),
+      bossesKilled: sanitizeValue(stats.bossesKilled),
+      deaths: sanitizeValue(stats.deaths),
+      playtimeSeconds: sanitizeValue(stats.playtimeSeconds),
+    };
+    const baseTotals = {
+      enemiesDestroyed: 0,
+      asteroidsSmashed: 0,
+      bossesKilled: 0,
+      deathCount: 0,
+      playtimeSeconds: 0,
+    };
+    const sanitizeTotals = (value) => {
+      if (!value || typeof value !== 'object') return null;
+      return {
+        enemiesDestroyed: sanitizeValue(value.enemiesDestroyed),
+        asteroidsSmashed: sanitizeValue(value.asteroidsSmashed),
+        bossesKilled: sanitizeValue(value.bossesKilled),
+        deathCount: sanitizeValue(value.deathCount),
+        playtimeSeconds: sanitizeValue(value.playtimeSeconds),
+      };
+    };
+    const totalsFromArgs = sanitizeTotals(totals);
+    const getTotalsForView = () => {
+      if (totalsFromArgs) {
+        return { ...baseTotals, ...totalsFromArgs };
+      }
+      if (SpaceVoid.stats && typeof SpaceVoid.stats.getTotals === 'function') {
+        const loaded = sanitizeTotals(SpaceVoid.stats.getTotals());
+        if (loaded) {
+          return { ...baseTotals, ...loaded };
+        }
+      }
+      if (SpaceVoid.stats && SpaceVoid.stats.DEFAULT_TOTALS) {
+        return { ...baseTotals, ...SpaceVoid.stats.DEFAULT_TOTALS };
+      }
+      return { ...baseTotals };
+    };
+
+    this.overlay.style.display = 'flex';
+    this.overlay.style.flexDirection = 'column';
+    this.overlay.style.alignItems = 'center';
+    this.overlay.style.justifyContent = 'center';
+    this.overlay.innerHTML = `
+      <div class="menu menu--modal menu--compact glass-panel" role="dialog" aria-labelledby="game-over-title">
         <div class="menu__header">
           <h1 class="menu__title" id="game-over-title">Game Over</h1>
           <p class="menu__subtitle menu__subtitle--muted">Mission failed, but data was recovered.</p>
@@ -536,10 +748,19 @@ class UIManager {
             <span class="menu__stat-label">Level</span>
             <span class="menu__stat-value">${level}</span>
           </div>
+          <div class="menu__stat">
+            <span class="menu__stat-label">Enemies Destroyed</span>
+            <span class="menu__stat-value">${sanitizedStats.enemiesDestroyed}</span>
+          </div>
+          <div class="menu__stat">
+            <span class="menu__stat-label">Asteroids Smashed</span>
+            <span class="menu__stat-value">${sanitizedStats.asteroidsSmashed}</span>
+          </div>
         </div>
         <div class="menu__actions menu__actions--modal">
           <button class="menu__button glass-button glass-button--primary" data-action="retry" data-ui-sound="button">Retry Mission</button>
           <button class="menu__button glass-button glass-button--secondary" data-action="menu" data-ui-sound="button">Main Menu</button>
+          <button class="menu__button glass-button glass-button--secondary" data-action="totals" data-ui-sound="button">Stats</button>
         </div>
       </div>
     `;
@@ -602,6 +823,26 @@ class UIManager {
       const button = event.target.closest('button[data-action]');
       if (!button) return;
       const action = button.dataset.action;
+      if (action === 'totals') {
+        if (SpaceVoid.uiAudio && typeof SpaceVoid.uiAudio.play === 'function') {
+          SpaceVoid.uiAudio.play('button');
+        }
+        const totalsForView = getTotalsForView();
+        this.showTotalStats({
+          totals: totalsForView,
+          onClose: () => {
+            this.showGameOver({
+              score,
+              level,
+              stats: sanitizedStats,
+              totals: totalsForView,
+              onRetry,
+              onMenu,
+            });
+          },
+        });
+        return;
+      }
       if (SpaceVoid.uiAudio && typeof SpaceVoid.uiAudio.play === 'function') {
         if (action === 'menu') {
           SpaceVoid.uiAudio.play('cancel');
@@ -948,11 +1189,13 @@ function startGame(mode) {
     currentWorld = factory({
       assets,
       input,
-      onGameOver: ({ score, level }) => {
+      onGameOver: ({ score, level, stats, totals }) => {
         currentState = GAME_STATE.GAME_OVER;
         ui.showGameOver({
           score: Math.floor(score),
           level,
+          stats,
+          totals,
           onRetry: () => startGame(mode),
           onMenu: showMainMenu,
         });
