@@ -33,7 +33,7 @@
       left: 'KeyA',
       right: 'KeyD',
       shoot: 'Space',
-      rocket: 'ShiftLeft',
+      rocket: 'Space',
       speed: 'ShiftLeft',
     },
     player2: {
@@ -43,7 +43,7 @@
       right: 'ArrowRight',
       shoot: 'Enter',
       rocket: 'Numpad0',
-      speed: 'Numpad0',
+      speed: 'Numpad1',
     },
   };
 

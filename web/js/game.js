@@ -1127,12 +1127,12 @@ function configureTouchForMode(mode) {
   switch (mode) {
     case 'single':
       addJoystick(primaryJoystick, playerOneBindings);
-      addButton(rocketButton, 'ShiftLeft');
+      addButton(rocketButton, 'Space');
       break;
     case 'coop':
       addJoystick(primaryJoystick, playerOneBindings);
       addJoystick(secondaryJoystick, playerTwoBindings);
-      addButton(rocketButton, 'ShiftLeft');
+      addButton(rocketButton, 'Space');
       addButton(rocketButton2, 'Numpad0');
       break;
     case 'versus':
