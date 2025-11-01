@@ -134,6 +134,7 @@
   function attachMenuUI(ui) {
     ui.showMenu = ({
       onStartSingle,
+      onStartBulletHell,
       onStartCoop,
       onStartVersus,
       onSettings,
@@ -181,6 +182,10 @@
               <button class="menu__button glass-button glass-button--primary menu__button--stacked" data-action="single" data-ui-sound="button">
                 <span class="menu__button-title">SINGLE PLAYER</span>
                 <span class="menu__button-meta">Solo arcade campaign</span>
+              </button>
+              <button class="menu__button glass-button glass-button--primary menu__button--stacked" data-action="bullet-hell" data-ui-sound="button">
+                <span class="menu__button-title">BULLET HELL</span>
+                <span class="menu__button-meta">Intense solo gauntlet</span>
               </button>
               <button class="menu__button glass-button glass-button--primary menu__button--stacked" data-action="coop" data-ui-sound="button">
                 <span class="menu__button-title">CO-OP MODE</span>
@@ -278,6 +283,7 @@
       const reopenMenu = () => {
         ui.showMenu({
           onStartSingle,
+          onStartBulletHell,
           onStartCoop,
           onStartVersus,
           onSettings,
@@ -295,6 +301,11 @@
         switch (action) {
           case 'single':
             onStartSingle();
+            break;
+          case 'bullet-hell':
+            if (typeof onStartBulletHell === 'function') {
+              onStartBulletHell();
+            }
             break;
           case 'coop':
             onStartCoop();
