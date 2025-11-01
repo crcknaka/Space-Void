@@ -350,8 +350,11 @@ class Enemy {
     this.frameIndex = 0;
     this.frameTimer = 0;
     this.frameRate = 0.05;
-    this.width = image.width + thrusterFrames[0].width;
-    this.height = Math.max(image.height, thrusterFrames[0].height);
+    this.shipWidth = image.width;
+    this.shipHeight = image.height;
+    this.thrusterWidth = this.thrusterFrames?.[0]?.width ?? 0;
+    this.width = image.width + this.thrusterWidth;
+    this.height = Math.max(image.height, this.thrusterFrames?.[0]?.height ?? image.height);
     this.x = WIDTH + 50 + Math.random() * 100;
     this.y = Math.random() * (HEIGHT - this.height);
     this.speedx = -3 - (level - 1) - Math.random() * 2;
@@ -401,14 +404,15 @@ class Enemy {
   }
 
   getBounds() {
-    const reduction = 0.3; // Reduced hitbox by 30%
-    const reducedWidth = this.width * (1 - reduction);
-    const reducedHeight = this.height * (1 - reduction);
-    const offsetX = (this.width - reducedWidth) / 2;
-    const offsetY = (this.height - reducedHeight) / 2;
+    const reduction = 0.3; // Reduced ship hitbox by 30%
+    const reducedWidth = this.shipWidth * (1 - reduction);
+    const reducedHeight = this.shipHeight * (1 - reduction);
+    const shipOffsetX = (this.shipWidth - reducedWidth) / 2;
+    const shipOffsetY = (this.shipHeight - reducedHeight) / 2;
+    const shipTop = this.y + (this.height - this.shipHeight) / 2;
     return {
-      x: this.x + offsetX,
-      y: this.y + offsetY,
+      x: this.x + shipOffsetX,
+      y: shipTop + shipOffsetY,
       width: reducedWidth,
       height: reducedHeight,
     };
@@ -602,11 +606,14 @@ class Player {
     this.assets = assets;
     this.originalImage = image;
     this.thrusterFrames = thrusterFrames;
+    this.shipWidth = image.width;
+    this.shipHeight = image.height;
+    this.thrusterWidth = this.thrusterFrames?.[0]?.width ?? 0;
     this.controls = controls;
     this.facingLeft = facingLeft;
     this.autoFire = autoFire;
-    this.width = image.width + thrusterFrames[0].width;
-    this.height = Math.max(image.height, thrusterFrames[0].height);
+    this.width = image.width + this.thrusterWidth;
+    this.height = Math.max(image.height, this.thrusterFrames?.[0]?.height ?? image.height);
     this.x = 100;
     this.y = HEIGHT / 2 - this.height / 2;
     this.speed = 5;
@@ -763,13 +770,15 @@ class Player {
 
   getBounds() {
     const reduction = 0.15;
-    const reducedWidth = this.width * (1 - reduction);
-    const reducedHeight = this.height * (1 - reduction);
-    const offsetX = (this.width - reducedWidth) / 2;
-    const offsetY = (this.height - reducedHeight) / 2;
+    const reducedWidth = this.shipWidth * (1 - reduction);
+    const reducedHeight = this.shipHeight * (1 - reduction);
+    const shipOffsetX = (this.shipWidth - reducedWidth) / 2;
+    const shipOffsetY = (this.shipHeight - reducedHeight) / 2;
+    const shipLeft = this.facingLeft ? this.x : this.x + this.thrusterWidth;
+    const shipTop = this.y + (this.height - this.shipHeight) / 2;
     return {
-      x: this.x + offsetX,
-      y: this.y + offsetY,
+      x: shipLeft + shipOffsetX,
+      y: shipTop + shipOffsetY,
       width: reducedWidth,
       height: reducedHeight,
     };
