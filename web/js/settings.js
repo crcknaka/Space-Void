@@ -25,15 +25,15 @@
           <h2 class="menu__title">Settings</h2>
           <label class="settings__label">
             <span>Music Volume</span>
-            <input type="range" min="0" max="1" step="0.05" value="${settings.musicVolume}" data-setting="music" />
+            <input type="range" min="0" max="1" step="0.05" value="${settings.musicVolume}" data-setting="music" data-ui-sound="control" />
           </label>
           <label class="settings__label">
             <span>Effects Volume</span>
-            <input type="range" min="0" max="1" step="0.05" value="${settings.effectsVolume}" data-setting="effects" />
+            <input type="range" min="0" max="1" step="0.05" value="${settings.effectsVolume}" data-setting="effects" data-ui-sound="control" />
           </label>
           <div class="settings__buttons">
-            <button class="menu__button glass-button glass-button--primary" data-action="apply">Apply</button>
-            <button class="menu__button glass-button glass-button--secondary" data-action="close">Close</button>
+            <button class="menu__button glass-button glass-button--primary" data-action="apply" data-ui-sound="button">Apply</button>
+            <button class="menu__button glass-button glass-button--secondary" data-action="close" data-ui-sound="button">Close</button>
           </div>
         </div>
       `;
@@ -117,6 +117,9 @@
       const applySettings = () => {
         const musicInput = overlay.querySelector('input[data-setting="music"]');
         const effectsInput = overlay.querySelector('input[data-setting="effects"]');
+        if (SpaceVoid.uiAudio && typeof SpaceVoid.uiAudio.play === 'function') {
+          SpaceVoid.uiAudio.play('confirm');
+        }
         onApply({
           musicVolume: musicInput ? Number(musicInput.value) : settings.musicVolume,
           effectsVolume: effectsInput ? Number(effectsInput.value) : settings.effectsVolume,
@@ -126,6 +129,9 @@
       };
 
       const closeSettings = () => {
+        if (SpaceVoid.uiAudio && typeof SpaceVoid.uiAudio.play === 'function') {
+          SpaceVoid.uiAudio.play('cancel');
+        }
         detach();
         ui.hideOverlay();
         onClose();

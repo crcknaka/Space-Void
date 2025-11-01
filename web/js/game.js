@@ -538,8 +538,8 @@ class UIManager {
           </div>
         </div>
         <div class="menu__actions menu__actions--modal">
-          <button class="menu__button glass-button glass-button--primary" data-action="retry">Retry Mission</button>
-          <button class="menu__button glass-button glass-button--secondary" data-action="menu">Main Menu</button>
+          <button class="menu__button glass-button glass-button--primary" data-action="retry" data-ui-sound="button">Retry Mission</button>
+          <button class="menu__button glass-button glass-button--secondary" data-action="menu" data-ui-sound="button">Main Menu</button>
         </div>
       </div>
     `;
@@ -602,6 +602,11 @@ class UIManager {
       const button = event.target.closest('button[data-action]');
       if (!button) return;
       const action = button.dataset.action;
+      if (SpaceVoid.uiAudio && typeof SpaceVoid.uiAudio.play === 'function') {
+        if (action === 'menu') {
+          SpaceVoid.uiAudio.play('cancel');
+        }
+      }
       cleanup();
       if (action === 'retry') {
         onRetry();
@@ -643,8 +648,8 @@ class UIManager {
           </div>
         </div>
         <div class="menu__actions menu__actions--modal">
-          <button class="menu__button glass-button glass-button--accent" data-action="rematch">Rematch</button>
-          <button class="menu__button glass-button glass-button--secondary" data-action="menu">Main Menu</button>
+          <button class="menu__button glass-button glass-button--accent" data-action="rematch" data-ui-sound="button">Rematch</button>
+          <button class="menu__button glass-button glass-button--secondary" data-action="menu" data-ui-sound="button">Main Menu</button>
         </div>
       </div>
     `;
@@ -707,6 +712,11 @@ class UIManager {
       const button = event.target.closest('button[data-action]');
       if (!button) return;
       const action = button.dataset.action;
+      if (SpaceVoid.uiAudio && typeof SpaceVoid.uiAudio.play === 'function') {
+        if (action === 'menu') {
+          SpaceVoid.uiAudio.play('cancel');
+        }
+      }
       cleanup();
       if (action === 'rematch') onRematch();
       if (action === 'menu') onMenu();
@@ -816,6 +826,9 @@ function stopAllMusic() {
 }
 
 function applyVolumeSettings() {
+  if (SpaceVoid.uiAudio && typeof SpaceVoid.uiAudio.setVolume === 'function') {
+    SpaceVoid.uiAudio.setVolume(soundVolume);
+  }
   if (!assets) return;
   ['background_music', 'versus_music'].forEach((key) => {
     const track = assets[key];
@@ -894,6 +907,9 @@ function configureTouchForMode(mode) {
 
 function startGame(mode) {
   if (!assets) return;
+  if (SpaceVoid.uiAudio && typeof SpaceVoid.uiAudio.play === 'function') {
+    SpaceVoid.uiAudio.play('confirm');
+  }
   stopAllMusic();
   ui.clear();
   setMenuButtonVisible(true);
@@ -950,6 +966,9 @@ function startGame(mode) {
 
 function showMainMenu(options = {}) {
   const { fromGame = false } = options;
+  if (fromGame && SpaceVoid.uiAudio && typeof SpaceVoid.uiAudio.play === 'function') {
+    SpaceVoid.uiAudio.play('cancel');
+  }
   const canResume =
     Boolean(currentWorld) && fromGame && (currentState === GAME_STATE.GAME || currentState === GAME_STATE.PAUSED);
 
@@ -982,6 +1001,9 @@ function showMainMenu(options = {}) {
   let resumeHandler = null;
   if (canResume) {
     resumeHandler = () => {
+      if (SpaceVoid.uiAudio && typeof SpaceVoid.uiAudio.play === 'function') {
+        SpaceVoid.uiAudio.play('confirm');
+      }
       ui.hideOverlay();
       if (currentWorld) {
         currentWorld.paused = false;

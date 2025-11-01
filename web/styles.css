@@ -409,11 +409,17 @@ body {
   flex-direction: column;
   gap: clamp(18px, 4vw, 28px);
   text-align: center;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .menu--main {
   gap: clamp(24px, 5vw, 36px);
-  animation: menuFloat 9s ease-in-out infinite alternate;
+}
+
+.menu.menu--main.glass-panel {
+  backdrop-filter: blur(5px);
+  border-radius: 150px;
 }
 
 .menu--modal {
@@ -526,6 +532,8 @@ body {
 .menu__button {
   width: min(240px, 100%);
   align-self: center;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .menu__button--resume {
@@ -533,7 +541,7 @@ body {
 }
 
 .menu__resume .menu__button {
-  width: min(220px, 100%);
+  width: min(240px, 100%);
 }
 
 .menu__button--stacked {
@@ -554,10 +562,16 @@ body {
 }
 
 .menu__button-meta {
-  font-size: 0.85rem;
+  font-size: 0.65rem;
   opacity: 0.78;
   letter-spacing: 0.04em;
   text-transform: none;
+}
+
+.menu__button.glass-button--accent.menu__button--resume {
+  --glass-button-surface: linear-gradient(150deg, rgba(56, 182, 134, 0.9), rgba(20, 132, 98, 0.9));
+  --glass-button-surface-hover: linear-gradient(150deg, rgba(76, 202, 156, 0.94), rgba(28, 154, 118, 0.96));
+  --glass-button-surface-active: linear-gradient(150deg, rgba(46, 162, 118, 0.9), rgba(18, 122, 92, 0.94));
 }
 
 .menu.settings {
@@ -598,14 +612,5 @@ body {
 
   .menu__button {
     padding: 14px 18px;
-  }
-}
-
-@keyframes menuFloat {
-  0% {
-    transform: translate3d(0, 0, 0);
-  }
-  100% {
-    transform: translate3d(0, -8px, 0);
   }
 }
