@@ -193,6 +193,7 @@
             </div>
             <div class="menu__footer">
               <button class="menu__button glass-button glass-button--secondary" data-action="settings" data-ui-sound="button">Settings</button>
+              <button class="menu__button glass-button glass-button--secondary" data-action="totals" data-ui-sound="button">Total Stats</button>
             </div>
           </div>
         </div>
@@ -274,6 +275,16 @@
 
       overlay.addEventListener('keydown', keyHandler);
 
+      const reopenMenu = () => {
+        ui.showMenu({
+          onStartSingle,
+          onStartCoop,
+          onStartVersus,
+          onSettings,
+          onResume,
+        });
+      };
+
       const handler = (event) => {
         if (!(event.target instanceof HTMLElement)) return;
 
@@ -293,6 +304,12 @@
             break;
           case 'settings':
             onSettings();
+            break;
+          case 'totals':
+            if (SpaceVoid.uiAudio && typeof SpaceVoid.uiAudio.play === 'function') {
+              SpaceVoid.uiAudio.play('button');
+            }
+            ui.showTotalStats({ onClose: reopenMenu });
             break;
           case 'resume':
             if (onResume) {

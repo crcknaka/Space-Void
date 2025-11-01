@@ -878,6 +878,15 @@ class GameWorld {
     this.cooperative = mode === 'coop';
     this.paused = false;
     this.state = GAME_STATE.GAME;
+    this.sessionStartTime = Date.now();
+    this.sessionStats = {
+      enemiesDestroyed: 0,
+      asteroidsSmashed: 0,
+      bossesKilled: 0,
+      deaths: 0,
+      playtimeSeconds: 0,
+    };
+    this.sessionFinalized = false;
     this.music = this.assets.background_music;
     this.music.loop = true;
     this.music.volume = 0.4;
@@ -931,6 +940,37 @@ class GameWorld {
       player2.reset({ x: 100, y: HEIGHT / 3 - player2.height / 2 });
       this.players.push(player2);
     }
+  }
+
+  recordEnemyDestroyed(amount = 1) {
+    const increment = Number.isFinite(amount) ? Math.max(0, Math.floor(amount)) : 0;
+    this.sessionStats.enemiesDestroyed += increment;
+  }
+
+  recordAsteroidSmashed(amount = 1) {
+    const increment = Number.isFinite(amount) ? Math.max(0, Math.floor(amount)) : 0;
+    this.sessionStats.asteroidsSmashed += increment;
+  }
+
+  recordBossKilled(amount = 1) {
+    const increment = Number.isFinite(amount) ? Math.max(0, Math.floor(amount)) : 0;
+    this.sessionStats.bossesKilled += increment;
+  }
+
+  recordPlayerDeath(amount = 1) {
+    const increment = Number.isFinite(amount) ? Math.max(0, Math.floor(amount)) : 0;
+    this.sessionStats.deaths += increment;
+  }
+
+  finalizeSessionStats() {
+    if (!this.sessionFinalized) {
+      const elapsedMs = Date.now() - this.sessionStartTime;
+      if (Number.isFinite(elapsedMs) && elapsedMs > 0) {
+        this.sessionStats.playtimeSeconds += Math.floor(elapsedMs / 1000);
+      }
+      this.sessionFinalized = true;
+    }
+    return { ...this.sessionStats };
   }
 
   spawnEnemy() {
@@ -1060,6 +1100,7 @@ class GameWorld {
             enemy.dead = true;
             this.createExplosion(enemyBounds);
             this.score += 10;
+            this.recordEnemyDestroyed();
           }
         }
       });
@@ -1078,6 +1119,7 @@ class GameWorld {
         asteroid.dead = true;
         this.createExplosion(bounds);
         this.score += 5;
+        this.recordAsteroidSmashed();
         asteroid.breakApart().forEach((piece) => this.asteroids.push(piece));
         break;
       }
@@ -1118,6 +1160,7 @@ class GameWorld {
             enemy.dead = true;
             this.createExplosion(enemy.getBounds());
             this.score += 20;
+            this.recordEnemyDestroyed();
           }
         }
       });
@@ -1128,6 +1171,7 @@ class GameWorld {
           asteroid.dead = true;
           this.createExplosion(asteroid.getBounds());
           this.score += 10;
+          this.recordAsteroidSmashed();
         }
       });
     });
@@ -1142,6 +1186,7 @@ class GameWorld {
         if (intersects(bounds, bullet.getBounds())) {
           bullet.dead = true;
           player.alive = false;
+          this.recordPlayerDeath();
           this.createExplosion(bounds);
           this.assets.explosion_sound.currentTime = 0;
           this.assets.explosion_sound.play();
@@ -1161,8 +1206,10 @@ class GameWorld {
             this.defeatBoss(enemy);
           } else {
             enemy.dead = true;
+            this.recordEnemyDestroyed();
           }
           player.alive = false;
+          this.recordPlayerDeath();
           this.createExplosion(bounds);
           this.assets.explosion_sound.currentTime = 0;
           this.assets.explosion_sound.play();
@@ -1180,6 +1227,8 @@ class GameWorld {
         if (intersects(bounds, asteroid.getBounds())) {
           asteroid.dead = true;
           player.alive = false;
+          this.recordAsteroidSmashed();
+          this.recordPlayerDeath();
           this.createExplosion(bounds);
           this.assets.explosion_sound.currentTime = 0;
           this.assets.explosion_sound.play();
@@ -1214,12 +1263,14 @@ class GameWorld {
         if (!enemy.dead) {
           enemy.dead = true;
           this.createExplosion(enemy.getBounds());
+          this.recordEnemyDestroyed();
         }
       });
       this.asteroids.forEach((asteroid) => {
         if (!asteroid.dead) {
           asteroid.dead = true;
           this.createExplosion(asteroid.getBounds());
+          this.recordAsteroidSmashed();
         }
       });
       this.assets.explosion_sound.currentTime = 0;
@@ -1257,6 +1308,7 @@ class GameWorld {
     boss.dead = true;
     this.createExplosion(boss.getBounds());
     this.score += 50;
+    this.recordBossKilled();
     this.level += 1;
     this.nextBossScore += this.level * 100;
     this.enemySpawnInterval = Math.max(0.5, this.enemySpawnInterval - 0.2);
@@ -1282,8 +1334,18 @@ class GameWorld {
 
   finishGame() {
     this.state = GAME_STATE.GAME_OVER;
+    const sessionStats = this.finalizeSessionStats();
+    let totalStats = null;
+    if (SpaceVoid.stats && typeof SpaceVoid.stats.recordSession === 'function') {
+      totalStats = SpaceVoid.stats.recordSession(sessionStats);
+    }
     if (this.onGameOver) {
-      this.onGameOver({ score: this.score, level: this.level });
+      this.onGameOver({
+        score: this.score,
+        level: this.level,
+        stats: sessionStats,
+        totals: totalStats,
+      });
     }
   }
 
