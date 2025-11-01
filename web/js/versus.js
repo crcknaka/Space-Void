@@ -82,7 +82,7 @@
           right: 'ArrowRight',
           shoot: 'Enter',
           rocket: 'Enter',
-          speed: 'Numpad0',
+          speed: 'Numpad1',
         },
         facingLeft: true,
         assets: this.assets,
