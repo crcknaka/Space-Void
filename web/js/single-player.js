@@ -343,7 +343,7 @@ class Rocket {
 }
 
 class Enemy {
-  constructor(image, thrusterFrames, level = 1, moveRandomly = false) {
+  constructor(image, thrusterFrames, level = 1, moveRandomly = false, options = {}) {
     this.image = image;
     this.originalImage = image;
     this.thrusterFrames = thrusterFrames;
@@ -364,6 +364,9 @@ class Enemy {
     this.shootDelay = 1.5 - Math.min(1, (level - 1) * 0.1) + Math.random();
     this.shootTimer = 0;
     this.dead = false;
+    const { health = 1 } = options || {};
+    this.maxHealth = Math.max(1, Math.floor(health));
+    this.health = this.maxHealth;
   }
 
   update(dt, world) {
@@ -389,6 +392,19 @@ class Enemy {
       this.frameTimer = 0;
       this.frameIndex = (this.frameIndex + 1) % this.thrusterFrames.length;
     }
+  }
+
+  takeDamage(amount = 1) {
+    if (this.dead) return false;
+    const damage = Number.isFinite(amount) ? Math.max(0, Math.floor(amount)) : 0;
+    if (damage <= 0) return false;
+    this.health -= damage;
+    if (this.health <= 0) {
+      this.health = 0;
+      this.dead = true;
+      return true;
+    }
+    return false;
   }
 
   draw(ctx) {
@@ -865,8 +881,9 @@ class GameWorld {
     this.nextBossScore = 100;
     this.enemySpawnTimer = 0;
     this.enemySpawnInterval = 2;
+    this.enemySpawnBurst = mode === 'bulletHell' ? 3 : 1;
     this.powerupSpawnTimer = 0;
-    this.powerupSpawnInterval = 10;
+    this.powerupSpawnInterval = mode === 'bulletHell' ? 10 / 3 : 10;
     this.asteroidSpawnTimer = 0;
     this.asteroidSpawnInterval = 5;
     this.gameSpeedMultiplier = 1;
@@ -973,14 +990,45 @@ class GameWorld {
     return { ...this.sessionStats };
   }
 
+  getEnemyHealthForLevel(level) {
+    if (this.mode === 'bulletHell') {
+      if (level >= 10) return 5;
+      if (level >= 7) return 4;
+      if (level >= 5) return 3;
+      if (level >= 3) return 2;
+    }
+    return 1;
+  }
+
+  shouldEnemyMoveRandomly(index, total) {
+    if (this.mode === 'bulletHell') {
+      if (total <= 1) {
+        return true;
+      }
+      return index % 3 !== 1;
+    }
+    return Math.random() < Math.min(0.1 + (this.level - 1) * 0.05, 0.75);
+  }
+
   spawnEnemy() {
-    const moveRandomly = Math.random() < Math.min(0.1 + (this.level - 1) * 0.05, 0.75);
-    this.enemies.push(new Enemy(
-      this.assets.enemy_img,
-      this.assets.enemy_thruster_frames,
-      this.level,
-      moveRandomly,
-    ));
+    const count = Math.max(1, this.enemySpawnBurst ?? 1);
+    const enemyHealth = this.getEnemyHealthForLevel(this.level);
+    for (let index = 0; index < count; index += 1) {
+      const moveRandomly = this.shouldEnemyMoveRandomly(index, count);
+      const enemy = new Enemy(
+        this.assets.enemy_img,
+        this.assets.enemy_thruster_frames,
+        this.level,
+        moveRandomly,
+        { health: enemyHealth },
+      );
+      if (this.mode === 'bulletHell' && moveRandomly) {
+        if (Math.abs(enemy.speedy) < 0.5) {
+          enemy.speedy = Math.random() < 0.5 ? -1 : 1;
+        }
+      }
+      this.enemies.push(enemy);
+    }
   }
 
   spawnPowerUp() {
@@ -1097,10 +1145,12 @@ class GameWorld {
               this.defeatBoss(enemy);
             }
           } else {
-            enemy.dead = true;
-            this.createExplosion(enemyBounds);
-            this.score += 10;
-            this.recordEnemyDestroyed();
+            const defeated = enemy.takeDamage(1);
+            if (defeated) {
+              this.createExplosion(enemyBounds);
+              this.score += 10;
+              this.recordEnemyDestroyed();
+            }
           }
         }
       });
@@ -1157,10 +1207,12 @@ class GameWorld {
               this.defeatBoss(enemy);
             }
           } else {
-            enemy.dead = true;
-            this.createExplosion(enemy.getBounds());
-            this.score += 20;
-            this.recordEnemyDestroyed();
+            const defeated = enemy.takeDamage(enemy.health);
+            if (defeated) {
+              this.createExplosion(enemy.getBounds());
+              this.score += 20;
+              this.recordEnemyDestroyed();
+            }
           }
         }
       });
@@ -1205,8 +1257,10 @@ class GameWorld {
           if (enemy instanceof Boss) {
             this.defeatBoss(enemy);
           } else {
-            enemy.dead = true;
-            this.recordEnemyDestroyed();
+            const defeated = enemy.takeDamage(enemy.health);
+            if (defeated) {
+              this.recordEnemyDestroyed();
+            }
           }
           player.alive = false;
           this.recordPlayerDeath();
@@ -1261,9 +1315,11 @@ class GameWorld {
       this.enemies.forEach((enemy) => {
         if (enemy instanceof Boss) return;
         if (!enemy.dead) {
-          enemy.dead = true;
-          this.createExplosion(enemy.getBounds());
-          this.recordEnemyDestroyed();
+          const defeated = enemy.takeDamage(enemy.health);
+          if (defeated) {
+            this.createExplosion(enemy.getBounds());
+            this.recordEnemyDestroyed();
+          }
         }
       });
       this.asteroids.forEach((asteroid) => {

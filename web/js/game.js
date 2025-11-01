@@ -8,6 +8,7 @@
   const { WIDTH, HEIGHT, FRAME_TIME, GAME_STATE } = shared;
   const {
     createSinglePlayerWorld,
+    createBulletHellWorld,
     createCoopWorld,
     createVersusWorld,
     attachMenuUI,
@@ -15,6 +16,7 @@
   } = SpaceVoid;
   if (
     !createSinglePlayerWorld ||
+    !createBulletHellWorld ||
     !createCoopWorld ||
     !createVersusWorld ||
     !attachMenuUI ||
@@ -1095,8 +1097,9 @@ function configureTouchForMode(mode) {
 
   if (touchControls) {
     touchControls.classList.remove('touch-controls--single', 'touch-controls--coop', 'touch-controls--versus');
-    if (mode) {
-      touchControls.classList.add(`touch-controls--${mode}`);
+    const visualMode = mode === 'bulletHell' ? 'single' : mode;
+    if (visualMode) {
+      touchControls.classList.add(`touch-controls--${visualMode}`);
     }
   }
 
@@ -1126,6 +1129,7 @@ function configureTouchForMode(mode) {
 
   switch (mode) {
     case 'single':
+    case 'bulletHell':
       addJoystick(primaryJoystick, playerOneBindings);
       addButton(rocketButton, 'Space');
       break;
@@ -1185,7 +1189,12 @@ function startGame(mode) {
       },
     });
   } else {
-    const factory = mode === 'coop' ? createCoopWorld : createSinglePlayerWorld;
+    const factory =
+      mode === 'coop'
+        ? createCoopWorld
+        : mode === 'bulletHell'
+          ? createBulletHellWorld
+          : createSinglePlayerWorld;
     currentWorld = factory({
       assets,
       input,
@@ -1268,6 +1277,7 @@ function showMainMenu(options = {}) {
 
   ui.showMenu({
     onStartSingle: () => startGame('single'),
+    onStartBulletHell: () => startGame('bulletHell'),
     onStartCoop: () => startGame('coop'),
     onStartVersus: () => startGame('versus'),
     onSettings: showSettings,
