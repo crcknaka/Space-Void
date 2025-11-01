@@ -419,7 +419,7 @@ body {
 
 .menu.menu--main.glass-panel {
   backdrop-filter: blur(5px);
-  border-radius: 150px;
+  border-radius: 26px;
 }
 
 .menu--modal {

@@ -179,15 +179,15 @@
             ${resumeButton}
             <div class="menu__actions">
               <button class="menu__button glass-button glass-button--primary menu__button--stacked" data-action="single" data-ui-sound="button">
-                <span class="menu__button-title">Single Player</span>
+                <span class="menu__button-title">SINGLE PLAYER</span>
                 <span class="menu__button-meta">Solo arcade campaign</span>
               </button>
               <button class="menu__button glass-button glass-button--primary menu__button--stacked" data-action="coop" data-ui-sound="button">
-                <span class="menu__button-title">Co-op Mode</span>
+                <span class="menu__button-title">CO-OP MODE</span>
                 <span class="menu__button-meta">Team up on one screen</span>
               </button>
               <button class="menu__button glass-button glass-button--primary menu__button--stacked" data-action="versus" data-ui-sound="button">
-                <span class="menu__button-title">Versus Mode</span>
+                <span class="menu__button-title">VS MODE</span>
                 <span class="menu__button-meta">Duel for galactic glory</span>
               </button>
             </div>

@@ -931,7 +931,7 @@ class GameWorld {
           left: 'ArrowLeft',
           right: 'ArrowRight',
           shoot: 'Enter',
-          rocket: 'Enter',
+          rocket: 'Numpad0',
           speed: 'Numpad0',
         },
         facingLeft: false,
