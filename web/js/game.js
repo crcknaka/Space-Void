@@ -569,9 +569,9 @@ class UIManager {
     this.overlay.style.alignItems = 'center';
     this.overlay.style.justifyContent = 'center';
     this.overlay.innerHTML = `
-      <div class="menu menu--modal glass-panel" role="dialog" aria-labelledby="total-stats-title">
+      <div class="menu menu--modal menu--compact glass-panel" role="dialog" aria-labelledby="stats-title">
         <div class="menu__header">
-          <h1 class="menu__title" id="total-stats-title">Total Stats</h1>
+          <h1 class="menu__title" id="stats-title">Stats</h1>
           <p class="menu__subtitle menu__subtitle--muted">Lifetime performance across all missions.</p>
         </div>
         <div class="menu__stats menu__stats--wide">
@@ -734,7 +734,7 @@ class UIManager {
     this.overlay.style.alignItems = 'center';
     this.overlay.style.justifyContent = 'center';
     this.overlay.innerHTML = `
-      <div class="menu menu--modal glass-panel" role="dialog" aria-labelledby="game-over-title">
+      <div class="menu menu--modal menu--compact glass-panel" role="dialog" aria-labelledby="game-over-title">
         <div class="menu__header">
           <h1 class="menu__title" id="game-over-title">Game Over</h1>
           <p class="menu__subtitle menu__subtitle--muted">Mission failed, but data was recovered.</p>
@@ -760,7 +760,7 @@ class UIManager {
         <div class="menu__actions menu__actions--modal">
           <button class="menu__button glass-button glass-button--primary" data-action="retry" data-ui-sound="button">Retry Mission</button>
           <button class="menu__button glass-button glass-button--secondary" data-action="menu" data-ui-sound="button">Main Menu</button>
-          <button class="menu__button glass-button glass-button--secondary" data-action="totals" data-ui-sound="button">Total Stats</button>
+          <button class="menu__button glass-button glass-button--secondary" data-action="totals" data-ui-sound="button">Stats</button>
         </div>
       </div>
     `;

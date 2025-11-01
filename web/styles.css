@@ -428,6 +428,60 @@ body {
   backdrop-filter: blur(22px);
 }
 
+.menu--compact {
+  width: min(320px, 92%);
+  padding: clamp(14px, 4vw, 22px);
+  gap: clamp(12px, 3vw, 18px);
+}
+
+.menu--compact .menu__header {
+  gap: 8px;
+}
+
+.menu--compact .menu__title {
+  font-size: clamp(1.2rem, 4vw, 1.8rem);
+  letter-spacing: 0.12em;
+}
+
+.menu--compact .menu__subtitle {
+  font-size: clamp(0.7rem, 1.8vw, 0.9rem);
+  letter-spacing: 0.24em;
+}
+
+.menu--compact .menu__subtitle--muted {
+  font-size: clamp(0.68rem, 1.6vw, 0.85rem);
+  letter-spacing: 0.18em;
+}
+
+.menu--compact .menu__stats {
+  gap: clamp(8px, 2.5vw, 12px);
+}
+
+.menu--compact .menu__stat {
+  min-width: 110px;
+  padding: clamp(8px, 2.5vw, 12px);
+  border-radius: 12px;
+}
+
+.menu--compact .menu__stat-label {
+  font-size: 0.6rem;
+  letter-spacing: 0.18em;
+}
+
+.menu--compact .menu__stat-value {
+  font-size: clamp(0.85rem, 2.4vw, 1.1rem);
+}
+
+.menu--compact .menu__actions {
+  gap: clamp(10px, 2.5vw, 14px);
+}
+
+.menu--compact .glass-button {
+  min-height: 42px;
+  padding: 10px 16px;
+  font-size: 0.85rem;
+}
+
 .menu__header {
   display: flex;
   flex-direction: column;

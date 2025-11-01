@@ -193,7 +193,7 @@
             </div>
             <div class="menu__footer">
               <button class="menu__button glass-button glass-button--secondary" data-action="settings" data-ui-sound="button">Settings</button>
-              <button class="menu__button glass-button glass-button--secondary" data-action="totals" data-ui-sound="button">Total Stats</button>
+              <button class="menu__button glass-button glass-button--secondary" data-action="totals" data-ui-sound="button">Stats</button>
             </div>
           </div>
         </div>
