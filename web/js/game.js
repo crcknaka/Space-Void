@@ -7,8 +7,10 @@ import {
   Player, Enemy, Boss, Asteroid, PowerUp, Explosion, Spark, Shockwave,
   makeStarLayers, POWERUP_TYPES, POWERUP_IMG,
 } from './entities.js';
-import { makeNebulaField, updateNebulae, drawNebulae } from './fx.js';
+import { makeNebulaField, updateNebulae, drawNebulae, tinted } from './fx.js';
 import { askName, submitScore } from './lb.js';
+
+const vibrate = (ms) => { try { navigator.vibrate?.(ms); } catch {} };
 
 const P1_CONTROLS = {
   up: 'KeyW', down: 'KeyS', left: 'KeyA', right: 'KeyD',
@@ -48,6 +50,16 @@ export class GameState {
     this.starLayers = makeStarLayers();
     this.nebulae = makeNebulaField(3);
     this.lb = { status: 'idle' }; // leaderboard submission state
+    this.combo = 0;
+    this.comboEnd = 0;
+    this.mult = 1;
+    this.multPulse = 0;
+    this.spawnHoldUntil = 0;
+    this.bossWarnStart = 0;
+    this.bgZoom = 1;
+    this.bgZoomTarget = 1;
+    // cyan-tinted shield powerup sprite
+    this.shieldImg = tinted(this.app.images.powerup, 'rgba(0,210,255,0.55)', 'powerup_shield');
 
     this.enemyInterval = 2000;
     this.asteroidInterval = 5000;
@@ -128,9 +140,13 @@ export class GameState {
     for (let i = 0; i < count; i++) this.effects.push(new Spark(x, y, this.time, dir));
   }
 
+  powerupImage(type) {
+    return type === 'shield' ? this.shieldImg : this.app.images[POWERUP_IMG[type]];
+  }
+
   dropPowerup(x, y) {
     const type = POWERUP_TYPES[randInt(0, POWERUP_TYPES.length - 1)];
-    const pu = new PowerUp(this.app.images[POWERUP_IMG[type]], type);
+    const pu = new PowerUp(this.powerupImage(type), type);
     pu.x = x;
     pu.baseY = clamp(y, 40, H - 40);
     pu.y = pu.baseY;
@@ -149,8 +165,40 @@ export class GameState {
 
   killPlayer(p) {
     if (this.app.debugGod) return;
+    if (this.time < (p.invulnUntil || 0)) return;
+    this.resetCombo();
+    if (p.shield) {
+      // shield absorbs the hit
+      p.shield = false;
+      p.invulnUntil = this.time + 1200;
+      this.spawnSparks(p.x, p.y, 16);
+      audio.playSynth('shield_pop');
+      vibrate(50);
+      return;
+    }
     this.explode(p.x, p.y, true, 1.6);
+    vibrate(140);
     p.alive = false;
+    p.lives -= 1;
+    if (p.lives > 0) p.respawnAt = this.time + 1500;
+  }
+
+  // combo: consecutive kills raise the score multiplier (up to x5); resets on hit or 4s idle
+  addKill(points) {
+    this.combo += 1;
+    this.comboEnd = this.time + 4000;
+    const tier = Math.min(5, 1 + Math.floor(this.combo / 5));
+    if (tier > this.mult) {
+      this.mult = tier;
+      this.multPulse = this.time;
+      audio.playSynth('combo');
+    }
+    this.score += points * this.mult;
+  }
+
+  resetCombo() {
+    this.combo = 0;
+    this.mult = 1;
   }
 
   levelUp(x, y) {
@@ -161,10 +209,16 @@ export class GameState {
     this.enemyInterval = Math.max(500, this.enemyInterval - 200);
     this.asteroidInterval = Math.max(2000, this.asteroidInterval - 500);
     for (const p of this.players()) p.rockets += 3;
-    // celebration: shockwave from the boss + LEVEL N banner
+    // breather: no new spawns for a few seconds
+    this.spawnHoldUntil = this.time + 4000;
+    // fresh nebula palette + planet zoom step for the new level
+    this.nebulae = makeNebulaField(3, (170 + (this.level - 1) * 47) % 360);
+    this.bgZoomTarget = 1 + ((this.level - 1) % 4) * 0.05;
+    // celebration: shockwave from the boss + LEVEL N banner + fanfare
     this.effects.push(new Shockwave(x ?? W / 2, y ?? H / 2, this.time));
     this.levelBanner = { level: this.level, start: this.time };
-    audio.play('powerup', 0.7);
+    audio.playSynth('fanfare');
+    vibrate(80);
   }
 
   update(dt) {
@@ -192,40 +246,64 @@ export class GameState {
 
     this.time += dt;
 
-    // --- spawn timers (pygame USEREVENT timers) ---
+    // --- spawn timers (pygame USEREVENT timers); paused during the post-boss breather ---
+    const spawningAllowed = this.time >= this.spawnHoldUntil;
     this.enemyAcc += dt;
-    if (this.enemyAcc >= this.enemyInterval) {
+    if (this.enemyAcc >= this.enemyInterval && spawningAllowed) {
       this.enemyAcc = 0;
       const chance = Math.min(10 + (this.level - 1) * 5, 100);
       const moveRandomly = randInt(1, 100) <= chance;
       this.enemies.push(new Enemy(this.app.images, this.level, this.pickEnemyType(), this.time, moveRandomly));
     }
     this.powerupAcc += dt;
-    if (this.powerupAcc >= this.powerupInterval) {
+    if (this.powerupAcc >= this.powerupInterval && spawningAllowed) {
       this.powerupAcc = 0;
       const type = POWERUP_TYPES[randInt(0, POWERUP_TYPES.length - 1)];
-      this.powerups.push(new PowerUp(this.app.images[POWERUP_IMG[type]], type));
+      this.powerups.push(new PowerUp(this.powerupImage(type), type));
     }
     this.asteroidAcc += dt;
-    if (this.asteroidAcc >= this.asteroidInterval) {
+    if (this.asteroidAcc >= this.asteroidInterval && spawningAllowed) {
       this.asteroidAcc = 0;
       this.asteroids.push(new Asteroid(this.app.images.asteroid, 'large'));
     }
 
-    // --- boss spawn ---
+    // --- boss spawn: WARNING klaxon first, then the boss flies in ---
     if (this.score >= this.nextBossScore && !this.bossSpawned) {
-      this.enemies.push(new Boss(this.app.images, this.level, this.time));
-      this.bossSpawned = true;
-      for (const p of this.players()) p.rockets += 3;
+      if (!this.bossWarnStart) {
+        this.bossWarnStart = this.time;
+        audio.playSynth('warning');
+        vibrate([60, 90, 60]);
+      } else if (this.time - this.bossWarnStart > 2500) {
+        this.bossWarnStart = 0;
+        this.enemies.push(new Boss(this.app.images, this.level, this.time));
+        this.bossSpawned = true;
+        for (const p of this.players()) p.rockets += 3;
+      }
     }
 
-    // --- background scroll ---
+    // --- respawns (lives system) ---
+    for (const p of this.players()) {
+      if (!p.alive && p.lives > 0 && p.respawnAt && this.time > p.respawnAt) {
+        p.alive = true;
+        p.respawnAt = 0;
+        p.x = 100;
+        p.y = p === this.player2 ? H / 3 : H / 2;
+        p.invulnUntil = this.time + 2500;
+        audio.playSynth('respawn');
+      }
+    }
+
+    // --- background scroll + per-level parallax zoom ---
+    this.bgZoom += (this.bgZoomTarget - this.bgZoom) * Math.min(1, 0.01 * this.k);
     const bg = this.app.images.game_background;
-    this.bgW = bg.width * (H / bg.height); // cover height, keep aspect
+    this.bgW = bg.width * ((H * this.bgZoom) / bg.height); // cover height, keep aspect
     this.bgX -= 0.1 * this.speedMul * this.k;
     if (this.bgX <= -this.bgW) this.bgX = 0;
     updateNebulae(this.nebulae, this.k, this.speedMul);
     this.shake *= Math.pow(0.88, this.k);
+
+    // combo timer expiry
+    if (this.combo > 0 && this.time > this.comboEnd) this.resetCombo();
 
     // --- updates ---
     for (const p of this.players()) p.update(this);
@@ -257,8 +335,8 @@ export class GameState {
     this.powerups = this.powerups.filter((s) => !s.dead);
     this.effects = this.effects.filter((s) => !s.dead);
 
-    // --- game over check ---
-    if (this.players().every((p) => !p.alive)) {
+    // --- game over check: all players dead with no lives left ---
+    if (this.players().every((p) => !p.alive && p.lives <= 0)) {
       this.over = true;
       this.overAlpha = 0;
       this.app.saveHigh(this.score);
@@ -300,6 +378,7 @@ export class GameState {
           if (b.dead || !overlap(enemy, b, enemy.isBoss ? 0.78 : 0.9)) continue;
           b.dead = true;
           this.spawnSparks(b.x, b.y, isRocket ? 16 : 8);
+          if (enemy.isBoss && enemy.shieldUntil > this.time) continue; // shield phase absorbs the hit
           const killed = enemy.takeDamage(dmg);
           if (!killed) {
             // survived the hit: flash + tiny kick, no explosion
@@ -307,7 +386,7 @@ export class GameState {
             audio.play('explosion', isRocket ? 0.3 : 0.12);
             continue;
           }
-          this.score += enemy.points + (isRocket ? 10 : 0);
+          this.addKill(enemy.points + (isRocket ? 10 : 0));
           if (enemy.isBoss) {
             enemy.dead = true;
             this.explode(enemy.x, enemy.y, true, 2.5);
@@ -338,7 +417,7 @@ export class GameState {
         b.dead = true;
         a.dead = true;
         this.explode(a.x, a.y);
-        this.score += 5;
+        this.addKill(5);
         this.asteroids.push(...a.breakApart());
         break;
       }
@@ -352,7 +431,7 @@ export class GameState {
         r.dead = true;
         a.dead = true;
         this.explode(a.x, a.y);
-        this.score += 10;
+        this.addKill(10);
         break;
       }
     }
@@ -414,6 +493,9 @@ export class GameState {
         } else if (pu.type === 'spread') {
           p.spread += 1;
           audio.play('powerup', 0.6);
+        } else if (pu.type === 'shield') {
+          p.shield = true;
+          audio.play('powerup', 0.6);
         }
       }
     }
@@ -460,11 +542,13 @@ export class GameState {
       g.translate((Math.random() - 0.5) * this.shake, (Math.random() - 0.5) * this.shake);
     }
 
-    // scrolling background (aspect-preserving cover)
+    // scrolling background (aspect-preserving cover, per-level zoom)
     const bg = images.game_background;
-    const bgW = this.bgW || bg.width * (H / bg.height);
-    g.drawImage(bg, this.bgX, 0, bgW, H);
-    g.drawImage(bg, this.bgX + bgW, 0, bgW, H);
+    const bgH = H * (this.bgZoom || 1);
+    const bgW = this.bgW || bg.width * (bgH / bg.height);
+    const bgY = -(bgH - H) / 2;
+    g.drawImage(bg, this.bgX, bgY, bgW, bgH);
+    g.drawImage(bg, this.bgX + bgW, bgY, bgW, bgH);
 
     drawNebulae(g, this.nebulae);
     for (const layer of this.starLayers) for (const s of layer) s.draw(g);
@@ -476,7 +560,7 @@ export class GameState {
     for (const b of this.enemyBullets) b.draw(g);
     for (const fx of this.effects) fx.draw(g, this);
     for (const r of this.rockets) r.draw(g);
-    for (const p of this.players()) p.draw(g);
+    for (const p of this.players()) p.draw(g, this);
     g.restore();
 
     // slow-motion tint
@@ -505,16 +589,44 @@ export class GameState {
         g.globalCompositeOperation = prevOp;
         drawText(g, `LEVEL ${this.levelBanner.level}`, W / 2, H / 2 - 180, size, 'rgb(255,215,90)');
         g.globalAlpha = alpha * 0.8;
-        drawText(g, 'BOSS DEFEATED', W / 2, H / 2 - 180 + size * 0.75, 18, 'rgb(200,200,200)');
+        drawText(g, 'WAVE CLEARED', W / 2, H / 2 - 180 + size * 0.75, 18, 'rgb(200,200,200)');
         g.globalAlpha = 1;
       }
     }
 
+    // boss WARNING banner
+    if (this.bossWarnStart) {
+      const blink = 0.5 + 0.5 * Math.sin(this.time / 90);
+      g.fillStyle = `rgba(255,0,0,${0.08 * blink})`;
+      g.fillRect(0, 0, W, H);
+      g.globalAlpha = 0.55 + 0.45 * blink;
+      drawText(g, '!! WARNING !!', W / 2, H / 2 - 220, 46, 'rgb(255,60,60)');
+      drawText(g, 'BOSS APPROACHING', W / 2, H / 2 - 178, 20, 'rgb(255,150,150)');
+      g.globalAlpha = 1;
+    }
+
     // HUD
     drawText(g, `Score: ${this.score}`, 10, 24, 26, '#fff', 'left');
+    if (this.mult > 1) {
+      const pulse = this.time - this.multPulse < 400 ? 1.4 - (this.time - this.multPulse) / 1000 : 1;
+      drawText(g, `x${this.mult}`, 175, 24, Math.round(24 * pulse), 'rgb(255,210,60)', 'left');
+      // combo time bar
+      const frac = Math.max(0, (this.comboEnd - this.time) / 4000);
+      g.fillStyle = 'rgba(255,210,60,0.8)';
+      g.fillRect(175, 38, 46 * frac, 3);
+    }
     drawText(g, `Level: ${this.level}`, W - 10, 24, 26, '#fff', 'right');
-    drawText(g, `P1 Rockets: ${this.player1.rockets}`, 10, 58, 26, '#fff', 'left');
-    if (this.player2) drawText(g, `P2 Rockets: ${this.player2.rockets}`, 10, 92, 26, '#fff', 'left');
+    // lives + rockets per player
+    const p1 = this.player1;
+    drawText(g, 'P1', 10, 58, 22, '#fff', 'left');
+    drawText(g, '♥'.repeat(Math.max(0, p1.lives)), 48, 58, 22, 'rgb(255,80,90)', 'left');
+    drawText(g, `Rockets: ${p1.rockets}`, 128, 58, 22, '#fff', 'left');
+    if (this.player2) {
+      const p2 = this.player2;
+      drawText(g, 'P2', 10, 90, 22, '#fff', 'left');
+      drawText(g, '♥'.repeat(Math.max(0, p2.lives)), 48, 90, 22, 'rgb(255,80,90)', 'left');
+      drawText(g, `Rockets: ${p2.rockets}`, 128, 90, 22, '#fff', 'left');
+    }
     if (this.speedMul < 1) drawText(g, 'SLOW-MO', W / 2, 24, 24, 'rgb(120,200,255)');
 
     // touch rocket button

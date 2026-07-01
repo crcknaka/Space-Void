@@ -34,6 +34,49 @@ export function play(name, volume = 0.6) {
   src.start();
 }
 
+/* ------------------------------ synth jingles ------------------------------ */
+// Event sounds generated with oscillators — no audio files needed.
+
+function note(freq, when, dur, type = 'triangle', vol = 0.2, slide = 0) {
+  const osc = actx.createOscillator();
+  const gain = actx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, when);
+  if (slide) osc.frequency.exponentialRampToValueAtTime(Math.max(30, freq + slide), when + dur);
+  gain.gain.setValueAtTime(0.0001, when);
+  gain.gain.linearRampToValueAtTime(vol, when + 0.012);
+  gain.gain.exponentialRampToValueAtTime(0.001, when + dur);
+  osc.connect(gain).connect(actx.destination);
+  osc.start(when);
+  osc.stop(when + dur + 0.05);
+}
+
+export function playSynth(name) {
+  if (actx.state !== 'running') return;
+  const t = actx.currentTime;
+  if (name === 'fanfare') {
+    [523, 659, 784, 1046].forEach((f, i) => note(f, t + i * 0.12, 0.25, 'triangle', 0.22));
+    note(1046, t + 0.48, 0.55, 'triangle', 0.16);
+  } else if (name === 'warning') {
+    for (let i = 0; i < 3; i++) note(520, t + i * 0.5, 0.42, 'sawtooth', 0.11, -260);
+  } else if (name === 'combo') {
+    note(700, t, 0.08, 'square', 0.14);
+    note(1050, t + 0.07, 0.1, 'square', 0.14);
+  } else if (name === 'shield_pop') {
+    note(900, t, 0.28, 'sine', 0.26, -700);
+  } else if (name === 'respawn') {
+    note(300, t, 0.35, 'sine', 0.2, 550);
+  } else if (name === 'siren') {
+    // falling-wreck wail
+    note(880, t, 1.3, 'sawtooth', 0.07, -640);
+    note(860, t + 0.06, 1.2, 'triangle', 0.05, -600);
+  } else if (name === 'laser_charge') {
+    note(180, t, 0.85, 'sawtooth', 0.12, 500);
+  } else if (name === 'laser_fire') {
+    note(950, t, 0.7, 'sawtooth', 0.16, -500);
+  }
+}
+
 /* ---------------------------------- music ---------------------------------- */
 
 const musicEls = {};

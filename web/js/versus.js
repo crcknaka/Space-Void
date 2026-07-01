@@ -212,8 +212,8 @@ export class VersusState {
     for (const b of this.bullets1) b.draw(g);
     for (const b of this.bullets2) b.draw(g);
     for (const fx of this.effects) fx.draw(g, this);
-    this.player1.draw(g);
-    this.player2.draw(g);
+    this.player1.draw(g, this);
+    this.player2.draw(g, this);
 
     drawText(g, `P1 Score: ${this.score1}`, 10, 24, 26, '#fff', 'left');
     drawText(g, `P2 Score: ${this.score2}`, W - 10, 24, 26, '#fff', 'right');

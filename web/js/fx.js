@@ -50,11 +50,11 @@ export function tinted(img, color, key) {
 
 /* ------------------------------ procedural nebulae ------------------------------ */
 
-export function makeNebula(size = 512) {
+export function makeNebula(size = 512, baseHue = null) {
   const c = document.createElement('canvas');
   c.width = c.height = size;
   const g = c.getContext('2d');
-  const hueBase = 170 + Math.random() * 190; // teal..blue..purple..pink
+  const hueBase = baseHue ?? 170 + Math.random() * 190; // teal..blue..purple..pink
   const clusters = 2 + Math.floor(Math.random() * 3);
   for (let cl = 0; cl < clusters; cl++) {
     const ccx = size * (0.25 + Math.random() * 0.5);
@@ -76,9 +76,9 @@ export function makeNebula(size = 512) {
   return c;
 }
 
-export function makeNebulaField(count = 3) {
+export function makeNebulaField(count = 3, baseHue = null) {
   return Array.from({ length: count }, () => ({
-    img: makeNebula(),
+    img: makeNebula(512, baseHue == null ? null : baseHue + (Math.random() - 0.5) * 50),
     s: 320 + Math.random() * 520,
     x: Math.random() * (W + 800) - 200,
     y: Math.random() * H,

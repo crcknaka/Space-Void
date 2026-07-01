@@ -152,6 +152,38 @@ export class RocketTrailParticle {
   }
 }
 
+// Cyan streak behind a boosting player ship
+export class BoostParticle {
+  constructor(x, y, time) {
+    this.x = x; this.y = y + rand(-7, 7);
+    this.vx = rand(-1.6, -0.8);
+    this.vy = rand(-0.3, 0.3);
+    this.size = rand(1.5, 3);
+    this.life = 320;
+    this.spawn = time;
+    this.alpha = 0.8;
+    this.dead = false;
+  }
+  update(world) {
+    const age = world.time - this.spawn;
+    if (age > this.life) { this.dead = true; return; }
+    this.x += this.vx * world.k;
+    this.y += this.vy * world.k;
+    this.alpha = 0.8 * (1 - age / this.life);
+  }
+  draw(g) {
+    const prev = g.globalCompositeOperation;
+    g.globalCompositeOperation = 'lighter';
+    g.globalAlpha = this.alpha;
+    g.fillStyle = 'rgb(120,220,255)';
+    g.beginPath();
+    g.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+    g.fill();
+    g.globalAlpha = 1;
+    g.globalCompositeOperation = prev;
+  }
+}
+
 export class Rocket {
   constructor(x, y, img) {
     this.img = img;
@@ -228,6 +260,10 @@ export class Player {
     this.thrLast = 0;
     this.tilt = 0;           // visual tilt when moving vertically
     this.padIndex = opts.padIndex ?? null; // gamepad slot (0 = P1, 1 = P2)
+    this.lives = 3;
+    this.shield = false;      // absorbs one hit
+    this.invulnUntil = 0;     // respawn / shield-pop grace period
+    this.respawnAt = 0;
   }
 
   pad() {
@@ -254,6 +290,14 @@ export class Player {
 
     this.x = clamp(this.x, this.w / 2, W - this.w / 2);
     this.y = clamp(this.y, this.h / 2, H - this.h / 2);
+
+    // boost trail
+    this.boosting = fast;
+    if (fast && world.effects && world.time - (this.lastTrail || 0) > 24) {
+      this.lastTrail = world.time;
+      const backX = this.facingLeft ? this.x + this.w / 2 + 8 : this.x - this.w / 2 - 8;
+      world.effects.push(new BoostParticle(backX, this.y, world.time));
+    }
 
     // smooth visual tilt toward movement direction
     const targetTilt = dy * 0.14 * (this.facingLeft ? -1 : 1);
@@ -299,10 +343,14 @@ export class Player {
     this.powerEnd = world.time + 5000;
   }
 
-  draw(g) {
+  draw(g, world) {
     if (!this.alive) return;
+    const t = world?.time ?? 0;
+    const invuln = this.invulnUntil && t < this.invulnUntil;
     const thr = this.thrusters[this.thrFrame];
     const side = this.facingLeft ? 1 : -1;
+
+    if (invuln) g.globalAlpha = 0.45 + 0.25 * Math.sin(t / 55); // blink during grace period
 
     g.save();
     g.translate(this.x, this.y);
@@ -319,6 +367,25 @@ export class Player {
     if (this.shipFlipped) g.scale(-1, 1);
     g.drawImage(this.img, -this.w / 2, -this.h / 2, this.w, this.h);
     g.restore();
+    g.globalAlpha = 1;
+
+    // shield bubble
+    if (this.shield) {
+      const prev = g.globalCompositeOperation;
+      g.globalCompositeOperation = 'lighter';
+      const r = 36 + 2 * Math.sin(t / 140);
+      g.globalAlpha = 0.55;
+      g.lineWidth = 2.5;
+      g.strokeStyle = 'rgb(80,220,255)';
+      g.beginPath();
+      g.arc(this.x, this.y, r, 0, Math.PI * 2);
+      g.stroke();
+      g.globalAlpha = 0.12;
+      g.fillStyle = 'rgb(80,220,255)';
+      g.fill();
+      g.globalAlpha = 1;
+      g.globalCompositeOperation = prev;
+    }
   }
 }
 
@@ -483,6 +550,7 @@ export class Enemy {
     this.spinAngle = 0;
     this.lastSmoke = 0;
     this.flash = 1;
+    audio.playSynth('siren'); // dying wail
   }
 
   update(world) {
@@ -583,12 +651,18 @@ export class Enemy {
   }
 }
 
+// Boss tint palette cycles with level — every boss looks different
+const BOSS_TINTS = [null, 'rgba(255,70,70,0.35)', 'rgba(90,255,140,0.32)', 'rgba(110,160,255,0.35)', 'rgba(255,150,240,0.35)'];
+
 export class Boss {
   constructor(images, level, time) {
-    this.img = images.boss;
+    this.images = images; // kept for minion spawning
+    const tint = BOSS_TINTS[(level - 1) % BOSS_TINTS.length];
+    this.img = tint ? tinted(images.boss, tint, `boss_tint_${(level - 1) % BOSS_TINTS.length}`) : images.boss;
     this.whiteImg = tinted(images.boss, 'rgba(255,255,255,1)', 'boss_white');
     this.bulletImg = images.enemy_bullet;
-    this.w = 150; this.h = 150;
+    const size = Math.min(210, 150 * (1 + (level - 1) * 0.06)); // bosses grow with level
+    this.w = size; this.h = size;
     this.x = W + this.w / 2;
     this.y = H / 2;
     this.vx = -1 - (level - 1) * 0.5;
@@ -599,11 +673,14 @@ export class Boss {
     this.queue = [];       // scheduled shots of the current volley
     this.patIdx = 0;
     this.patterns = ['fan'];
-    if (level >= 2) this.patterns.push('aimed');
-    if (level >= 3) this.patterns.push('spiral');
+    if (level >= 2) this.patterns.push('aimed', 'minions');
+    if (level >= 3) this.patterns.push('spiral', 'laser');
     if (level >= 4) this.patterns.push('ring');
     this.health = 5 + (level - 1) * 5;
     this.maxHealth = this.health;
+    this.shieldUntil = 0;                                  // invulnerable phase
+    this.shieldBreaks = level >= 4 ? [0.66, 0.33] : [];    // health fractions that trigger shields
+    this.laser = null;     // {phase: 'telegraph'|'fire', until, y}
     this.flash = 0;
     this.points = 0;       // levelUp() awards the +50, like game.py
     this.dead = false;
@@ -615,6 +692,16 @@ export class Boss {
     this.health -= dmg;
     this.flash = 1;
     return this.health <= 0;
+  }
+
+  nearestPlayer(world) {
+    let target = null, minD = Infinity;
+    for (const p of world.players()) {
+      if (!p.alive) continue;
+      const d = Math.hypot(p.x - this.x, p.y - this.y);
+      if (d < minD) { minD = d; target = p; }
+    }
+    return target;
   }
 
   buildVolley(world) {
@@ -631,6 +718,18 @@ export class Boss {
       for (let i = 0; i < 16; i++) shots.push({ t: t0 + i * 90, angle: 115 + i * 17 });
     } else if (pat === 'ring') {
       for (let i = 0; i < 14; i++) shots.push({ t: t0, angle: (360 / 14) * i });
+    } else if (pat === 'minions') {
+      // release escort fighters from the hangar
+      for (let i = -1; i <= 1; i++) {
+        const e = new Enemy(this.images, Math.max(1, this.level - 1), 'basic', world.time);
+        e.x = this.x - this.w / 2;
+        e.y = clamp(this.y + i * 80, 30, H - 30);
+        world.enemies.push(e);
+      }
+    } else if (pat === 'laser') {
+      // telegraph first, then the beam fires along the frozen line
+      this.laser = { phase: 'telegraph', until: t0 + 900, y: this.y };
+      audio.playSynth('laser_charge');
     }
     return shots;
   }
@@ -638,12 +737,7 @@ export class Boss {
   fire(shot, world) {
     let deg = shot.angle;
     if (deg === 'aim') {
-      let target = null, minD = Infinity;
-      for (const p of world.players()) {
-        if (!p.alive) continue;
-        const d = Math.hypot(p.x - this.x, p.y - this.y);
-        if (d < minD) { minD = d; target = p; }
-      }
+      const target = this.nearestPlayer(world);
       if (!target) return;
       deg = (Math.atan2(target.y - this.y, target.x - this.x) * 180) / Math.PI;
     }
@@ -657,14 +751,42 @@ export class Boss {
       this.vx = 0;
       this.parked = true;
       this.floatStart = world.time; // sine starts at phase 0 → no teleport on park
+      this.floatBase = 0;
     }
-    if (this.parked) {
+    if (this.parked && !this.laser) {
       // gentle vertical float so patterns sweep the field
       const amp = Math.min(180, H / 2 - this.h / 2 - 30);
-      this.y = H / 2 + Math.sin((world.time - this.floatStart) / 1400) * amp;
+      this.y = H / 2 + Math.sin((world.time - this.floatStart - this.floatBase) / 1400) * amp;
     }
 
-    if (!this.queue.length && world.time - this.lastShot > this.shootDelay) {
+    // shield phases at health thresholds
+    if (this.shieldBreaks.length && this.health / this.maxHealth <= this.shieldBreaks[0]) {
+      this.shieldBreaks.shift();
+      this.shieldUntil = world.time + 2500;
+    }
+
+    // laser state machine
+    if (this.laser) {
+      if (this.laser.phase === 'telegraph' && world.time >= this.laser.until) {
+        this.laser = { phase: 'fire', until: world.time + 700, y: this.laser.y };
+        audio.playSynth('laser_fire');
+      } else if (this.laser.phase === 'fire') {
+        // beam kills players crossing it
+        for (const p of world.players()) {
+          if (p.alive && p.x < this.x && Math.abs(p.y - this.laser.y) < 22) {
+            world.killPlayer(p);
+          }
+        }
+        if (world.time >= this.laser.until) {
+          // resume floating from the frozen position without a jump
+          this.floatStart = world.time;
+          this.floatBase = -Math.asin(clamp((this.y - H / 2) / Math.max(1, Math.min(180, H / 2 - this.h / 2 - 30)), -1, 1)) * 1400;
+          this.laser = null;
+        }
+      }
+    }
+
+    if (!this.laser && !this.queue.length && world.time - this.lastShot > this.shootDelay) {
       this.lastShot = world.time;
       this.queue = this.buildVolley(world);
     }
@@ -674,19 +796,72 @@ export class Boss {
     if (this.flash > 0) this.flash = Math.max(0, this.flash - 0.07 * world.k);
   }
 
-  draw(g) {
+  draw(g, world) {
+    const t = world?.time ?? 0;
+
+    // laser: telegraph line, then the beam
+    if (this.laser) {
+      const y = this.laser.y;
+      const x0 = this.x - this.w / 2 + 10;
+      const prev = g.globalCompositeOperation;
+      g.globalCompositeOperation = 'lighter';
+      if (this.laser.phase === 'telegraph') {
+        g.globalAlpha = 0.35 + 0.3 * Math.sin(t / 60);
+        g.strokeStyle = 'rgb(255,60,60)';
+        g.lineWidth = 2;
+        g.setLineDash([10, 8]);
+        g.beginPath();
+        g.moveTo(x0, y);
+        g.lineTo(0, y);
+        g.stroke();
+        g.setLineDash([]);
+      } else {
+        const flick = 0.8 + 0.2 * Math.sin(t / 25);
+        g.globalAlpha = 0.9 * flick;
+        const grad = g.createLinearGradient(0, y - 16, 0, y + 16);
+        grad.addColorStop(0, 'rgba(255,60,60,0)');
+        grad.addColorStop(0.5, 'rgba(255,180,160,0.95)');
+        grad.addColorStop(1, 'rgba(255,60,60,0)');
+        g.fillStyle = grad;
+        g.fillRect(0, y - 16, x0, 32);
+        g.globalAlpha = 0.9;
+        g.fillStyle = '#fff';
+        g.fillRect(0, y - 3, x0, 6);
+      }
+      g.globalAlpha = 1;
+      g.globalCompositeOperation = prev;
+    }
+
     g.drawImage(this.img, this.x - this.w / 2, this.y - this.h / 2, this.w, this.h);
     if (this.flash > 0.05) {
       g.globalAlpha = this.flash * 0.75;
       g.drawImage(this.whiteImg, this.x - this.w / 2, this.y - this.h / 2, this.w, this.h);
       g.globalAlpha = 1;
     }
+
+    // shield bubble while invulnerable
+    if (this.shieldUntil > t) {
+      const prev = g.globalCompositeOperation;
+      g.globalCompositeOperation = 'lighter';
+      g.globalAlpha = 0.5 + 0.2 * Math.sin(t / 90);
+      g.lineWidth = 3;
+      g.strokeStyle = 'rgb(90,220,255)';
+      g.beginPath();
+      g.arc(this.x, this.y, this.w / 2 + 14, 0, Math.PI * 2);
+      g.stroke();
+      g.globalAlpha = 0.1;
+      g.fillStyle = 'rgb(90,220,255)';
+      g.fill();
+      g.globalAlpha = 1;
+      g.globalCompositeOperation = prev;
+    }
+
     // health bar
     const bw = 120, bh = 8;
     const px = this.x - bw / 2, py = this.y - this.h / 2 - 14;
     g.fillStyle = 'rgba(255,255,255,0.25)';
     g.fillRect(px, py, bw, bh);
-    g.fillStyle = this.flash > 0.05 ? '#fff' : '#f33';
+    g.fillStyle = this.shieldUntil > t ? 'rgb(90,220,255)' : this.flash > 0.05 ? '#fff' : '#f33';
     g.fillRect(px, py, (bw * Math.max(0, this.health)) / this.maxHealth, bh);
   }
 }
@@ -746,13 +921,14 @@ export class Asteroid {
 
 /* -------------------------------- power-ups -------------------------------- */
 
-export const POWERUP_TYPES = ['shooting', 'slow_motion', 'kill_all', 'rocket', 'spread'];
+export const POWERUP_TYPES = ['shooting', 'slow_motion', 'kill_all', 'rocket', 'spread', 'shield'];
 export const POWERUP_IMG = {
   shooting: 'powerup',
   slow_motion: 'slow_motion_powerup',
   kill_all: 'kill_all_powerup',
   rocket: 'rocket_powerup',
   spread: 'spread_powerup',
+  shield: 'powerup', // base image, tinted cyan at load
 };
 
 export class PowerUp {
