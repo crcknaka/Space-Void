@@ -4,9 +4,11 @@ import * as input from './input.js';
 import * as audio from './audio.js';
 import { Button, ButtonGroup, drawText } from './ui.js';
 import {
-  Player, Enemy, Boss, Asteroid, PowerUp, Explosion,
+  Player, Enemy, Boss, Asteroid, PowerUp, Explosion, Spark, Shockwave,
   makeStarLayers, POWERUP_TYPES, POWERUP_IMG,
 } from './entities.js';
+import { makeNebulaField, updateNebulae, drawNebulae } from './fx.js';
+import { askName, submitScore } from './lb.js';
 
 const P1_CONTROLS = {
   up: 'KeyW', down: 'KeyS', left: 'KeyA', right: 'KeyD',
@@ -42,8 +44,10 @@ export class GameState {
     this.enemies = [];       // includes boss
     this.asteroids = [];
     this.powerups = [];
-    this.effects = [];       // explosions + rocket trails
+    this.effects = [];       // explosions + rocket trails + sparks
     this.starLayers = makeStarLayers();
+    this.nebulae = makeNebulaField(3);
+    this.lb = { status: 'idle' }; // leaderboard submission state
 
     this.enemyInterval = 2000;
     this.asteroidInterval = 5000;
@@ -64,6 +68,7 @@ export class GameState {
       img: images.player1_ship,
       thrusters: images.thrusters.player1,
       controls: P1_CONTROLS,
+      padIndex: 0,
     });
     this.player1.x = 100;
     this.player1.y = this.coop ? H / 2 : H / 2;
@@ -74,6 +79,7 @@ export class GameState {
         img: images.player2_ship,
         thrusters: images.thrusters.player2,
         controls: P2_CONTROLS,
+        padIndex: 1,
       });
       this.player2.x = 100;
       this.player2.y = H / 3;
@@ -82,7 +88,7 @@ export class GameState {
     // touch state (mobile: drag to move, on-screen rocket button)
     this.drag = null;
 
-    this.rocketTargets = () => this.enemies.concat(this.asteroids);
+    this.rocketTargets = () => this.enemies.filter((e) => !e.dying).concat(this.asteroids);
   }
 
   rocketBtn() {
@@ -105,8 +111,30 @@ export class GameState {
 
   onResize() {
     this.starLayers = makeStarLayers();
+    this.nebulae = makeNebulaField(3);
     if (this.pauseMenu) this.pauseMenu = this.buildPauseMenu();
     if (this.overMenu) this.overMenu = this.buildOverMenu();
+  }
+
+  pickEnemyType() {
+    const r = Math.random() * 100;
+    if (this.level >= 4 && r < 12) return 'tank';
+    if (this.level >= 3 && r >= 12 && r < 32) return 'hunter';
+    if (this.level >= 2 && r >= 32 && r < 57) return 'weaver';
+    return 'basic';
+  }
+
+  spawnSparks(x, y, count, dir = Math.PI) {
+    for (let i = 0; i < count; i++) this.effects.push(new Spark(x, y, this.time, dir));
+  }
+
+  dropPowerup(x, y) {
+    const type = POWERUP_TYPES[randInt(0, POWERUP_TYPES.length - 1)];
+    const pu = new PowerUp(this.app.images[POWERUP_IMG[type]], type);
+    pu.x = x;
+    pu.baseY = clamp(y, 40, H - 40);
+    pu.y = pu.baseY;
+    this.powerups.push(pu);
   }
 
   players() {
@@ -120,11 +148,12 @@ export class GameState {
   }
 
   killPlayer(p) {
+    if (this.app.debugGod) return;
     this.explode(p.x, p.y, true, 1.6);
     p.alive = false;
   }
 
-  levelUp() {
+  levelUp(x, y) {
     this.score += 50;
     this.bossSpawned = false;
     this.level += 1;
@@ -132,6 +161,10 @@ export class GameState {
     this.enemyInterval = Math.max(500, this.enemyInterval - 200);
     this.asteroidInterval = Math.max(2000, this.asteroidInterval - 500);
     for (const p of this.players()) p.rockets += 3;
+    // celebration: shockwave from the boss + LEVEL N banner
+    this.effects.push(new Shockwave(x ?? W / 2, y ?? H / 2, this.time));
+    this.levelBanner = { level: this.level, start: this.time };
+    audio.play('powerup', 0.7);
   }
 
   update(dt) {
@@ -165,7 +198,7 @@ export class GameState {
       this.enemyAcc = 0;
       const chance = Math.min(10 + (this.level - 1) * 5, 100);
       const moveRandomly = randInt(1, 100) <= chance;
-      this.enemies.push(new Enemy(this.app.images, this.level, moveRandomly, this.time));
+      this.enemies.push(new Enemy(this.app.images, this.level, this.pickEnemyType(), this.time, moveRandomly));
     }
     this.powerupAcc += dt;
     if (this.powerupAcc >= this.powerupInterval) {
@@ -191,6 +224,7 @@ export class GameState {
     this.bgW = bg.width * (H / bg.height); // cover height, keep aspect
     this.bgX -= 0.1 * this.speedMul * this.k;
     if (this.bgX <= -this.bgW) this.bgX = 0;
+    updateNebulae(this.nebulae, this.k, this.speedMul);
     this.shake *= Math.pow(0.88, this.k);
 
     // --- updates ---
@@ -235,47 +269,64 @@ export class GameState {
     if (!input.isTouch) return;
     const p = this.player1;
     if (!p.alive) return;
-    const pt = input.pointer;
-    if (pt.justDown) {
-      const btn = this.rocketBtn();
-      const d = Math.hypot(pt.x - btn.x, pt.y - btn.y);
-      if (d <= btn.r) {
+    const btn = this.rocketBtn();
+    // multi-touch: any new finger on the rocket button fires; the first other
+    // finger owns the movement drag — they don't interfere with each other
+    for (const [id, pt] of input.pointers) {
+      if (!pt.justDown) continue;
+      if (Math.hypot(pt.x - btn.x, pt.y - btn.y) <= btn.r) {
         p.fireRocket(this);
-        return;
+      } else if (!this.drag) {
+        this.drag = { id, px: pt.x, py: pt.y, ox: p.x, oy: p.y };
       }
-      this.drag = { px: pt.x, py: pt.y, ox: p.x, oy: p.y };
     }
-    if (pt.down && this.drag) {
-      p.x = clamp(this.drag.ox + (pt.x - this.drag.px) * 1.25, p.w / 2, W - p.w / 2);
-      p.y = clamp(this.drag.oy + (pt.y - this.drag.py) * 1.25, p.h / 2, H - p.h / 2);
-    } else {
-      this.drag = null;
+    if (this.drag) {
+      const pt = input.pointers.get(this.drag.id);
+      if (pt) {
+        p.x = clamp(this.drag.ox + (pt.x - this.drag.px) * 1.25, p.w / 2, W - p.w / 2);
+        p.y = clamp(this.drag.oy + (pt.y - this.drag.py) * 1.25, p.h / 2, H - p.h / 2);
+      } else {
+        this.drag = null; // finger lifted
+      }
     }
   }
 
   handleCollisions() {
-    // player bullets & rockets vs enemies/boss
+    // player bullets & rockets vs enemies/boss — with juicy hit feedback
     for (const enemy of this.enemies) {
-      if (enemy.dead) continue;
-      for (const [group, dmg, pts] of [[this.bullets, 1, 10], [this.rockets, 4, 20]]) {
+      if (enemy.dead || enemy.dying) continue;
+      for (const [group, dmg, isRocket] of [[this.bullets, 1, false], [this.rockets, 4, true]]) {
         for (const b of group) {
-          if (b.dead || !overlap(enemy, b, 0.9)) continue;
+          if (b.dead || !overlap(enemy, b, enemy.isBoss ? 0.78 : 0.9)) continue;
           b.dead = true;
-          if (enemy.isBoss) {
-            enemy.health -= dmg;
-            if (enemy.health <= 0) {
-              enemy.dead = true;
-              this.explode(enemy.x, enemy.y, true, 2.5);
-              this.levelUp();
-            }
-          } else {
-            enemy.dead = true;
-            this.explode(enemy.x, enemy.y);
-            this.score += pts;
+          this.spawnSparks(b.x, b.y, isRocket ? 16 : 8);
+          const killed = enemy.takeDamage(dmg);
+          if (!killed) {
+            // survived the hit: flash + tiny kick, no explosion
+            this.shake = Math.min(12, this.shake + (isRocket ? 2 : 0.7));
+            audio.play('explosion', isRocket ? 0.3 : 0.12);
+            continue;
           }
-          if (enemy.dead) break;
+          this.score += enemy.points + (isRocket ? 10 : 0);
+          if (enemy.isBoss) {
+            enemy.dead = true;
+            this.explode(enemy.x, enemy.y, true, 2.5);
+            this.levelUp(enemy.x, enemy.y);
+          } else {
+            if (enemy.type === 'tank' && Math.random() < 0.4) this.dropPowerup(enemy.x, enemy.y);
+            if (Math.random() < 0.45) {
+              // disabled, not destroyed: sparks, smoke, tumbles off-screen
+              enemy.startDying();
+              this.spawnSparks(enemy.x, enemy.y, 10);
+              audio.play('explosion', 0.3);
+            } else {
+              enemy.dead = true;
+              this.explode(enemy.x, enemy.y, true, enemy.type === 'tank' ? 1.5 : 1);
+            }
+          }
+          break;
         }
-        if (enemy.dead) break;
+        if (enemy.dead || enemy.dying) break;
       }
     }
 
@@ -308,7 +359,7 @@ export class GameState {
 
     // asteroids vs enemies (enemy dies, asteroid survives)
     for (const e of this.enemies) {
-      if (e.dead || e.isBoss) continue;
+      if (e.dead || e.dying || e.isBoss) continue;
       for (const a of this.asteroids) {
         if (a.dead || !overlap(e, a, 0.8)) continue;
         e.dead = true;
@@ -326,7 +377,11 @@ export class GameState {
       }
       if (!p.alive) continue;
       for (const e of this.enemies) {
-        if (!e.dead && overlap(p, e, 0.8)) { e.dead = true; this.explode(e.x, e.y, false); this.killPlayer(p); break; }
+        if (e.dead || !overlap(p, e, 0.8)) continue;
+        // falling wrecks are deadly too; the boss survives ramming (only the player dies)
+        if (!e.isBoss) { e.dead = true; this.explode(e.x, e.y, false); }
+        this.killPlayer(p);
+        break;
       }
       if (!p.alive) continue;
       for (const a of this.asteroids) {
@@ -347,7 +402,7 @@ export class GameState {
           audio.play('powerup', 0.6);
         } else if (pu.type === 'kill_all') {
           for (const e of this.enemies) {
-            if (!e.isBoss && !e.dead) { e.dead = true; this.explode(e.x, e.y, false); }
+            if (!e.isBoss && !e.dead && !e.dying) { e.dead = true; this.explode(e.x, e.y, false); }
           }
           for (const a of this.asteroids) {
             if (!a.dead) { a.dead = true; this.explode(a.x, a.y, false); }
@@ -370,6 +425,26 @@ export class GameState {
       return;
     }
     if (!this.overMenu) this.overMenu = this.buildOverMenu();
+
+    // one-time leaderboard submission
+    if (this.lb.status === 'idle') {
+      if (this.score <= 0) {
+        this.lb.status = 'skipped';
+      } else {
+        this.lb.status = 'asking';
+        askName().then((name) => {
+          if (!name) { this.lb = { status: 'skipped' }; return; }
+          this.lb = { status: 'sending' };
+          submitScore(name, this.score, this.coop ? 'coop' : 'single').then((res) => {
+            this.lb = res && res.ok
+              ? { status: 'done', rank: res.rank, top: res.top, name }
+              : { status: 'offline' };
+          });
+        });
+      }
+    }
+    if (this.lb.status === 'asking') return; // overlay is open, don't react to Enter/clicks
+
     const action = this.overMenu.update();
     if (action === 'retry') this.app.setState(new GameState(this.app, this.coop));
     else if (action === 'main_menu') this.app.goMenu();
@@ -391,11 +466,12 @@ export class GameState {
     g.drawImage(bg, this.bgX, 0, bgW, H);
     g.drawImage(bg, this.bgX + bgW, 0, bgW, H);
 
+    drawNebulae(g, this.nebulae);
     for (const layer of this.starLayers) for (const s of layer) s.draw(g);
 
     for (const pu of this.powerups) pu.draw(g, this);
     for (const a of this.asteroids) a.draw(g);
-    for (const e of this.enemies) e.draw(g);
+    for (const e of this.enemies) e.draw(g, this);
     for (const b of this.bullets) b.draw(g);
     for (const b of this.enemyBullets) b.draw(g);
     for (const fx of this.effects) fx.draw(g, this);
@@ -407,6 +483,31 @@ export class GameState {
     if (this.speedMul < 1) {
       g.fillStyle = 'rgba(80,150,255,0.08)';
       g.fillRect(0, 0, W, H);
+    }
+
+    // LEVEL N banner: white flash → pop-in → hold → fade out
+    if (this.levelBanner) {
+      const t = (this.time - this.levelBanner.start) / 2200;
+      if (t >= 1) {
+        this.levelBanner = null;
+      } else {
+        if (t < 0.12) {
+          g.fillStyle = `rgba(255,255,255,${0.18 * (1 - t / 0.12)})`;
+          g.fillRect(0, 0, W, H);
+        }
+        const pop = Math.min(1, t * 6);
+        const size = Math.round(64 * (0.6 + 0.4 * pop));
+        const alpha = t < 0.75 ? 1 : 1 - (t - 0.75) / 0.25;
+        g.globalAlpha = alpha * pop;
+        const prevOp = g.globalCompositeOperation;
+        g.globalCompositeOperation = 'lighter';
+        drawText(g, `LEVEL ${this.levelBanner.level}`, W / 2, H / 2 - 180, size, 'rgb(120,80,20)');
+        g.globalCompositeOperation = prevOp;
+        drawText(g, `LEVEL ${this.levelBanner.level}`, W / 2, H / 2 - 180, size, 'rgb(255,215,90)');
+        g.globalAlpha = alpha * 0.8;
+        drawText(g, 'BOSS DEFEATED', W / 2, H / 2 - 180 + size * 0.75, 18, 'rgb(200,200,200)');
+        g.globalAlpha = 1;
+      }
     }
 
     // HUD
@@ -446,6 +547,27 @@ export class GameState {
         drawText(g, `Score: ${this.score}`, W / 2, H / 2 - 40, 30);
         drawText(g, `Best: ${this.app.highScore}`, W / 2, H / 2, 24, 'rgb(180,180,180)');
         this.overMenu.draw(g);
+
+        // global leaderboard block under the buttons
+        const ly = H / 2 + 195;
+        if (this.lb.status === 'done') {
+          if (this.lb.rank > 0 && this.lb.rank <= 10) {
+            drawText(g, `GLOBAL RANK: #${this.lb.rank}`, W / 2, ly, 22, 'rgb(255,210,80)');
+          }
+          if (this.lb.top?.length) {
+            drawText(g, '— GLOBAL TOP —', W / 2, ly + 30, 16, 'rgb(140,140,140)');
+            this.lb.top.slice(0, 5).forEach((e, i) => {
+              const mine = this.lb.rank === i + 1;
+              const col = mine ? 'rgb(0,255,140)' : 'rgb(200,200,200)';
+              drawText(g, `${i + 1}. ${e.name}`, W / 2 - 130, ly + 56 + i * 24, 16, col, 'left');
+              drawText(g, `${e.score}`, W / 2 + 130, ly + 56 + i * 24, 16, col, 'right');
+            });
+          }
+        } else if (this.lb.status === 'sending') {
+          drawText(g, 'Submitting score…', W / 2, ly, 16, 'rgb(140,140,140)');
+        } else if (this.lb.status === 'offline') {
+          drawText(g, 'Leaderboard unavailable', W / 2, ly, 16, 'rgb(120,120,120)');
+        }
       }
     }
   }

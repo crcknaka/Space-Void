@@ -44,6 +44,7 @@ function fit() {
 addEventListener('resize', fit);
 document.addEventListener('fullscreenchange', fit);
 input.init(canvas);
+audio.installAutoUnlock();
 
 const app = {
   canvas,
@@ -121,6 +122,7 @@ async function boot() {
   app.images = images;
 
   const params = new URLSearchParams(location.search);
+  app.debugGod = params.has('god'); // debug: invincible player for testing
   const mode = params.get('mode');
   if (mode === 'single') app.setState(new GameState(app, false));
   else if (mode === 'coop') app.setState(new GameState(app, true));
@@ -140,6 +142,7 @@ async function boot() {
     const dt = Math.min(Math.max(now - last, 0.1), 40); // clamp tab-switch spikes
     last = now;
     g.setTransform(scale, 0, 0, scale, 0, 0);
+    input.pollGamepads();
     app.state.update(dt);
     input.endStep();
     app.state.draw(g);

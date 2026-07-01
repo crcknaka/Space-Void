@@ -4,6 +4,7 @@ import * as input from './input.js';
 import * as audio from './audio.js';
 import { Button, ButtonGroup, drawText } from './ui.js';
 import { Player, Bullet, Explosion, makeStarLayers } from './entities.js';
+import { makeNebulaField, updateNebulae, drawNebulae } from './fx.js';
 
 const SCORE_LIMIT = 10;
 
@@ -40,6 +41,7 @@ export class VersusState {
     this.bullets2 = [];
     this.effects = [];
     this.starLayers = makeStarLayers();
+    this.nebulae = makeNebulaField(3);
 
     this.player1 = new Player(images, {
       img: images.player1_ship,
@@ -47,6 +49,7 @@ export class VersusState {
       controls: P1_CONTROLS,
       autoShoot: false,      // versus.py auto-fired due to a bug; manual fire is the intended design
       useRockets: false,
+      padIndex: 0,
     });
     this.player2 = new Player(images, {
       img: images.player2_ship,
@@ -56,6 +59,7 @@ export class VersusState {
       shipFlipped: true,
       autoShoot: false,
       useRockets: false,
+      padIndex: 1,
     });
     this.respawn1 = 0;
     this.respawn2 = 0;
@@ -85,6 +89,7 @@ export class VersusState {
 
   onResize() {
     this.starLayers = makeStarLayers();
+    this.nebulae = makeNebulaField(3);
     if (this.pauseMenu) this.pauseMenu = this.buildPauseMenu();
     if (this.winMenu) this.winMenu = this.buildWinMenu();
   }
@@ -92,7 +97,9 @@ export class VersusState {
   shootFor(p, bullets, controls) {
     if (!p.alive) return;
     const k = input.keys;
-    if (!(k.has(controls.shoot) || (controls.shootAlt && k.has(controls.shootAlt)))) return;
+    const pad = p.pad();
+    const firing = k.has(controls.shoot) || (controls.shootAlt && k.has(controls.shootAlt)) || (pad && pad.fire);
+    if (!firing) return;
     if (this.time - p.lastShot <= p.shootDelay) return;
     const vx = p.facingLeft ? -10 : 10;
     const edgeX = p.facingLeft ? p.x - p.w / 2 : p.x + p.w / 2;
@@ -128,6 +135,7 @@ export class VersusState {
     this.bgW = bg.width * (H / bg.height); // cover height, keep aspect
     this.bgX -= 0.1 * this.k;
     if (this.bgX <= -this.bgW) this.bgX = 0;
+    updateNebulae(this.nebulae, this.k);
 
     this.player1.update(this);
     this.player2.update(this);
@@ -198,6 +206,7 @@ export class VersusState {
     g.drawImage(bg, this.bgX, 0, bgW, H);
     g.drawImage(bg, this.bgX + bgW, 0, bgW, H);
 
+    drawNebulae(g, this.nebulae);
     for (const layer of this.starLayers) for (const s of layer) s.draw(g);
 
     for (const b of this.bullets1) b.draw(g);

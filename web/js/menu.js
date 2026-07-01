@@ -6,6 +6,7 @@ import { Button, ButtonGroup, drawText } from './ui.js';
 import { Star, StaticStar } from './entities.js';
 import { GameState } from './game.js';
 import { VersusState } from './versus.js';
+import { ScoresState } from './scores.js';
 
 export class MenuState {
   constructor(app) {
@@ -28,10 +29,11 @@ export class MenuState {
       this.staticStars.push(new StaticStar(randInt(0, W), randInt(0, H), randInt(1, 4), randInt(50, 200)));
     }
     this.menu = new ButtonGroup([
-      new Button('SINGLE', W / 2, H / 2 - 110, 200, 60, 'rgb(0,255,0)', 'single'),
-      new Button('COOP', W / 2, H / 2 - 30, 200, 60, 'rgb(0,120,255)', 'coop'),
-      new Button('VERSUS', W / 2, H / 2 + 50, 200, 60, 'rgb(255,140,0)', 'versus'),
-      new Button('FULLSCREEN', W / 2, H / 2 + 130, 200, 60, 'rgb(255,0,0)', 'fullscreen'),
+      new Button('SINGLE', W / 2, H / 2 - 150, 200, 60, 'rgb(0,255,0)', 'single'),
+      new Button('COOP', W / 2, H / 2 - 75, 200, 60, 'rgb(0,120,255)', 'coop'),
+      new Button('VERSUS', W / 2, H / 2, 200, 60, 'rgb(255,140,0)', 'versus'),
+      new Button('SCORES', W / 2, H / 2 + 75, 200, 60, 'rgb(255,210,0)', 'scores'),
+      new Button('FULLSCREEN', W / 2, H / 2 + 150, 200, 60, 'rgb(255,0,0)', 'fullscreen'),
     ]);
   }
 
@@ -48,6 +50,7 @@ export class MenuState {
     if (action === 'single') this.app.setState(new GameState(this.app, false));
     else if (action === 'coop') this.app.setState(new GameState(this.app, true));
     else if (action === 'versus') this.app.setState(new VersusState(this.app));
+    else if (action === 'scores') this.app.setState(new ScoresState(this.app));
     else if (action === 'fullscreen') {
       if (document.fullscreenEnabled) {
         if (!document.fullscreenElement) {
@@ -79,10 +82,10 @@ export class MenuState {
     for (const s of this.staticStars) s.draw(g);
     for (const s of this.stars) s.draw(g);
 
-    drawText(g, 'SPACE VOID', W / 2, H / 2 - 250, 60);
-    drawText(g, 'v0.9 web', W / 2, H / 2 - 208, 20, 'rgb(150,150,150)');
+    drawText(g, 'SPACE VOID', W / 2, H / 2 - 290, 60);
+    drawText(g, 'v1.0 web', W / 2, H / 2 - 248, 20, 'rgb(150,150,150)');
     if (this.app.highScore > 0) {
-      drawText(g, `BEST: ${this.app.highScore}`, W / 2, H / 2 - 175, 24, 'rgb(255,210,80)');
+      drawText(g, `BEST: ${this.app.highScore}`, W / 2, H / 2 - 215, 24, 'rgb(255,210,80)');
     }
 
     this.menu.draw(g);
@@ -97,10 +100,11 @@ export class MenuState {
 
     // controls hint
     if (input.isTouch) {
-      drawText(g, 'Drag to move · rocket button bottom-right', W / 2, H - 40, 13, 'rgb(150,150,150)');
+      drawText(g, 'Drag to move · rocket button bottom-right', W / 2, H - 56, 13, 'rgb(150,150,150)');
+      drawText(g, 'Coop / Versus: connect Bluetooth gamepads (P1 = pad 1, P2 = pad 2)', W / 2, H - 36, 13, 'rgb(150,150,150)');
     } else {
-      drawText(g, 'P1: WASD + Shift · Space = rocket', W / 2, H - 56, 13, 'rgb(150,150,150)');
-      drawText(g, 'P2: Arrows + RShift · Enter = rocket · Esc = pause', W / 2, H - 36, 13, 'rgb(150,150,150)');
+      drawText(g, 'P1: WASD + Shift · Space = rocket    P2: Arrows + RShift · Enter = rocket', W / 2, H - 56, 13, 'rgb(150,150,150)');
+      drawText(g, 'Gamepads: stick = move · A = fire · B = boost · Start = pause', W / 2, H - 36, 13, 'rgb(150,150,150)');
     }
     drawText(g, 'Made by cRc^', W - 10, H - 14, 14, 'rgb(200,200,200)', 'right');
   }
