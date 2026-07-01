@@ -1,8 +1,16 @@
 Game Title: Space Void
 Genre: Space Shooter
-Platform: PC (Python - Pygame)
+Platform: PC (Python - Pygame) + Web (JS/Canvas)
 Game Type: Arcade/Action
 Developer: Ilja Kovalenko (cRc^ )
+
+🎮 Play in browser: https://space-void.vercel.app
+
+Web version (web/ folder): a faithful JavaScript/Canvas port of the pygame game —
+all three modes (Single / Coop / Versus), bosses, asteroids, power-ups.
+Extras: HiDPI rendering, 120 Hz-smooth delta timing, glow effects, screen shake,
+boss health bar, high score (localStorage), touch controls on mobile.
+Deployed on Vercel as a static site (no build step).
 
 Game Description
 Space Void is an exhilarating 2D space shooter that puts players in command of a sleek spaceship tasked with defending the galaxy from waves of increasingly dangerous enemies. Set in the vast expanse of outer space, Space Void challenges players to survive relentless waves of enemy spacecraft, dodge asteroids, and battle formidable bosses while upgrading their ship's abilities. Featuring fast-paced action, dynamic visuals, and immersive gameplay, Space Void is a thrilling adventure into the unknown void of space.
