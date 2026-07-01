@@ -69,6 +69,26 @@ export class VersusState {
     p.alive = true;
   }
 
+  buildPauseMenu() {
+    return new ButtonGroup([
+      new Button('RESUME', W / 2, H / 2 - 40, 200, 60, 'rgb(0,255,0)', 'resume'),
+      new Button('MAIN MENU', W / 2, H / 2 + 50, 200, 60, 'rgb(255,0,0)', 'main_menu'),
+    ]);
+  }
+
+  buildWinMenu() {
+    return new ButtonGroup([
+      new Button('RETRY', W / 2, H / 2 + 60, 200, 60, 'rgb(0,255,0)', 'retry'),
+      new Button('MAIN MENU', W / 2, H / 2 + 145, 200, 60, 'rgb(255,0,0)', 'main_menu'),
+    ]);
+  }
+
+  onResize() {
+    this.starLayers = makeStarLayers();
+    if (this.pauseMenu) this.pauseMenu = this.buildPauseMenu();
+    if (this.winMenu) this.winMenu = this.buildWinMenu();
+  }
+
   shootFor(p, bullets, controls) {
     if (!p.alive) return;
     const k = input.keys;
@@ -93,12 +113,7 @@ export class VersusState {
     if (input.pressed.has('Escape') || input.pressed.has('KeyP')) {
       this.paused = !this.paused;
       audio.play('click', 0.5);
-      if (this.paused) {
-        this.pauseMenu = new ButtonGroup([
-          new Button('RESUME', W / 2, H / 2 - 40, 200, 60, 'rgb(0,255,0)', 'resume'),
-          new Button('MAIN MENU', W / 2, H / 2 + 50, 200, 60, 'rgb(255,0,0)', 'main_menu'),
-        ]);
-      }
+      if (this.paused) this.pauseMenu = this.buildPauseMenu();
     }
     if (this.paused) {
       const action = this.pauseMenu.update();
@@ -161,10 +176,7 @@ export class VersusState {
     // winner check
     if (this.score1 >= SCORE_LIMIT || this.score2 >= SCORE_LIMIT) {
       this.winner = this.score1 >= SCORE_LIMIT ? 'PLAYER 1' : 'PLAYER 2';
-      this.winMenu = new ButtonGroup([
-        new Button('RETRY', W / 2, H / 2 + 60, 200, 60, 'rgb(0,255,0)', 'retry'),
-        new Button('MAIN MENU', W / 2, H / 2 + 145, 200, 60, 'rgb(255,0,0)', 'main_menu'),
-      ]);
+      this.winMenu = this.buildWinMenu();
     }
   }
 

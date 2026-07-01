@@ -14,6 +14,11 @@ export class MenuState {
 
   enter() {
     audio.playMusic('background_music');
+    this.fsHint = 0;
+    this.layout();
+  }
+
+  layout() {
     this.stars = [];
     this.staticStars = [];
     for (let i = 0; i < 50; i++) {
@@ -30,6 +35,10 @@ export class MenuState {
     ]);
   }
 
+  onResize() {
+    this.layout();
+  }
+
   update(dt) {
     const k = dt / STEP;
     for (const s of this.stars) s.update(k);
@@ -40,12 +49,18 @@ export class MenuState {
     else if (action === 'coop') this.app.setState(new GameState(this.app, true));
     else if (action === 'versus') this.app.setState(new VersusState(this.app));
     else if (action === 'fullscreen') {
-      if (!document.fullscreenElement) {
-        (document.documentElement.requestFullscreen?.() ?? Promise.reject()).catch(() => {});
+      if (document.fullscreenEnabled) {
+        if (!document.fullscreenElement) {
+          document.documentElement.requestFullscreen().catch(() => {});
+        } else {
+          document.exitFullscreen().catch(() => {});
+        }
       } else {
-        document.exitFullscreen().catch(() => {});
+        // iOS Safari has no Fullscreen API — PWA install is the way
+        this.fsHint = 420; // ~7 seconds
       }
     }
+    if (this.fsHint > 0) this.fsHint -= k;
   }
 
   draw(g) {
@@ -55,11 +70,11 @@ export class MenuState {
 
     // background image near the bottom with slight mouse parallax, like menu.py
     const img = images.menu_background;
-    const bgW = W;
-    const bgH = Math.round((W / img.width) * img.height);
+    const bgW = Math.min(W, 720);
+    const bgH = Math.round((bgW / img.width) * img.height);
     const offX = -(input.pointer.x - W / 2) * 0.02;
     const offY = -(input.pointer.y - H / 2) * 0.02;
-    g.drawImage(img, offX, H - bgH + offY, bgW, bgH);
+    g.drawImage(img, (W - bgW) / 2 + offX, H - bgH + offY, bgW, bgH);
 
     for (const s of this.staticStars) s.draw(g);
     for (const s of this.stars) s.draw(g);
@@ -71,6 +86,14 @@ export class MenuState {
     }
 
     this.menu.draw(g);
+
+    // iOS fullscreen hint
+    if (this.fsHint > 0) {
+      g.globalAlpha = Math.min(1, this.fsHint / 60);
+      drawText(g, 'iPhone/iPad: Share → Add to Home Screen', W / 2, H / 2 + 190, 16, 'rgb(255,210,80)');
+      drawText(g, 'then launch from the icon for fullscreen', W / 2, H / 2 + 212, 16, 'rgb(255,210,80)');
+      g.globalAlpha = 1;
+    }
 
     // controls hint
     if (input.isTouch) {

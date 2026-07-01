@@ -1,5 +1,5 @@
-// Boot: canvas scaling (HiDPI), asset loading, state machine, main loop
-import { W, H } from './const.js';
+// Boot: canvas scaling (HiDPI), adaptive world size, asset loading, state machine, main loop
+import { W, H, BASE_W, BASE_H, MAX_W, MAX_H, setSize, clamp } from './const.js';
 import * as input from './input.js';
 import * as audio from './audio.js';
 import { loadImages } from './assets.js';
@@ -12,10 +12,25 @@ import { VersusState } from './versus.js';
 const canvas = document.getElementById('game');
 const g = canvas.getContext('2d');
 let scale = 1;
+let vignette = null;
 
 function fit() {
+  // Adapt the world to the screen aspect: widescreen extends the playfield
+  // horizontally, tall phones extend it vertically — no black bars.
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const aspect = vw / vh;
+  let w, h;
+  if (aspect >= BASE_W / BASE_H) {
+    h = BASE_H;
+    w = clamp(Math.round(BASE_H * aspect), BASE_W, MAX_W);
+  } else {
+    w = BASE_W;
+    h = clamp(Math.round(BASE_W / aspect), BASE_H, MAX_H);
+  }
+  setSize(w, h);
+
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  const view = Math.min(window.innerWidth / W, window.innerHeight / H);
+  const view = Math.min(vw / W, vh / H);
   canvas.style.width = `${Math.round(W * view)}px`;
   canvas.style.height = `${Math.round(H * view)}px`;
   canvas.width = Math.round(W * view * dpr);
@@ -23,9 +38,11 @@ function fit() {
   scale = view * dpr;
   g.imageSmoothingEnabled = true;
   g.imageSmoothingQuality = 'high';
+  vignette = makeVignette();
+  if (app.state?.onResize) app.state.onResize();
 }
 addEventListener('resize', fit);
-fit();
+document.addEventListener('fullscreenchange', fit);
 input.init(canvas);
 
 const app = {
@@ -49,7 +66,7 @@ const app = {
 };
 try { app.highScore = Number(localStorage.getItem('spacevoid_high')) || 0; } catch {}
 
-const vignette = makeVignette();
+fit(); // initial world + canvas sizing (after app exists for onResize dispatch)
 
 /* ------------------------------ start screen ------------------------------- */
 

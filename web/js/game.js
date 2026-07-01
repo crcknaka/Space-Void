@@ -81,9 +81,32 @@ export class GameState {
 
     // touch state (mobile: drag to move, on-screen rocket button)
     this.drag = null;
-    this.rocketBtn = { x: W - 70, y: H - 80, r: 44 };
 
     this.rocketTargets = () => this.enemies.concat(this.asteroids);
+  }
+
+  rocketBtn() {
+    return { x: W - 70, y: H - 80, r: 44 }; // live: follows resizes
+  }
+
+  buildPauseMenu() {
+    return new ButtonGroup([
+      new Button('RESUME', W / 2, H / 2 - 40, 200, 60, 'rgb(0,255,0)', 'resume'),
+      new Button('MAIN MENU', W / 2, H / 2 + 50, 200, 60, 'rgb(255,0,0)', 'main_menu'),
+    ]);
+  }
+
+  buildOverMenu() {
+    return new ButtonGroup([
+      new Button('RETRY', W / 2, H / 2 + 75, 200, 50, 'rgb(0,255,0)', 'retry'),
+      new Button('MAIN MENU', W / 2, H / 2 + 145, 200, 50, 'rgb(255,0,0)', 'main_menu'),
+    ]);
+  }
+
+  onResize() {
+    this.starLayers = makeStarLayers();
+    if (this.pauseMenu) this.pauseMenu = this.buildPauseMenu();
+    if (this.overMenu) this.overMenu = this.buildOverMenu();
   }
 
   players() {
@@ -118,12 +141,7 @@ export class GameState {
       if (!this.over) {
         this.paused = !this.paused;
         audio.play('click', 0.5);
-        if (this.paused) {
-          this.pauseMenu = new ButtonGroup([
-            new Button('RESUME', W / 2, H / 2 - 40, 200, 60, 'rgb(0,255,0)', 'resume'),
-            new Button('MAIN MENU', W / 2, H / 2 + 50, 200, 60, 'rgb(255,0,0)', 'main_menu'),
-          ]);
-        }
+        if (this.paused) this.pauseMenu = this.buildPauseMenu();
       }
     }
 
@@ -219,8 +237,9 @@ export class GameState {
     if (!p.alive) return;
     const pt = input.pointer;
     if (pt.justDown) {
-      const d = Math.hypot(pt.x - this.rocketBtn.x, pt.y - this.rocketBtn.y);
-      if (d <= this.rocketBtn.r) {
+      const btn = this.rocketBtn();
+      const d = Math.hypot(pt.x - btn.x, pt.y - btn.y);
+      if (d <= btn.r) {
         p.fireRocket(this);
         return;
       }
@@ -350,12 +369,7 @@ export class GameState {
       this.overAlpha = Math.min(0.5, this.overAlpha + 0.02 * this.k); // fade like game.py
       return;
     }
-    if (!this.overMenu) {
-      this.overMenu = new ButtonGroup([
-        new Button('RETRY', W / 2, H / 2 + 75, 200, 50, 'rgb(0,255,0)', 'retry'),
-        new Button('MAIN MENU', W / 2, H / 2 + 145, 200, 50, 'rgb(255,0,0)', 'main_menu'),
-      ]);
-    }
+    if (!this.overMenu) this.overMenu = this.buildOverMenu();
     const action = this.overMenu.update();
     if (action === 'retry') this.app.setState(new GameState(this.app, this.coop));
     else if (action === 'main_menu') this.app.goMenu();
@@ -404,7 +418,7 @@ export class GameState {
 
     // touch rocket button
     if (input.isTouch && !this.over && !this.paused) {
-      const b = this.rocketBtn;
+      const b = this.rocketBtn();
       g.globalAlpha = 0.35;
       g.fillStyle = '#fff';
       g.beginPath();
