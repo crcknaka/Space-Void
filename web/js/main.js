@@ -130,6 +130,7 @@ async function boot() {
   const mode = params.get('mode');
   if (mode === 'single') app.setState(new GameState(app, false));
   else if (mode === 'coop') app.setState(new GameState(app, true));
+  else if (mode === 'daily') app.setState(new GameState(app, false, { daily: true }));
   else if (mode === 'versus') app.setState(new VersusState(app));
   else if (params.has('skipstart')) app.goMenu();
   else app.setState(new StartState());

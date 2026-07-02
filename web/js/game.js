@@ -11,6 +11,7 @@ import {
 import { makeNebulaField, tinted } from './fx.js';
 import { askName, submitScore } from './lb.js';
 import { bumpStats, vibrate } from './settings.js';
+import { dailySeed, todayMod, useDailyAttempt, dailyAttemptsLeft } from './daily.js';
 
 const P1_CONTROLS = {
   up: 'KeyW', down: 'KeyS', left: 'KeyA', right: 'KeyD',
@@ -20,11 +21,6 @@ const P2_CONTROLS = {
   up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight',
   rocket: 'Enter', rocketAlt: 'NumpadEnter', speed: 'Numpad0', speedAlt: 'ShiftRight',
 };
-
-export function dailySeed() {
-  const d = new Date();
-  return d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate();
-}
 
 export class GameState extends BaseWorld {
   constructor(app, coop, opts = {}) {
@@ -38,7 +34,11 @@ export class GameState extends BaseWorld {
     audio.playMusic('background_music');
     // daily challenge: everyone plays the same seeded spawn stream today
     setRngSeed(this.daily ? dailySeed() : null);
-    if (this.daily) this.pushToasts(bumpStats({ dailyRuns: 1 }));
+    this.mod = this.daily ? todayMod() : null;
+    if (this.daily) {
+      useDailyAttempt();
+      this.pushToasts(bumpStats({ dailyRuns: 1 }));
+    }
 
     this.initBackdrop();
     this.score = 0;
@@ -104,6 +104,15 @@ export class GameState extends BaseWorld {
     this.drag = null;
 
     this.rocketTargets = () => this.enemies.filter((e) => !e.dying).concat(this.asteroids);
+
+    // apply daily modifier to the players
+    if (this.mod) {
+      for (const p of this.players()) {
+        if (this.mod.startRockets) p.rockets = this.mod.startRockets;
+        if (this.mod.rocketDelay) p.rocketDelay *= this.mod.rocketDelay;
+        if (this.mod.playerBoost) p.fastSpeed += this.mod.playerBoost;
+      }
+    }
   }
 
   players() {
@@ -119,10 +128,12 @@ export class GameState extends BaseWorld {
   }
 
   buildOverMenu() {
-    return new ButtonGroup([
-      new Button('RETRY', W / 2, H / 2 + 75, 200, 50, 'rgb(0,255,0)', 'retry'),
-      new Button('MAIN MENU', W / 2, H / 2 + 145, 200, 50, 'rgb(255,0,0)', 'main_menu'),
-    ]);
+    const buttons = [];
+    if (!this.daily || dailyAttemptsLeft() > 0) {
+      buttons.push(new Button('RETRY', W / 2, H / 2 + 75, 200, 50, 'rgb(0,255,0)', 'retry'));
+    }
+    buttons.push(new Button('MAIN MENU', W / 2, H / 2 + 145, 200, 50, 'rgb(255,0,0)', 'main_menu'));
+    return new ButtonGroup(buttons);
   }
 
   onResize() {
@@ -144,6 +155,8 @@ export class GameState extends BaseWorld {
 
   pickEnemyType() {
     const r = rand(0, 100);
+    if (this.mod?.tankBias && r < 35) return 'tank';               // HEAVY ARMOR day
+    if (this.mod?.lightOnly) return r < 45 ? 'weaver' : 'basic';   // THE SWARM day
     if (this.level >= 4 && r < 12) return 'tank';
     if (this.level >= 3 && r >= 12 && r < 32) return 'hunter';
     if (this.level >= 2 && r >= 32 && r < 57) return 'weaver';
@@ -159,7 +172,7 @@ export class GameState extends BaseWorld {
   }
 
   dropPowerup(x, y) {
-    const type = POWERUP_TYPES[randInt(0, POWERUP_TYPES.length - 1)];
+    const type = this.mod?.shieldsOnly ? 'shield' : POWERUP_TYPES[randInt(0, POWERUP_TYPES.length - 1)];
     const pu = new PowerUp(this.powerupImage(type), type);
     pu.x = x;
     pu.baseY = clamp(y, 40, H - 40);
@@ -205,7 +218,7 @@ export class GameState extends BaseWorld {
       audio.playSynth('combo');
       this.pushToasts(bumpStats({ maxMult: tier }));
     }
-    this.score += points * this.mult;
+    this.score += points * this.mult * (this.mod?.scoreMul || 1);
   }
 
   resetCombo() {
@@ -253,20 +266,23 @@ export class GameState extends BaseWorld {
     // --- spawn timers (pygame USEREVENT timers); paused during the post-boss breather ---
     const spawningAllowed = this.time >= this.spawnHoldUntil;
     this.enemyAcc += dt;
-    if (this.enemyAcc >= this.enemyInterval && spawningAllowed) {
+    if (this.enemyAcc >= this.enemyInterval * (this.mod?.enemyRate || 1) && spawningAllowed) {
       this.enemyAcc = 0;
       const chance = Math.min(10 + (this.level - 1) * 5, 100);
       const moveRandomly = randInt(1, 100) <= chance;
-      this.enemies.push(new Enemy(this.app.images, this.level, this.pickEnemyType(), this.time, moveRandomly));
+      const e = new Enemy(this.app.images, this.level, this.pickEnemyType(), this.time, moveRandomly);
+      if (this.mod?.enemySpeed) e.vx *= this.mod.enemySpeed;
+      if (this.mod?.shootRate) e.shootDelay = Math.max(250, e.shootDelay * this.mod.shootRate);
+      this.enemies.push(e);
     }
     this.powerupAcc += dt;
     if (this.powerupAcc >= this.powerupInterval && spawningAllowed) {
       this.powerupAcc = 0;
-      const type = POWERUP_TYPES[randInt(0, POWERUP_TYPES.length - 1)];
+      const type = this.mod?.shieldsOnly ? 'shield' : POWERUP_TYPES[randInt(0, POWERUP_TYPES.length - 1)];
       this.powerups.push(new PowerUp(this.powerupImage(type), type));
     }
     this.asteroidAcc += dt;
-    if (this.asteroidAcc >= this.asteroidInterval && spawningAllowed) {
+    if (this.asteroidAcc >= this.asteroidInterval * (this.mod?.asteroidRate || 1) && spawningAllowed) {
       this.asteroidAcc = 0;
       this.asteroids.push(new Asteroid(this.app.images.asteroid, 'large'));
     }
@@ -282,7 +298,11 @@ export class GameState extends BaseWorld {
       } else if (this.time - this.bossWarnStart > 2500) {
         this.bossWarnStart = 0;
         this.logEvent('BOSS SPAWN');
-        this.enemies.push(new Boss(this.app.images, this.level, this.time));
+        const boss = new Boss(this.app.images, this.level, this.time);
+        if (this.mod?.bossHp) {
+          boss.health = boss.maxHealth = Math.round(boss.health * this.mod.bossHp);
+        }
+        this.enemies.push(boss);
         this.bossSpawned = true;
         for (const p of this.players()) p.rockets += 3;
       }
@@ -623,7 +643,18 @@ export class GameState extends BaseWorld {
       g.fillRect(mx, 38, 46 * frac, 3);
     }
     drawText(g, `Level: ${this.level}`, W - 10, 24, 26, '#fff', 'right');
-    if (this.daily) drawText(g, 'DAILY', W / 2, 50, 20, 'rgb(255,210,60)');
+    if (this.daily) drawText(g, `DAILY · ${this.mod.name}`, W - 10, 52, 15, 'rgb(255,210,60)', 'right');
+
+    // daily modifier intro banner (first seconds of the run)
+    if (this.daily && this.time < 3600 && !this.over) {
+      const t = this.time / 3600;
+      const alpha = t < 0.85 ? 1 : 1 - (t - 0.85) / 0.15;
+      g.globalAlpha = alpha;
+      drawText(g, this.mod.name, W / 2, H / 2 - 130, 44, 'rgb(255,210,60)');
+      drawText(g, this.mod.desc, W / 2, H / 2 - 90, 20, 'rgb(220,220,220)');
+      drawText(g, `attempt ${'●'.repeat(3 - dailyAttemptsLeft())}${'○'.repeat(dailyAttemptsLeft())}`, W / 2, H / 2 - 58, 15, 'rgb(160,160,160)');
+      g.globalAlpha = 1;
+    }
     // lives + rockets per player
     const p1 = this.player1;
     drawText(g, 'P1', 10, 58, 22, '#fff', 'left');
@@ -674,6 +705,11 @@ export class GameState extends BaseWorld {
         drawText(g, 'GAME OVER', W / 2, H / 2 - 100, 56, 'rgb(255,0,0)');
         drawText(g, `Score: ${this.score}`, W / 2, H / 2 - 40, 30);
         drawText(g, `Best: ${this.app.highScore}`, W / 2, H / 2, 24, 'rgb(180,180,180)');
+        if (this.daily) {
+          const left = dailyAttemptsLeft();
+          drawText(g, left > 0 ? `DAILY ATTEMPTS LEFT: ${left}` : 'NO DAILY ATTEMPTS LEFT TODAY',
+            W / 2, H / 2 + 32, 17, left > 0 ? 'rgb(255,210,60)' : 'rgb(255,110,110)');
+        }
         this.overMenu.draw(g);
 
         // leaderboard block under the buttons

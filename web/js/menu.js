@@ -8,6 +8,7 @@ import { GameState } from './game.js';
 import { VersusState } from './versus.js';
 import { ScoresState } from './scores.js';
 import { OptionsState } from './options.js';
+import { todayMod, dailyAttemptsLeft, timeToNextDaily } from './daily.js';
 
 export class MenuState {
   constructor(app) {
@@ -52,7 +53,11 @@ export class MenuState {
     if (action === 'single') this.app.setState(new GameState(this.app, false));
     else if (action === 'coop') this.app.setState(new GameState(this.app, true));
     else if (action === 'versus') this.app.setState(new VersusState(this.app));
-    else if (action === 'daily') this.app.setState(new GameState(this.app, false, { daily: true }));
+    else if (action === 'daily') {
+      if (dailyAttemptsLeft() > 0) this.app.setState(new GameState(this.app, false, { daily: true }));
+      else this.dailyBlock = 240; // ~4s "no attempts" note
+    }
+    if (this.dailyBlock > 0) this.dailyBlock -= k;
     else if (action === 'scores') this.app.setState(new ScoresState(this.app));
     else if (action === 'settings') this.app.setState(new OptionsState(this.app));
   }
@@ -80,6 +85,16 @@ export class MenuState {
     }
 
     this.menu.draw(g);
+
+    // daily challenge info: today's modifier, attempts, reset countdown
+    const tries = dailyAttemptsLeft();
+    const dailyLine = `DAILY · ${todayMod().name} · ${tries > 0 ? `${tries} ${tries === 1 ? 'try' : 'tries'} left` : 'no tries left'} · resets in ${timeToNextDaily()}`;
+    drawText(g, dailyLine, W / 2, H - 82, 13, tries > 0 ? 'rgb(255,210,80)' : 'rgb(150,120,60)');
+    if (this.dailyBlock > 0) {
+      g.globalAlpha = Math.min(1, this.dailyBlock / 60);
+      drawText(g, 'No daily attempts left — come back after the reset!', W / 2, H / 2 + 250, 16, 'rgb(255,110,110)');
+      g.globalAlpha = 1;
+    }
 
     // controls hint
     if (input.isTouch) {
