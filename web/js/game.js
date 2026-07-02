@@ -609,14 +609,17 @@ export class GameState {
     }
 
     // HUD
-    drawText(g, `Score: ${this.score}`, 10, 24, 26, '#fff', 'left');
+    const scoreText = `Score: ${this.score}`;
+    drawText(g, scoreText, 10, 24, 26, '#fff', 'left');
     if (this.mult > 1) {
+      // badge sits right after the score text, shifting as the score grows
+      const mx = 10 + g.measureText(scoreText).width + 14;
       const pulse = this.time - this.multPulse < 400 ? 1.4 - (this.time - this.multPulse) / 1000 : 1;
-      drawText(g, `x${this.mult}`, 175, 24, Math.round(24 * pulse), 'rgb(255,210,60)', 'left');
+      drawText(g, `x${this.mult}`, mx, 24, Math.round(24 * pulse), 'rgb(255,210,60)', 'left');
       // combo time bar
       const frac = Math.max(0, (this.comboEnd - this.time) / 4000);
       g.fillStyle = 'rgba(255,210,60,0.8)';
-      g.fillRect(175, 38, 46 * frac, 3);
+      g.fillRect(mx, 38, 46 * frac, 3);
     }
     drawText(g, `Level: ${this.level}`, W - 10, 24, 26, '#fff', 'right');
     // lives + rockets per player
