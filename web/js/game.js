@@ -483,6 +483,53 @@ export class GameState extends BaseWorld {
       }
     }
 
+    // falling wrecks crash into everything on the way down
+    for (const w of this.enemies) {
+      if (w.dead || !w.dying) continue;
+      for (const e of this.enemies) {
+        if (e === w || e.dead) continue;
+        if (e.dying) {
+          // wreck vs wreck: both go up in one blast
+          if (overlap(w, e, 0.75)) {
+            w.dead = true;
+            e.dead = true;
+            this.explode((w.x + e.x) / 2, (w.y + e.y) / 2, true, 1.3);
+            break;
+          }
+          continue;
+        }
+        if (e.warpUntil && this.time < e.warpUntil) continue;
+        if (!overlap(w, e, 0.8)) continue;
+        if (e.isBoss) {
+          // wreck slams into the boss hull: 1 damage + sparks
+          w.dead = true;
+          this.spawnSparks(w.x, w.y, 12);
+          this.explode(w.x, w.y, true, 1.1);
+          if (e.shieldUntil <= this.time && e.takeDamage(1)) {
+            e.dead = true;
+            this.explode(e.x, e.y, true, 2.5);
+            this.levelUp(e.x, e.y);
+          }
+        } else {
+          // chain kill — the wreck takes a live fighter with it (score counts!)
+          w.dead = true;
+          e.dead = true;
+          this.explode(e.x, e.y, true, 1.2);
+          this.addKill(e.points);
+          this.pushToasts(bumpStats({ kills: 1 }));
+        }
+        break;
+      }
+      if (w.dead) continue;
+      // vs asteroids: the rock wins, the wreck detonates
+      for (const a of this.asteroids) {
+        if (a.dead || !overlap(w, a, 0.75)) continue;
+        w.dead = true;
+        this.explode(w.x, w.y, true, 1.1);
+        break;
+      }
+    }
+
     // players vs enemy bullets / enemies / asteroids / power-ups
     for (const p of this.players()) {
       if (!p.alive) continue;
