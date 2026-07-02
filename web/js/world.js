@@ -6,6 +6,7 @@ import * as audio from './audio.js';
 import { Button, ButtonGroup, drawText } from './ui.js';
 import { makeStarLayers } from './entities.js';
 import { makeNebulaField, updateNebulae, drawNebulae } from './fx.js';
+import { OptionsState } from './options.js';
 
 export class BaseWorld {
   constructor(app, bgKey) {
@@ -33,21 +34,25 @@ export class BaseWorld {
 
   buildPauseMenu() {
     return new ButtonGroup([
-      new Button('RESUME', W / 2, H / 2 - 40, 200, 60, 'rgb(0,255,0)', 'resume'),
-      new Button('MAIN MENU', W / 2, H / 2 + 50, 200, 60, 'rgb(255,0,0)', 'main_menu'),
+      new Button('RESUME', W / 2, H / 2 - 70, 200, 60, 'rgb(0,255,0)', 'resume'),
+      new Button('SETTINGS', W / 2, H / 2 + 10, 200, 60, 'rgb(0,150,255)', 'settings'),
+      new Button('MAIN MENU', W / 2, H / 2 + 90, 200, 60, 'rgb(255,0,0)', 'main_menu'),
     ]);
+  }
+
+  togglePause() {
+    this.paused = !this.paused;
+    audio.play('click', 0.5);
+    if (this.paused) this.pauseMenu = this.buildPauseMenu();
   }
 
   // Esc/P toggling + pause menu interaction. Returns true while paused.
   handlePause() {
-    if (input.pressed.has('Escape') || input.pressed.has('KeyP')) {
-      this.paused = !this.paused;
-      audio.play('click', 0.5);
-      if (this.paused) this.pauseMenu = this.buildPauseMenu();
-    }
+    if (input.pressed.has('Escape') || input.pressed.has('KeyP')) this.togglePause();
     if (!this.paused) return false;
     const action = this.pauseMenu.update();
     if (action === 'resume') this.paused = false;
+    else if (action === 'settings') this.app.setState(new OptionsState(this.app, this)); // returns here, still paused
     else if (action === 'main_menu') this.app.goMenu();
     return true;
   }

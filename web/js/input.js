@@ -31,7 +31,7 @@ export function init(canvas) {
   };
   cv.addEventListener('pointerdown', (e) => {
     const p = toXY(e);
-    pointers.set(e.pointerId, { x: p.x, y: p.y, justDown: true });
+    pointers.set(e.pointerId, { x: p.x, y: p.y, sx: p.x, sy: p.y, downAt: performance.now(), justDown: true });
     pointer.x = p.x; pointer.y = p.y;
     pointer.down = true;
     pointer.justDown = true;

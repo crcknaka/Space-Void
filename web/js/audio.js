@@ -89,6 +89,7 @@ export function playSynth(name) {
 /* ---------------------------------- music ---------------------------------- */
 
 const musicEls = {};
+const musicGains = {};
 let currentTrack = null;
 let currentBaseVol = 0.45;
 
@@ -99,8 +100,22 @@ function musicEl(track) {
     el.loop = true;
     el.preload = 'auto';
     musicEls[track] = el;
+    // Route through a WebAudio gain node: HTMLMediaElement.volume is
+    // read-only on iOS, so this is the only reliable volume control.
+    try {
+      const src = actx.createMediaElementSource(el);
+      const gain = actx.createGain();
+      src.connect(gain).connect(actx.destination);
+      musicGains[track] = gain;
+    } catch { /* fall back to element volume below */ }
   }
   return el;
+}
+
+function setTrackVolume(track, vol) {
+  const gain = musicGains[track];
+  if (gain) gain.gain.value = vol;
+  else { try { musicEls[track].volume = vol; } catch {} }
 }
 
 export function playMusic(track, volume = 0.45) {
@@ -109,7 +124,7 @@ export function playMusic(track, volume = 0.45) {
   currentTrack = track;
   currentBaseVol = volume;
   const el = musicEl(track);
-  el.volume = volume * settings.music;
+  setTrackVolume(track, volume * settings.music);
   try { el.currentTime = 0; } catch {}
   if (settings.music > 0) el.play().catch(() => {}); // if blocked, the unlock handler retries
 }
@@ -119,7 +134,7 @@ export function applyMusicVolume() {
   if (!currentTrack) return;
   const el = musicEls[currentTrack];
   if (!el) return;
-  el.volume = currentBaseVol * settings.music;
+  setTrackVolume(currentTrack, currentBaseVol * settings.music);
   if (settings.music <= 0) el.pause();
   else if (el.paused) el.play().catch(() => {});
 }

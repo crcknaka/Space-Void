@@ -10,12 +10,19 @@ const VOLUME_STEPS = [0, 0.3, 0.6, 1];
 const pct = (v) => `${Math.round(v * 100)}%`;
 
 export class OptionsState {
-  constructor(app) {
+  // returnTo: opened from a paused game — BACK restores that state without resetting it
+  constructor(app, returnTo = null) {
     this.app = app;
+    this.returnTo = returnTo;
   }
 
   enter() {
     this.layout();
+  }
+
+  goBack() {
+    if (this.returnTo) this.app.state = this.returnTo; // resume paused game as-is
+    else this.app.goMenu();
   }
 
   layout() {
@@ -70,7 +77,7 @@ export class OptionsState {
         this.fsHint = 420;
       }
     } else if (action === 'back' || input.pressed.has('Escape')) {
-      this.app.goMenu();
+      this.goBack();
     }
     if (this.fsHint > 0) this.fsHint -= k;
   }

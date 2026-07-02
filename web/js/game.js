@@ -114,6 +114,10 @@ export class GameState extends BaseWorld {
     return { x: W - 70, y: H - 80, r: 44 }; // live: follows resizes
   }
 
+  pauseBtn() {
+    return { x: W - 34, y: 72, r: 24 }; // touch pause, under the Level text
+  }
+
   buildOverMenu() {
     return new ButtonGroup([
       new Button('RETRY', W / 2, H / 2 + 75, 200, 50, 'rgb(0,255,0)', 'retry'),
@@ -345,14 +349,27 @@ export class GameState extends BaseWorld {
     const p = this.player1;
     if (!p.alive) return;
     const btn = this.rocketBtn();
-    // multi-touch: any new finger on the rocket button fires; the first other
-    // finger owns the movement drag — they don't interfere with each other
+    const pbtn = this.pauseBtn();
+    // multi-touch: any new finger on the rocket button fires; the pause button
+    // pauses; the first other finger owns the movement drag
     for (const [id, pt] of input.pointers) {
       if (!pt.justDown) continue;
       if (Math.hypot(pt.x - btn.x, pt.y - btn.y) <= btn.r) {
         p.fireRocket(this);
+      } else if (Math.hypot(pt.x - pbtn.x, pt.y - pbtn.y) <= pbtn.r) {
+        this.togglePause();
+        this.drag = null;
+        return;
       } else if (!this.drag) {
         this.drag = { id, px: pt.x, py: pt.y, ox: p.x, oy: p.y };
+      } else {
+        // quick two-finger tap (both fingers down & still) also pauses
+        const dp = input.pointers.get(this.drag.id);
+        if (dp && performance.now() - dp.downAt < 400 && Math.hypot(dp.x - dp.sx, dp.y - dp.sy) < 15) {
+          this.togglePause();
+          this.drag = null;
+          return;
+        }
       }
     }
     if (this.drag) {
@@ -623,7 +640,7 @@ export class GameState extends BaseWorld {
     // achievement toasts
     this.drawToasts(g);
 
-    // touch rocket button
+    // touch controls: rocket button + pause button
     if (input.isTouch && !this.over && !this.paused) {
       const b = this.rocketBtn();
       g.globalAlpha = 0.35;
@@ -634,6 +651,17 @@ export class GameState extends BaseWorld {
       g.globalAlpha = 0.9;
       g.drawImage(images.rocket, b.x - 20, b.y - 18, 40, 20);
       drawText(g, `${this.player1.rockets}`, b.x, b.y + 16, 22, '#000');
+
+      const pb = this.pauseBtn();
+      g.globalAlpha = 0.3;
+      g.fillStyle = '#fff';
+      g.beginPath();
+      g.arc(pb.x, pb.y, pb.r - 4, 0, Math.PI * 2);
+      g.fill();
+      g.globalAlpha = 0.85;
+      g.fillStyle = '#000';
+      g.fillRect(pb.x - 7, pb.y - 8, 5, 16); // pause bars
+      g.fillRect(pb.x + 2, pb.y - 8, 5, 16);
       g.globalAlpha = 1;
     }
 
