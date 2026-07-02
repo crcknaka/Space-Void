@@ -131,10 +131,18 @@ async function boot() {
   else app.setState(new StartState());
 
   // debug: fast-forward game time deterministically (?mode=single&ff=30000)
+  if (params.has('log')) window.__svlog = [];
   const ff = Number(params.get('ff') || 0);
   for (let t = 0; t < ff; t += 16.67) {
     app.state.update(16.67);
     input.endStep();
+  }
+  if (params.has('log')) {
+    const pre = document.createElement('pre');
+    pre.id = 'svlog';
+    pre.style.display = 'none';
+    pre.textContent = (window.__svlog || []).join('\n');
+    document.body.appendChild(pre);
   }
 
   let last = performance.now();

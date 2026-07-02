@@ -56,7 +56,7 @@ export class GameState {
     this.multPulse = 0;
     this.spawnHoldUntil = 0;
     this.bossWarnStart = 0;
-    this.bossReadyAt = 25000; // min wave time before the first boss
+    this.bossReadyAt = 30000; // min wave time before the first boss
     this.bgZoom = 1;
     this.bgZoomTarget = 1;
     // cyan-tinted shield powerup sprite
@@ -127,6 +127,11 @@ export class GameState {
     this.nebulae = makeNebulaField(3);
     if (this.pauseMenu) this.pauseMenu = this.buildPauseMenu();
     if (this.overMenu) this.overMenu = this.buildOverMenu();
+  }
+
+  logEvent(name) {
+    // debug timeline (enabled with ?log)
+    window.__svlog?.push(`${(this.time / 1000).toFixed(1)}s L${this.level} score=${this.score} ${name}`);
   }
 
   pickEnemyType() {
@@ -207,7 +212,9 @@ export class GameState {
     this.bossSpawned = false;
     this.level += 1;
     this.nextBossScore = this.score + 150 + this.level * 150;
-    this.bossReadyAt = this.time + 30000; // at least 30s of regular wave before the next boss
+    // guaranteed regular-wave time before the next boss, growing with level
+    // (combo score inflation otherwise collapses late waves into back-to-back bosses)
+    this.bossReadyAt = this.time + Math.min(70000, 45000 + (this.level - 1) * 5000);
     this.enemyInterval = Math.max(500, this.enemyInterval - 200);
     this.asteroidInterval = Math.max(2000, this.asteroidInterval - 500);
     for (const p of this.players()) p.rockets += 3;
@@ -219,6 +226,7 @@ export class GameState {
     // celebration: shockwave from the boss + LEVEL N banner + fanfare
     this.effects.push(new Shockwave(x ?? W / 2, y ?? H / 2, this.time));
     this.levelBanner = { level: this.level, start: this.time };
+    this.logEvent('LEVELUP (boss killed)');
     audio.playSynth('fanfare');
     vibrate(80);
   }
@@ -271,13 +279,15 @@ export class GameState {
 
     // --- boss spawn: needs the score AND at least ~30s of wave time (combo inflates
     // the score, so a time gate keeps waves from being wall-to-wall boss fights) ---
-    if (this.score >= this.nextBossScore && this.time >= this.bossReadyAt && !this.bossSpawned) {
+    if (this.score >= this.nextBossScore && this.time >= this.bossReadyAt && !this.bossSpawned && !this.levelBanner) {
       if (!this.bossWarnStart) {
         this.bossWarnStart = this.time;
+        this.logEvent('WARNING');
         audio.playSynth('warning');
         vibrate([60, 90, 60]);
       } else if (this.time - this.bossWarnStart > 2500) {
         this.bossWarnStart = 0;
+        this.logEvent('BOSS SPAWN');
         this.enemies.push(new Boss(this.app.images, this.level, this.time));
         this.bossSpawned = true;
         for (const p of this.players()) p.rockets += 3;
@@ -307,6 +317,9 @@ export class GameState {
 
     // combo timer expiry
     if (this.combo > 0 && this.time > this.comboEnd) this.resetCombo();
+
+    // level banner expiry (game logic, not draw — draw may be throttled)
+    if (this.levelBanner && this.time - this.levelBanner.start >= 2200) this.levelBanner = null;
 
     // --- updates ---
     for (const p of this.players()) p.update(this);
@@ -575,9 +588,7 @@ export class GameState {
     // LEVEL N banner: white flash → pop-in → hold → fade out
     if (this.levelBanner) {
       const t = (this.time - this.levelBanner.start) / 2200;
-      if (t >= 1) {
-        this.levelBanner = null;
-      } else {
+      if (t < 1) {
         if (t < 0.12) {
           g.fillStyle = `rgba(255,255,255,${0.18 * (1 - t / 0.12)})`;
           g.fillRect(0, 0, W, H);
