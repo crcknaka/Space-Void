@@ -596,7 +596,8 @@ export class Enemy {
 
     if (this.x + this.w / 2 < 0) { this.dead = true; return; }
 
-    if (world.time - this.lastShot > this.shootDelay) {
+    const warping = this.warpUntil && world.time < this.warpUntil;
+    if (!warping && world.time - this.lastShot > this.shootDelay) {
       world.enemyBullets.push(new EnemyBullet(this.x - this.w / 2, this.y, this.bulletImg));
       this.lastShot = world.time;
     }
@@ -628,12 +629,25 @@ export class Enemy {
       g.restore();
       return;
     }
+    // warp-in materialisation: scale + fade over ~0.5s
+    const t = world?.time ?? 0;
+    const warp = this.warpUntil && t < this.warpUntil;
+    if (warp) {
+      const f = 1 - (this.warpUntil - t) / 550;
+      g.save();
+      g.translate(this.x, this.y);
+      const s = 0.35 + 0.65 * f;
+      g.scale(s, s);
+      g.translate(-this.x, -this.y);
+      g.globalAlpha = 0.3 + 0.7 * f;
+    }
+
     // flipped thruster on the right side (exhaust), like Enemy.update_thruster
     const thr = this.thrusters[this.thrFrame];
     drawGlow(g, glowEngine, this.x + this.w / 2 + 10, this.y);
     if (this.type === 'hunter') {
       // menacing pulsing red glow
-      const pulse = 0.7 + 0.3 * Math.sin((world?.time ?? 0) / 120);
+      const pulse = 0.7 + 0.3 * Math.sin(t / 120);
       drawGlow(g, glowEnemyBullet, this.x, this.y, 2.6 * pulse);
     }
     g.save();
@@ -643,10 +657,14 @@ export class Enemy {
     g.restore();
     g.drawImage(this.img, this.x - this.w / 2, this.y - this.h / 2, this.w, this.h);
     if (this.flash > 0.05) {
-      g.globalAlpha = this.flash * 0.85;
+      g.globalAlpha = warp ? 0.6 : this.flash * 0.85;
       g.drawImage(tinted(this.img, 'rgba(255,255,255,1)', `white_enemy_${this.type}`),
         this.x - this.w / 2, this.y - this.h / 2, this.w, this.h);
       g.globalAlpha = 1;
+    }
+    if (warp) {
+      g.globalAlpha = 1;
+      g.restore();
     }
   }
 }
@@ -719,12 +737,16 @@ export class Boss {
     } else if (pat === 'ring') {
       for (let i = 0; i < 14; i++) shots.push({ t: t0, angle: (360 / 14) * i });
     } else if (pat === 'minions') {
-      // release escort fighters from the hangar
+      // warp in escort fighters: ring flash + chirp + scale-in materialisation
+      audio.playSynth('warp');
       for (let i = -1; i <= 1; i++) {
         const e = new Enemy(this.images, Math.max(1, this.level - 1), 'basic', world.time);
-        e.x = this.x - this.w / 2;
+        e.x = this.x - this.w / 2 - 20;
         e.y = clamp(this.y + i * 80, 30, H - 30);
+        e.warpUntil = world.time + 550;
         world.enemies.push(e);
+        world.effects.push(new Shockwave(e.x, e.y, world.time, 70));
+        for (let s = 0; s < 6; s++) world.effects.push(new Spark(e.x, e.y, world.time, Math.PI));
       }
     } else if (pat === 'laser') {
       // telegraph first, then the beam fires along the frozen line

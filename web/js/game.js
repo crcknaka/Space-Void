@@ -56,6 +56,7 @@ export class GameState {
     this.multPulse = 0;
     this.spawnHoldUntil = 0;
     this.bossWarnStart = 0;
+    this.bossReadyAt = 25000; // min wave time before the first boss
     this.bgZoom = 1;
     this.bgZoomTarget = 1;
     // cyan-tinted shield powerup sprite
@@ -205,7 +206,8 @@ export class GameState {
     this.score += 50;
     this.bossSpawned = false;
     this.level += 1;
-    this.nextBossScore += this.level * 100;
+    this.nextBossScore = this.score + 150 + this.level * 150;
+    this.bossReadyAt = this.time + 30000; // at least 30s of regular wave before the next boss
     this.enemyInterval = Math.max(500, this.enemyInterval - 200);
     this.asteroidInterval = Math.max(2000, this.asteroidInterval - 500);
     for (const p of this.players()) p.rockets += 3;
@@ -267,8 +269,9 @@ export class GameState {
       this.asteroids.push(new Asteroid(this.app.images.asteroid, 'large'));
     }
 
-    // --- boss spawn: WARNING klaxon first, then the boss flies in ---
-    if (this.score >= this.nextBossScore && !this.bossSpawned) {
+    // --- boss spawn: needs the score AND at least ~30s of wave time (combo inflates
+    // the score, so a time gate keeps waves from being wall-to-wall boss fights) ---
+    if (this.score >= this.nextBossScore && this.time >= this.bossReadyAt && !this.bossSpawned) {
       if (!this.bossWarnStart) {
         this.bossWarnStart = this.time;
         audio.playSynth('warning');
@@ -456,7 +459,7 @@ export class GameState {
       }
       if (!p.alive) continue;
       for (const e of this.enemies) {
-        if (e.dead || !overlap(p, e, 0.8)) continue;
+        if (e.dead || (e.warpUntil && this.time < e.warpUntil) || !overlap(p, e, 0.8)) continue;
         // falling wrecks are deadly too; the boss survives ramming (only the player dies)
         if (!e.isBoss) { e.dead = true; this.explode(e.x, e.y, false); }
         this.killPlayer(p);
