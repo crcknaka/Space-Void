@@ -1,16 +1,16 @@
-// Single / Co-op game mode — port of game.py
-import { W, H, STEP, randInt, overlap, clamp } from './const.js';
+// Single / Co-op / Daily game mode — port of game.py on top of BaseWorld
+import { W, H, STEP, rand, randInt, overlap, clamp, setRngSeed } from './const.js';
 import * as input from './input.js';
 import * as audio from './audio.js';
 import { Button, ButtonGroup, drawText } from './ui.js';
+import { BaseWorld } from './world.js';
 import {
   Player, Enemy, Boss, Asteroid, PowerUp, Explosion, Spark, Shockwave,
-  makeStarLayers, POWERUP_TYPES, POWERUP_IMG,
+  POWERUP_TYPES, POWERUP_IMG,
 } from './entities.js';
-import { makeNebulaField, updateNebulae, drawNebulae, tinted } from './fx.js';
+import { makeNebulaField, tinted } from './fx.js';
 import { askName, submitScore } from './lb.js';
-
-const vibrate = (ms) => { try { navigator.vibrate?.(ms); } catch {} };
+import { bumpStats, vibrate } from './settings.js';
 
 const P1_CONTROLS = {
   up: 'KeyW', down: 'KeyS', left: 'KeyA', right: 'KeyD',
@@ -21,23 +21,30 @@ const P2_CONTROLS = {
   rocket: 'Enter', rocketAlt: 'NumpadEnter', speed: 'Numpad0', speedAlt: 'ShiftRight',
 };
 
-export class GameState {
-  constructor(app, coop) {
-    this.app = app;
+export function dailySeed() {
+  const d = new Date();
+  return d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate();
+}
+
+export class GameState extends BaseWorld {
+  constructor(app, coop, opts = {}) {
+    super(app, 'game_background');
     this.coop = coop;
+    this.daily = !!opts.daily;
   }
 
   enter() {
     const { images } = this.app;
     audio.playMusic('background_music');
+    // daily challenge: everyone plays the same seeded spawn stream today
+    setRngSeed(this.daily ? dailySeed() : null);
+    if (this.daily) this.pushToasts(bumpStats({ dailyRuns: 1 }));
 
-    this.time = 0;
+    this.initBackdrop();
     this.score = 0;
     this.level = 1;
     this.nextBossScore = 100;
     this.bossSpawned = false;
-    this.paused = false;
-    this.speedMul = 1;
     this.slowMoEnd = 0;
 
     this.bullets = [];
@@ -46,9 +53,6 @@ export class GameState {
     this.enemies = [];       // includes boss
     this.asteroids = [];
     this.powerups = [];
-    this.effects = [];       // explosions + rocket trails + sparks
-    this.starLayers = makeStarLayers();
-    this.nebulae = makeNebulaField(3);
     this.lb = { status: 'idle' }; // leaderboard submission state
     this.combo = 0;
     this.comboEnd = 0;
@@ -57,10 +61,10 @@ export class GameState {
     this.spawnHoldUntil = 0;
     this.bossWarnStart = 0;
     this.bossReadyAt = 30000; // min wave time before the first boss
-    this.bgZoom = 1;
-    this.bgZoomTarget = 1;
+    this.runPowerups = 0;
+    this.toasts = this.toasts || [];
     // cyan-tinted shield powerup sprite
-    this.shieldImg = tinted(this.app.images.powerup, 'rgba(0,210,255,0.55)', 'powerup_shield');
+    this.shieldImg = tinted(images.powerup, 'rgba(0,210,255,0.55)', 'powerup_shield');
 
     this.enemyInterval = 2000;
     this.asteroidInterval = 5000;
@@ -69,13 +73,11 @@ export class GameState {
     this.asteroidAcc = 0;
     this.powerupAcc = 0;
 
-    this.bgX = 0;
-    this.k = 1;
     this.shake = 0;
     this.over = false;
     this.overAlpha = 0;
     this.overMenu = null;
-    this.pauseMenu = null;
+    this.levelBanner = null;
 
     this.player1 = new Player(images, {
       img: images.player1_ship,
@@ -84,7 +86,7 @@ export class GameState {
       padIndex: 0,
     });
     this.player1.x = 100;
-    this.player1.y = this.coop ? H / 2 : H / 2;
+    this.player1.y = H / 2;
 
     this.player2 = null;
     if (this.coop) {
@@ -104,15 +106,12 @@ export class GameState {
     this.rocketTargets = () => this.enemies.filter((e) => !e.dying).concat(this.asteroids);
   }
 
-  rocketBtn() {
-    return { x: W - 70, y: H - 80, r: 44 }; // live: follows resizes
+  players() {
+    return this.player2 ? [this.player1, this.player2] : [this.player1];
   }
 
-  buildPauseMenu() {
-    return new ButtonGroup([
-      new Button('RESUME', W / 2, H / 2 - 40, 200, 60, 'rgb(0,255,0)', 'resume'),
-      new Button('MAIN MENU', W / 2, H / 2 + 50, 200, 60, 'rgb(255,0,0)', 'main_menu'),
-    ]);
+  rocketBtn() {
+    return { x: W - 70, y: H - 80, r: 44 }; // live: follows resizes
   }
 
   buildOverMenu() {
@@ -123,9 +122,7 @@ export class GameState {
   }
 
   onResize() {
-    this.starLayers = makeStarLayers();
-    this.nebulae = makeNebulaField(3);
-    if (this.pauseMenu) this.pauseMenu = this.buildPauseMenu();
+    super.onResize();
     if (this.overMenu) this.overMenu = this.buildOverMenu();
   }
 
@@ -134,8 +131,15 @@ export class GameState {
     window.__svlog?.push(`${(this.time / 1000).toFixed(1)}s L${this.level} score=${this.score} ${name}`);
   }
 
+  pushToasts(defs) {
+    if (!defs?.length) return;
+    this.toasts = this.toasts || [];
+    for (const d of defs) this.toasts.push({ title: d.title, start: null });
+    audio.playSynth('achieve');
+  }
+
   pickEnemyType() {
-    const r = Math.random() * 100;
+    const r = rand(0, 100);
     if (this.level >= 4 && r < 12) return 'tank';
     if (this.level >= 3 && r >= 12 && r < 32) return 'hunter';
     if (this.level >= 2 && r >= 32 && r < 57) return 'weaver';
@@ -159,10 +163,6 @@ export class GameState {
     this.powerups.push(pu);
   }
 
-  players() {
-    return this.player2 ? [this.player1, this.player2] : [this.player1];
-  }
-
   explode(x, y, sound = true, scale = 1) {
     this.effects.push(new Explosion(x, y, this.app.images.explosion_spritesheet, this.time, scale));
     this.shake = Math.min(12, this.shake + 3 * scale);
@@ -180,6 +180,7 @@ export class GameState {
       this.spawnSparks(p.x, p.y, 16);
       audio.playSynth('shield_pop');
       vibrate(50);
+      this.pushToasts(bumpStats({ shieldSaves: 1 }));
       return;
     }
     this.explode(p.x, p.y, true, 1.6);
@@ -198,6 +199,7 @@ export class GameState {
       this.mult = tier;
       this.multPulse = this.time;
       audio.playSynth('combo');
+      this.pushToasts(bumpStats({ maxMult: tier }));
     }
     this.score += points * this.mult;
   }
@@ -213,7 +215,6 @@ export class GameState {
     this.level += 1;
     this.nextBossScore = this.score + 150 + this.level * 150;
     // guaranteed regular-wave time before the next boss, growing with level
-    // (combo score inflation otherwise collapses late waves into back-to-back bosses)
     this.bossReadyAt = this.time + Math.min(70000, 45000 + (this.level - 1) * 5000);
     this.enemyInterval = Math.max(500, this.enemyInterval - 200);
     this.asteroidInterval = Math.max(2000, this.asteroidInterval - 500);
@@ -221,7 +222,8 @@ export class GameState {
     // breather: no new spawns for a few seconds
     this.spawnHoldUntil = this.time + 4000;
     // fresh nebula palette + planet zoom step for the new level
-    this.nebulae = makeNebulaField(3, (170 + (this.level - 1) * 47) % 360);
+    this.nebulaHue = (170 + (this.level - 1) * 47) % 360;
+    this.nebulae = makeNebulaField(3, this.nebulaHue);
     this.bgZoomTarget = 1 + ((this.level - 1) % 4) * 0.05;
     // celebration: shockwave from the boss + LEVEL N banner + fanfare
     this.effects.push(new Shockwave(x ?? W / 2, y ?? H / 2, this.time));
@@ -229,25 +231,13 @@ export class GameState {
     this.logEvent('LEVELUP (boss killed)');
     audio.playSynth('fanfare');
     vibrate(80);
+    this.pushToasts(bumpStats({ bossKills: 1, maxLevel: this.level }));
   }
 
   update(dt) {
     this.k = dt / STEP;
-    // --- pause handling ---
-    if (input.pressed.has('KeyP') || input.pressed.has('Escape')) {
-      if (!this.over) {
-        this.paused = !this.paused;
-        audio.play('click', 0.5);
-        if (this.paused) this.pauseMenu = this.buildPauseMenu();
-      }
-    }
 
-    if (this.paused) {
-      const action = this.pauseMenu.update();
-      if (action === 'resume') this.paused = false;
-      else if (action === 'main_menu') this.app.goMenu();
-      return;
-    }
+    if (!this.over && this.handlePause()) return;
 
     if (this.over) {
       this.updateGameOver();
@@ -277,8 +267,8 @@ export class GameState {
       this.asteroids.push(new Asteroid(this.app.images.asteroid, 'large'));
     }
 
-    // --- boss spawn: needs the score AND at least ~30s of wave time (combo inflates
-    // the score, so a time gate keeps waves from being wall-to-wall boss fights) ---
+    // --- boss spawn: WARNING klaxon first, then the boss flies in.
+    // Needs the score AND enough wave time (combo inflates the score) ---
     if (this.score >= this.nextBossScore && this.time >= this.bossReadyAt && !this.bossSpawned && !this.levelBanner) {
       if (!this.bossWarnStart) {
         this.bossWarnStart = this.time;
@@ -306,19 +296,10 @@ export class GameState {
       }
     }
 
-    // --- background scroll + per-level parallax zoom ---
-    this.bgZoom += (this.bgZoomTarget - this.bgZoom) * Math.min(1, 0.01 * this.k);
-    const bg = this.app.images.game_background;
-    this.bgW = bg.width * ((H * this.bgZoom) / bg.height); // cover height, keep aspect
-    this.bgX -= 0.1 * this.speedMul * this.k;
-    if (this.bgX <= -this.bgW) this.bgX = 0;
-    updateNebulae(this.nebulae, this.k, this.speedMul);
+    // --- backdrop + shake + combo/banner timers ---
+    this.updateBackdrop(dt);
     this.shake *= Math.pow(0.88, this.k);
-
-    // combo timer expiry
     if (this.combo > 0 && this.time > this.comboEnd) this.resetCombo();
-
-    // level banner expiry (game logic, not draw — draw may be throttled)
     if (this.levelBanner && this.time - this.levelBanner.start >= 2200) this.levelBanner = null;
 
     // --- updates ---
@@ -331,7 +312,6 @@ export class GameState {
     for (const a of this.asteroids) a.update(this);
     for (const p of this.powerups) p.update(this);
     for (const fx of this.effects) fx.update(this);
-    for (const layer of this.starLayers) for (const s of layer) s.update(this.k);
 
     // --- collisions ---
     this.handleCollisions();
@@ -356,6 +336,7 @@ export class GameState {
       this.over = true;
       this.overAlpha = 0;
       this.app.saveHigh(this.score);
+      this.pushToasts(bumpStats({ bestScore: this.score }));
     }
   }
 
@@ -403,13 +384,14 @@ export class GameState {
             continue;
           }
           this.addKill(enemy.points + (isRocket ? 10 : 0));
+          this.pushToasts(bumpStats({ kills: 1 }));
           if (enemy.isBoss) {
             enemy.dead = true;
             this.explode(enemy.x, enemy.y, true, 2.5);
             this.levelUp(enemy.x, enemy.y);
           } else {
-            if (enemy.type === 'tank' && Math.random() < 0.4) this.dropPowerup(enemy.x, enemy.y);
-            if (Math.random() < 0.45) {
+            if (enemy.type === 'tank' && rand(0, 1) < 0.4) this.dropPowerup(enemy.x, enemy.y);
+            if (rand(0, 1) < 0.45) {
               // disabled, not destroyed: sparks, smoke, tumbles off-screen
               enemy.startDying();
               this.spawnSparks(enemy.x, enemy.y, 10);
@@ -464,7 +446,7 @@ export class GameState {
       }
     }
 
-    // players vs enemy bullets / enemies / asteroids
+    // players vs enemy bullets / enemies / asteroids / power-ups
     for (const p of this.players()) {
       if (!p.alive) continue;
       for (const b of this.enemyBullets) {
@@ -484,10 +466,11 @@ export class GameState {
       }
       if (!p.alive) continue;
 
-      // power-ups
       for (const pu of this.powerups) {
         if (pu.dead || !overlap(p, pu, 0.9)) continue;
         pu.dead = true;
+        this.runPowerups += 1;
+        this.pushToasts(bumpStats({ maxRunPowerups: this.runPowerups }));
         if (pu.type === 'shooting') {
           p.powerUp(this);
           audio.play('powerup', 0.6);
@@ -533,7 +516,8 @@ export class GameState {
         askName().then((name) => {
           if (!name) { this.lb = { status: 'skipped' }; return; }
           this.lb = { status: 'sending' };
-          submitScore(name, this.score, this.coop ? 'coop' : 'single').then((res) => {
+          const mode = this.daily ? 'daily' : this.coop ? 'coop' : 'single';
+          submitScore(name, this.score, mode).then((res) => {
             this.lb = res && res.ok
               ? { status: 'done', rank: res.rank, top: res.top, name }
               : { status: 'offline' };
@@ -544,30 +528,19 @@ export class GameState {
     if (this.lb.status === 'asking') return; // overlay is open, don't react to Enter/clicks
 
     const action = this.overMenu.update();
-    if (action === 'retry') this.app.setState(new GameState(this.app, this.coop));
+    if (action === 'retry') this.app.setState(new GameState(this.app, this.coop, { daily: this.daily }));
     else if (action === 'main_menu') this.app.goMenu();
   }
 
   draw(g) {
     const { images } = this.app;
-    g.fillStyle = '#000';
-    g.fillRect(0, 0, W, H);
 
     g.save();
     if (this.shake > 0.3 && !this.paused && !this.over) {
       g.translate((Math.random() - 0.5) * this.shake, (Math.random() - 0.5) * this.shake);
     }
 
-    // scrolling background (aspect-preserving cover, per-level zoom)
-    const bg = images.game_background;
-    const bgH = H * (this.bgZoom || 1);
-    const bgW = this.bgW || bg.width * (bgH / bg.height);
-    const bgY = -(bgH - H) / 2;
-    g.drawImage(bg, this.bgX, bgY, bgW, bgH);
-    g.drawImage(bg, this.bgX + bgW, bgY, bgW, bgH);
-
-    drawNebulae(g, this.nebulae);
-    for (const layer of this.starLayers) for (const s of layer) s.draw(g);
+    this.drawBackdrop(g);
 
     for (const pu of this.powerups) pu.draw(g, this);
     for (const a of this.asteroids) a.draw(g);
@@ -583,6 +556,17 @@ export class GameState {
     if (this.speedMul < 1) {
       g.fillStyle = 'rgba(80,150,255,0.08)';
       g.fillRect(0, 0, W, H);
+    }
+
+    // boss WARNING banner
+    if (this.bossWarnStart) {
+      const blink = 0.5 + 0.5 * Math.sin(this.time / 90);
+      g.fillStyle = `rgba(255,0,0,${0.08 * blink})`;
+      g.fillRect(0, 0, W, H);
+      g.globalAlpha = 0.55 + 0.45 * blink;
+      drawText(g, '!! WARNING !!', W / 2, H / 2 - 220, 46, 'rgb(255,60,60)');
+      drawText(g, 'BOSS APPROACHING', W / 2, H / 2 - 178, 20, 'rgb(255,150,150)');
+      g.globalAlpha = 1;
     }
 
     // LEVEL N banner: white flash → pop-in → hold → fade out
@@ -608,17 +592,6 @@ export class GameState {
       }
     }
 
-    // boss WARNING banner
-    if (this.bossWarnStart) {
-      const blink = 0.5 + 0.5 * Math.sin(this.time / 90);
-      g.fillStyle = `rgba(255,0,0,${0.08 * blink})`;
-      g.fillRect(0, 0, W, H);
-      g.globalAlpha = 0.55 + 0.45 * blink;
-      drawText(g, '!! WARNING !!', W / 2, H / 2 - 220, 46, 'rgb(255,60,60)');
-      drawText(g, 'BOSS APPROACHING', W / 2, H / 2 - 178, 20, 'rgb(255,150,150)');
-      g.globalAlpha = 1;
-    }
-
     // HUD
     const scoreText = `Score: ${this.score}`;
     drawText(g, scoreText, 10, 24, 26, '#fff', 'left');
@@ -633,6 +606,7 @@ export class GameState {
       g.fillRect(mx, 38, 46 * frac, 3);
     }
     drawText(g, `Level: ${this.level}`, W - 10, 24, 26, '#fff', 'right');
+    if (this.daily) drawText(g, 'DAILY', W / 2, 50, 20, 'rgb(255,210,60)');
     // lives + rockets per player
     const p1 = this.player1;
     drawText(g, 'P1', 10, 58, 22, '#fff', 'left');
@@ -646,6 +620,9 @@ export class GameState {
     }
     if (this.speedMul < 1) drawText(g, 'SLOW-MO', W / 2, 24, 24, 'rgb(120,200,255)');
 
+    // achievement toasts
+    this.drawToasts(g);
+
     // touch rocket button
     if (input.isTouch && !this.over && !this.paused) {
       const b = this.rocketBtn();
@@ -655,18 +632,12 @@ export class GameState {
       g.arc(b.x, b.y, b.r, 0, Math.PI * 2);
       g.fill();
       g.globalAlpha = 0.9;
-      const img = images.rocket;
-      g.drawImage(img, b.x - 20, b.y - 18, 40, 20);
+      g.drawImage(images.rocket, b.x - 20, b.y - 18, 40, 20);
       drawText(g, `${this.player1.rockets}`, b.x, b.y + 16, 22, '#000');
       g.globalAlpha = 1;
     }
 
-    if (this.paused) {
-      g.fillStyle = 'rgba(0,0,0,0.5)';
-      g.fillRect(0, 0, W, H);
-      drawText(g, 'PAUSED', W / 2, H / 2 - 130, 52, 'rgb(255,60,60)');
-      this.pauseMenu.draw(g);
-    }
+    this.drawPauseOverlay(g);
 
     if (this.over) {
       g.fillStyle = `rgba(0,0,0,${this.overAlpha})`;
@@ -677,14 +648,14 @@ export class GameState {
         drawText(g, `Best: ${this.app.highScore}`, W / 2, H / 2, 24, 'rgb(180,180,180)');
         this.overMenu.draw(g);
 
-        // global leaderboard block under the buttons
+        // leaderboard block under the buttons
         const ly = H / 2 + 195;
         if (this.lb.status === 'done') {
           if (this.lb.rank > 0 && this.lb.rank <= 10) {
-            drawText(g, `GLOBAL RANK: #${this.lb.rank}`, W / 2, ly, 22, 'rgb(255,210,80)');
+            drawText(g, `${this.daily ? 'DAILY' : 'GLOBAL'} RANK: #${this.lb.rank}`, W / 2, ly, 22, 'rgb(255,210,80)');
           }
           if (this.lb.top?.length) {
-            drawText(g, '— GLOBAL TOP —', W / 2, ly + 30, 16, 'rgb(140,140,140)');
+            drawText(g, this.daily ? '— DAILY TOP —' : '— GLOBAL TOP —', W / 2, ly + 30, 16, 'rgb(140,140,140)');
             this.lb.top.slice(0, 5).forEach((e, i) => {
               const mine = this.lb.rank === i + 1;
               const col = mine ? 'rgb(0,255,140)' : 'rgb(200,200,200)';
@@ -699,5 +670,23 @@ export class GameState {
         }
       }
     }
+  }
+
+  drawToasts(g) {
+    if (!this.toasts?.length) return;
+    const now = performance.now();
+    let y = 130;
+    this.toasts = this.toasts.filter((t) => {
+      if (t.start == null) t.start = now;
+      const age = now - t.start;
+      if (age > 3200) return false;
+      const slide = Math.min(1, age / 250);
+      const fade = age > 2700 ? 1 - (age - 2700) / 500 : 1;
+      g.globalAlpha = slide * fade;
+      drawText(g, `🏆 ${t.title}`, W / 2, y - 20 * (1 - slide), 20, 'rgb(255,210,60)');
+      g.globalAlpha = 1;
+      y += 30;
+      return true;
+    });
   }
 }

@@ -2,6 +2,8 @@
 // Mobile browsers (iOS especially) only unlock audio inside a real user-gesture
 // event handler — installAutoUnlock() resumes the context and "warms" the music
 // elements (muted play/pause) on the first touch/click/key.
+import { settings } from './settings.js';
+
 const AC = window.AudioContext || window.webkitAudioContext;
 const actx = new AC();
 const buffers = {};
@@ -25,10 +27,10 @@ export async function loadSounds(onProgress) {
 
 export function play(name, volume = 0.6) {
   const buf = buffers[name];
-  if (!buf || actx.state !== 'running') return;
+  if (!buf || actx.state !== 'running' || settings.sfx <= 0) return;
   const src = actx.createBufferSource();
   const gain = actx.createGain();
-  gain.gain.value = volume;
+  gain.gain.value = volume * settings.sfx;
   src.buffer = buf;
   src.connect(gain).connect(actx.destination);
   src.start();
@@ -44,7 +46,7 @@ function note(freq, when, dur, type = 'triangle', vol = 0.2, slide = 0) {
   osc.frequency.setValueAtTime(freq, when);
   if (slide) osc.frequency.exponentialRampToValueAtTime(Math.max(30, freq + slide), when + dur);
   gain.gain.setValueAtTime(0.0001, when);
-  gain.gain.linearRampToValueAtTime(vol, when + 0.012);
+  gain.gain.linearRampToValueAtTime(vol * settings.sfx, when + 0.012);
   gain.gain.exponentialRampToValueAtTime(0.001, when + dur);
   osc.connect(gain).connect(actx.destination);
   osc.start(when);
@@ -52,7 +54,7 @@ function note(freq, when, dur, type = 'triangle', vol = 0.2, slide = 0) {
 }
 
 export function playSynth(name) {
-  if (actx.state !== 'running') return;
+  if (actx.state !== 'running' || settings.sfx <= 0) return;
   const t = actx.currentTime;
   if (name === 'fanfare') {
     [523, 659, 784, 1046].forEach((f, i) => note(f, t + i * 0.12, 0.25, 'triangle', 0.22));
@@ -66,6 +68,10 @@ export function playSynth(name) {
     note(900, t, 0.28, 'sine', 0.26, -700);
   } else if (name === 'respawn') {
     note(300, t, 0.35, 'sine', 0.2, 550);
+  } else if (name === 'achieve') {
+    note(660, t, 0.12, 'triangle', 0.2);
+    note(880, t + 0.1, 0.12, 'triangle', 0.2);
+    note(1320, t + 0.2, 0.35, 'triangle', 0.18);
   } else if (name === 'siren') {
     // falling-wreck wail
     note(880, t, 1.3, 'sawtooth', 0.07, -640);
@@ -84,6 +90,7 @@ export function playSynth(name) {
 
 const musicEls = {};
 let currentTrack = null;
+let currentBaseVol = 0.45;
 
 function musicEl(track) {
   let el = musicEls[track];
@@ -100,10 +107,21 @@ export function playMusic(track, volume = 0.45) {
   if (currentTrack === track) return;
   stopMusic();
   currentTrack = track;
+  currentBaseVol = volume;
   const el = musicEl(track);
-  el.volume = volume;
+  el.volume = volume * settings.music;
   try { el.currentTime = 0; } catch {}
-  el.play().catch(() => {}); // if blocked, the unlock handler will retry
+  if (settings.music > 0) el.play().catch(() => {}); // if blocked, the unlock handler retries
+}
+
+// live-apply the music volume setting (called from the settings screen)
+export function applyMusicVolume() {
+  if (!currentTrack) return;
+  const el = musicEls[currentTrack];
+  if (!el) return;
+  el.volume = currentBaseVol * settings.music;
+  if (settings.music <= 0) el.pause();
+  else if (el.paused) el.play().catch(() => {});
 }
 
 export function stopMusic() {
@@ -128,7 +146,7 @@ export function installAutoUnlock() {
       for (const t of TRACKS) {
         const el = musicEl(t);
         if (t === currentTrack) {
-          if (el.paused) el.play().catch(() => { warmed = false; });
+          if (el.paused && settings.music > 0) el.play().catch(() => { warmed = false; });
           continue;
         }
         el.muted = true;
@@ -136,7 +154,7 @@ export function installAutoUnlock() {
           .then(() => { el.pause(); try { el.currentTime = 0; } catch {} el.muted = false; })
           .catch(() => { el.muted = false; warmed = false; });
       }
-    } else if (currentTrack) {
+    } else if (currentTrack && settings.music > 0) {
       const el = musicEls[currentTrack];
       if (el && el.paused) el.play().catch(() => {});
     }

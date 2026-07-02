@@ -1,10 +1,10 @@
-// Versus mode — port of versus.py (first to 10 kills)
-import { W, H, STEP, randInt, overlap } from './const.js';
+// Versus mode — port of versus.py (first to 10 kills), on top of BaseWorld
+import { W, H, STEP, randInt, overlap, setRngSeed } from './const.js';
 import * as input from './input.js';
 import * as audio from './audio.js';
 import { Button, ButtonGroup, drawText } from './ui.js';
-import { Player, Bullet, Explosion, makeStarLayers } from './entities.js';
-import { makeNebulaField, updateNebulae, drawNebulae } from './fx.js';
+import { BaseWorld } from './world.js';
+import { Player, Bullet, Explosion } from './entities.js';
 
 const SCORE_LIMIT = 10;
 
@@ -17,31 +17,24 @@ const P2_CONTROLS = {
   shoot: 'Enter', shootAlt: 'NumpadEnter', speed: 'Numpad0', speedAlt: 'ShiftRight',
 };
 
-export class VersusState {
+export class VersusState extends BaseWorld {
   constructor(app) {
-    this.app = app;
+    super(app, 'versus_background');
   }
 
   enter() {
     const { images } = this.app;
     audio.playMusic('versus_music');
+    setRngSeed(null);
 
-    this.time = 0;
+    this.initBackdrop();
     this.score1 = 0;
     this.score2 = 0;
-    this.paused = false;
     this.winner = null;
     this.winMenu = null;
-    this.pauseMenu = null;
-    this.bgX = 0;
-    this.k = 1;
-    this.speedMul = 1;
 
     this.bullets1 = [];
     this.bullets2 = [];
-    this.effects = [];
-    this.starLayers = makeStarLayers();
-    this.nebulae = makeNebulaField(3);
 
     this.player1 = new Player(images, {
       img: images.player1_ship,
@@ -67,17 +60,14 @@ export class VersusState {
     this.spawn(this.player2, 2);
   }
 
+  players() {
+    return [this.player1, this.player2];
+  }
+
   spawn(p, side) {
     p.y = randInt(50, H - 50);
     p.x = side === 1 ? randInt(50, W / 2 - 50) + p.w / 2 : randInt(W / 2 + 50, W - 50) - p.w / 2;
     p.alive = true;
-  }
-
-  buildPauseMenu() {
-    return new ButtonGroup([
-      new Button('RESUME', W / 2, H / 2 - 40, 200, 60, 'rgb(0,255,0)', 'resume'),
-      new Button('MAIN MENU', W / 2, H / 2 + 50, 200, 60, 'rgb(255,0,0)', 'main_menu'),
-    ]);
   }
 
   buildWinMenu() {
@@ -88,9 +78,7 @@ export class VersusState {
   }
 
   onResize() {
-    this.starLayers = makeStarLayers();
-    this.nebulae = makeNebulaField(3);
-    if (this.pauseMenu) this.pauseMenu = this.buildPauseMenu();
+    super.onResize();
     if (this.winMenu) this.winMenu = this.buildWinMenu();
   }
 
@@ -110,6 +98,7 @@ export class VersusState {
 
   update(dt) {
     this.k = dt / STEP;
+
     if (this.winner) {
       const action = this.winMenu.update();
       if (action === 'retry') this.app.setState(new VersusState(this.app));
@@ -117,25 +106,10 @@ export class VersusState {
       return;
     }
 
-    if (input.pressed.has('Escape') || input.pressed.has('KeyP')) {
-      this.paused = !this.paused;
-      audio.play('click', 0.5);
-      if (this.paused) this.pauseMenu = this.buildPauseMenu();
-    }
-    if (this.paused) {
-      const action = this.pauseMenu.update();
-      if (action === 'resume') this.paused = false;
-      else if (action === 'main_menu') this.app.goMenu();
-      return;
-    }
+    if (this.handlePause()) return;
 
     this.time += dt;
-
-    const bg = this.app.images.versus_background;
-    this.bgW = bg.width * (H / bg.height); // cover height, keep aspect
-    this.bgX -= 0.1 * this.k;
-    if (this.bgX <= -this.bgW) this.bgX = 0;
-    updateNebulae(this.nebulae, this.k);
+    this.updateBackdrop(dt);
 
     this.player1.update(this);
     this.player2.update(this);
@@ -145,7 +119,6 @@ export class VersusState {
     for (const b of this.bullets1) b.update(this);
     for (const b of this.bullets2) b.update(this);
     for (const fx of this.effects) fx.update(this);
-    for (const layer of this.starLayers) for (const s of layer) s.update(this.k);
 
     // hits
     if (this.player1.alive) {
@@ -198,16 +171,7 @@ export class VersusState {
   }
 
   draw(g) {
-    const { images } = this.app;
-    g.fillStyle = '#000';
-    g.fillRect(0, 0, W, H);
-    const bg = images.versus_background;
-    const bgW = this.bgW || bg.width * (H / bg.height);
-    g.drawImage(bg, this.bgX, 0, bgW, H);
-    g.drawImage(bg, this.bgX + bgW, 0, bgW, H);
-
-    drawNebulae(g, this.nebulae);
-    for (const layer of this.starLayers) for (const s of layer) s.draw(g);
+    this.drawBackdrop(g);
 
     for (const b of this.bullets1) b.draw(g);
     for (const b of this.bullets2) b.draw(g);
@@ -219,12 +183,7 @@ export class VersusState {
     drawText(g, `P2 Score: ${this.score2}`, W - 10, 24, 26, '#fff', 'right');
     drawText(g, `First to ${SCORE_LIMIT}`, W / 2, 24, 18, 'rgb(160,160,160)');
 
-    if (this.paused) {
-      g.fillStyle = 'rgba(0,0,0,0.5)';
-      g.fillRect(0, 0, W, H);
-      drawText(g, 'PAUSED', W / 2, H / 2 - 130, 52, 'rgb(255,60,60)');
-      this.pauseMenu.draw(g);
-    }
+    this.drawPauseOverlay(g);
 
     if (this.winner) {
       g.fillStyle = 'rgba(0,0,0,0.6)';

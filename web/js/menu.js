@@ -1,5 +1,5 @@
 // Main menu — port of menu.py
-import { W, H, STEP, randInt, rand } from './const.js';
+import { W, H, STEP, randInt, rand, setRngSeed } from './const.js';
 import * as input from './input.js';
 import * as audio from './audio.js';
 import { Button, ButtonGroup, drawText } from './ui.js';
@@ -7,6 +7,7 @@ import { Star, StaticStar } from './entities.js';
 import { GameState } from './game.js';
 import { VersusState } from './versus.js';
 import { ScoresState } from './scores.js';
+import { OptionsState } from './options.js';
 
 export class MenuState {
   constructor(app) {
@@ -15,7 +16,7 @@ export class MenuState {
 
   enter() {
     audio.playMusic('background_music');
-    this.fsHint = 0;
+    setRngSeed(null); // leave daily-seeded RNG
     this.layout();
   }
 
@@ -29,11 +30,12 @@ export class MenuState {
       this.staticStars.push(new StaticStar(randInt(0, W), randInt(0, H), randInt(1, 4), randInt(50, 200)));
     }
     this.menu = new ButtonGroup([
-      new Button('SINGLE', W / 2, H / 2 - 150, 200, 60, 'rgb(0,255,0)', 'single'),
-      new Button('COOP', W / 2, H / 2 - 75, 200, 60, 'rgb(0,120,255)', 'coop'),
-      new Button('VERSUS', W / 2, H / 2, 200, 60, 'rgb(255,140,0)', 'versus'),
-      new Button('SCORES', W / 2, H / 2 + 75, 200, 60, 'rgb(255,210,0)', 'scores'),
-      new Button('FULLSCREEN', W / 2, H / 2 + 150, 200, 60, 'rgb(255,0,0)', 'fullscreen'),
+      new Button('SINGLE', W / 2, H / 2 - 185, 200, 58, 'rgb(0,255,0)', 'single'),
+      new Button('COOP', W / 2, H / 2 - 111, 200, 58, 'rgb(0,120,255)', 'coop'),
+      new Button('VERSUS', W / 2, H / 2 - 37, 200, 58, 'rgb(255,140,0)', 'versus'),
+      new Button('DAILY', W / 2, H / 2 + 37, 200, 58, 'rgb(255,210,0)', 'daily'),
+      new Button('SCORES', W / 2, H / 2 + 111, 200, 58, 'rgb(200,120,255)', 'scores'),
+      new Button('SETTINGS', W / 2, H / 2 + 185, 200, 58, 'rgb(255,0,0)', 'settings'),
     ]);
   }
 
@@ -50,20 +52,9 @@ export class MenuState {
     if (action === 'single') this.app.setState(new GameState(this.app, false));
     else if (action === 'coop') this.app.setState(new GameState(this.app, true));
     else if (action === 'versus') this.app.setState(new VersusState(this.app));
+    else if (action === 'daily') this.app.setState(new GameState(this.app, false, { daily: true }));
     else if (action === 'scores') this.app.setState(new ScoresState(this.app));
-    else if (action === 'fullscreen') {
-      if (document.fullscreenEnabled) {
-        if (!document.fullscreenElement) {
-          document.documentElement.requestFullscreen().catch(() => {});
-        } else {
-          document.exitFullscreen().catch(() => {});
-        }
-      } else {
-        // iOS Safari has no Fullscreen API — PWA install is the way
-        this.fsHint = 420; // ~7 seconds
-      }
-    }
-    if (this.fsHint > 0) this.fsHint -= k;
+    else if (action === 'settings') this.app.setState(new OptionsState(this.app));
   }
 
   draw(g) {
@@ -82,21 +73,13 @@ export class MenuState {
     for (const s of this.staticStars) s.draw(g);
     for (const s of this.stars) s.draw(g);
 
-    drawText(g, 'SPACE VOID', W / 2, H / 2 - 290, 60);
-    drawText(g, 'v1.0 web', W / 2, H / 2 - 248, 20, 'rgb(150,150,150)');
+    drawText(g, 'SPACE VOID', W / 2, H / 2 - 315, 58);
+    drawText(g, 'v1.1 web', W / 2, H / 2 - 275, 19, 'rgb(150,150,150)');
     if (this.app.highScore > 0) {
-      drawText(g, `BEST: ${this.app.highScore}`, W / 2, H / 2 - 215, 24, 'rgb(255,210,80)');
+      drawText(g, `BEST: ${this.app.highScore}`, W / 2, H / 2 - 243, 22, 'rgb(255,210,80)');
     }
 
     this.menu.draw(g);
-
-    // iOS fullscreen hint
-    if (this.fsHint > 0) {
-      g.globalAlpha = Math.min(1, this.fsHint / 60);
-      drawText(g, 'iPhone/iPad: Share → Add to Home Screen', W / 2, H / 2 + 190, 16, 'rgb(255,210,80)');
-      drawText(g, 'then launch from the icon for fullscreen', W / 2, H / 2 + 212, 16, 'rgb(255,210,80)');
-      g.globalAlpha = 1;
-    }
 
     // controls hint
     if (input.isTouch) {

@@ -10,8 +10,22 @@ export function setSize(w, h) { W = w; H = h; }
 
 export const STEP = 1000 / 60; // reference 60 FPS logic step, like pygame's Clock().tick(60)
 
-export const rand = (a, b) => a + Math.random() * (b - a);
-export const randInt = (a, b) => Math.floor(a + Math.random() * (b - a + 1));
+// Game-logic RNG — seedable for the daily challenge (mulberry32).
+// Draw-only randomness must keep using Math.random so render rate can't
+// desync the seeded stream.
+let rngFn = Math.random;
+export function setRngSeed(seed) {
+  if (seed == null) { rngFn = Math.random; return; }
+  let s = (seed >>> 0) || 1;
+  rngFn = () => {
+    s |= 0; s = (s + 0x6D2B79F5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+export const rand = (a, b) => a + rngFn() * (b - a);
+export const randInt = (a, b) => Math.floor(a + rngFn() * (b - a + 1));
 export const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 
 // AABB overlap on center-based sprites; shrink approximates pygame mask collision fairness

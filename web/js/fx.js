@@ -73,6 +73,16 @@ export function makeNebula(size = 512, baseHue = null) {
       g.fill();
     }
   }
+  // radial mask: fade to transparent toward the canvas edge so scaled-up
+  // nebulae never show hard square borders
+  g.globalCompositeOperation = 'destination-in';
+  const mask = g.createRadialGradient(size / 2, size / 2, size * 0.18, size / 2, size / 2, size * 0.5);
+  mask.addColorStop(0, 'rgba(0,0,0,1)');
+  mask.addColorStop(0.75, 'rgba(0,0,0,0.75)');
+  mask.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = mask;
+  g.fillRect(0, 0, size, size);
+  g.globalCompositeOperation = 'source-over';
   return c;
 }
 

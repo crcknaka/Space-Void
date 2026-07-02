@@ -7,6 +7,25 @@ import * as audio from './audio.js';
 import { glowBullet, glowEnemyBullet, glowPowerup, glowEngine, glowExplosion, drawGlow, tinted } from './fx.js';
 
 /* ---------------------------------- stars ---------------------------------- */
+// Stars render from small pre-baked sprites (drawImage) instead of per-frame
+// arc()+fill() — ~150 stars per scene, this is markedly cheaper.
+
+const starSpriteCache = new Map();
+function starSprite(color) {
+  let c = starSpriteCache.get(color);
+  if (c) return c;
+  c = document.createElement('canvas');
+  c.width = c.height = 16;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(8, 8, 0, 8, 8, 8);
+  grad.addColorStop(0, color);
+  grad.addColorStop(0.55, color);
+  grad.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 16, 16);
+  starSpriteCache.set(color, c);
+  return c;
+}
 
 export class Star {
   constructor(x, y, speed, size, opacity) {
@@ -14,6 +33,7 @@ export class Star {
     this.speed = speed;
     this.size = size;
     this.opacity = opacity / 255;
+    this.sprite = starSprite('#fff');
   }
   update(k = 1) {
     this.x -= this.speed * k;
@@ -24,10 +44,8 @@ export class Star {
   }
   draw(g) {
     g.globalAlpha = this.opacity;
-    g.fillStyle = '#fff';
-    g.beginPath();
-    g.arc(this.x, this.y, this.size, 0, Math.PI * 2);
-    g.fill();
+    const d = this.size * 2.6;
+    g.drawImage(this.sprite, this.x - d / 2, this.y - d / 2, d, d);
     g.globalAlpha = 1;
   }
 }
@@ -40,7 +58,7 @@ export class StaticStar {
     this.maxOpacity = opacity;
     this.fading = Math.random() < 0.5;
     this.fadeSpeed = rand(0.1, 0.5);
-    this.color = `rgb(${randInt(0, 255)},${randInt(0, 255)},255)`; // white..blue tint like menu.py
+    this.sprite = starSprite(`rgb(${randInt(0, 255)},${randInt(0, 255)},255)`); // white..blue tint like menu.py
   }
   update(k = 1) {
     const d = this.fadeSpeed * k;
@@ -54,10 +72,8 @@ export class StaticStar {
   }
   draw(g) {
     g.globalAlpha = this.opacity / 255;
-    g.fillStyle = this.color;
-    g.beginPath();
-    g.arc(this.x, this.y, this.size, 0, Math.PI * 2);
-    g.fill();
+    const d = this.size * 2.6;
+    g.drawImage(this.sprite, this.x - d / 2, this.y - d / 2, d, d);
     g.globalAlpha = 1;
   }
 }
@@ -394,8 +410,8 @@ export class Player {
 export class Spark {
   constructor(x, y, time, dir = Math.PI) {
     this.x = x; this.y = y;
-    const a = dir + (Math.random() - 0.5) * 1.8;
-    const sp = 2 + Math.random() * 4.5;
+    const a = dir + rand(-0.9, 0.9);
+    const sp = rand(2, 6.5);
     this.vx = Math.cos(a) * sp;
     this.vy = Math.sin(a) * sp;
     this.life = 180 + Math.random() * 220;
@@ -533,7 +549,7 @@ export class Enemy {
     this.vx = this.vx * rand(0.15, 0.7) + rand(-0.6, 0.4);
     this.vyFall = rand(0.2, 1.8);
     this.gravity = rand(0.03, 0.11);
-    const style = Math.random();
+    const style = rand(0, 1);
     if (style < 0.38) {
       // flat fall, hull rocking side to side
       this.spinMode = 'wobble';
@@ -543,9 +559,9 @@ export class Enemy {
     } else {
       // tumbling — speed and direction vary a lot
       this.spinMode = 'spin';
-      this.spin = rand(0.5, 5.5) * (Math.random() < 0.5 ? -1 : 1);
+      this.spin = rand(0.5, 5.5) * (rand(0, 1) < 0.5 ? -1 : 1);
     }
-    this.burning = Math.random() < 0.4; // some wrecks catch fire
+    this.burning = rand(0, 1) < 0.4; // some wrecks catch fire
     this.smokeRate = rand(45, 110);
     this.spinAngle = 0;
     this.lastSmoke = 0;

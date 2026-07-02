@@ -1,8 +1,26 @@
 // Leaderboard client: API calls + DOM name-input overlay
-export async function fetchTop() {
+const PEPPER = 'void-pepper-7f3a';
+
+// FNV-1a — the server recomputes the same signature (casual tamper deterrent)
+export function sig(str) {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h.toString(16);
+}
+
+// -> {top: [...], you: {rank, score}|null} or null when offline
+export async function fetchTop(mode = '', name = '') {
   try {
-    const r = await fetch('/api/scores');
-    return r.ok ? await r.json() : null;
+    const q = new URLSearchParams();
+    if (mode) q.set('mode', mode);
+    if (name) q.set('name', name);
+    const r = await fetch(`/api/scores?${q}`);
+    if (!r.ok) return null;
+    const data = await r.json();
+    return Array.isArray(data) ? { top: data, you: null } : data; // tolerate v1 replies
   } catch {
     return null;
   }
@@ -13,7 +31,7 @@ export async function submitScore(name, score, mode) {
     const r = await fetch('/api/scores', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, score, mode }),
+      body: JSON.stringify({ name, score, mode, sig: sig(`${name}|${score}|${mode}|${PEPPER}`) }),
     });
     return r.ok ? await r.json() : null;
   } catch {

@@ -45,6 +45,10 @@ addEventListener('resize', fit);
 document.addEventListener('fullscreenchange', fit);
 input.init(canvas);
 audio.installAutoUnlock();
+// offline play + instant repeat loads
+addEventListener('load', () => {
+  navigator.serviceWorker?.register('sw.js').catch(() => {});
+});
 
 const app = {
   canvas,
