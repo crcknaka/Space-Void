@@ -27,6 +27,7 @@ export class GameState extends BaseWorld {
     super(app, 'game_background');
     this.coop = coop;
     this.daily = !!opts.daily;
+    this.online = !!opts.online; // driven by CoopHost; no pause/menu/leaderboard
   }
 
   enter() {
@@ -589,6 +590,7 @@ export class GameState extends BaseWorld {
       this.overAlpha = Math.min(0.5, this.overAlpha + 0.02 * this.k); // fade like game.py
       return;
     }
+    if (this.online) return; // host wrapper owns the online game-over flow
     if (!this.overMenu) this.overMenu = this.buildOverMenu();
 
     // one-time leaderboard submission
@@ -748,6 +750,10 @@ export class GameState extends BaseWorld {
     if (this.over) {
       g.fillStyle = `rgba(0,0,0,${this.overAlpha})`;
       g.fillRect(0, 0, W, H);
+      if (this.online && this.overAlpha >= 0.5) {
+        drawText(g, 'GAME OVER', W / 2, H / 2 - 40, 56, 'rgb(255,0,0)');
+        drawText(g, `Score: ${this.score}`, W / 2, H / 2 + 20, 30);
+      }
       if (this.overMenu) {
         drawText(g, 'GAME OVER', W / 2, H / 2 - 100, 56, 'rgb(255,0,0)');
         drawText(g, `Score: ${this.score}`, W / 2, H / 2 - 40, 30);

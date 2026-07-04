@@ -48,6 +48,7 @@ export class BaseWorld {
 
   // Esc/P toggling + pause menu interaction. Returns true while paused.
   handlePause() {
+    if (this.pauseDisabled) return false;
     if (input.pressed.has('Escape') || input.pressed.has('KeyP')) this.togglePause();
     if (!this.paused) return false;
     const action = this.pauseMenu.update();

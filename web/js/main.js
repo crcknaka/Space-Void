@@ -20,7 +20,10 @@ function fit() {
   const vw = window.innerWidth, vh = window.innerHeight;
   const aspect = vw / vh;
   let w, h;
-  if (aspect >= BASE_W / BASE_H) {
+  if (app.lockWorld) {
+    // online modes: identical fixed field for both peers, letterboxed
+    w = BASE_W; h = BASE_H;
+  } else if (aspect >= BASE_W / BASE_H) {
     h = BASE_H;
     w = clamp(Math.round(BASE_H * aspect), BASE_W, MAX_W);
   } else {
@@ -55,11 +58,18 @@ const app = {
   images: null,
   state: null,
   highScore: 0,
+  lockWorld: false,
   setState(s) {
     this.state = s;
     if (s.enter) s.enter();
   },
+  setLockWorld(on) {
+    if (this.lockWorld === on) return;
+    this.lockWorld = on;
+    fit();
+  },
   goMenu() {
+    this.setLockWorld(false);
     this.setState(new MenuState(this));
   },
   saveHigh(score) {

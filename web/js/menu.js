@@ -8,6 +8,7 @@ import { GameState } from './game.js';
 import { VersusState } from './versus.js';
 import { ScoresState } from './scores.js';
 import { OptionsState } from './options.js';
+import { OnlineState } from './online.js';
 import { todayMod, dailyAttemptsLeft, timeToNextDaily } from './daily.js';
 
 export class MenuState {
@@ -30,13 +31,16 @@ export class MenuState {
     for (let i = 0; i < 100; i++) {
       this.staticStars.push(new StaticStar(randInt(0, W), randInt(0, H), randInt(1, 4), randInt(50, 200)));
     }
+    const dy = 66;
+    let y = H / 2 - dy * 3;
     this.menu = new ButtonGroup([
-      new Button('SINGLE', W / 2, H / 2 - 185, 200, 58, 'rgb(0,255,0)', 'single'),
-      new Button('COOP', W / 2, H / 2 - 111, 200, 58, 'rgb(0,120,255)', 'coop'),
-      new Button('VERSUS', W / 2, H / 2 - 37, 200, 58, 'rgb(255,140,0)', 'versus'),
-      new Button('DAILY', W / 2, H / 2 + 37, 200, 58, 'rgb(255,210,0)', 'daily'),
-      new Button('SCORES', W / 2, H / 2 + 111, 200, 58, 'rgb(200,120,255)', 'scores'),
-      new Button('SETTINGS', W / 2, H / 2 + 185, 200, 58, 'rgb(255,0,0)', 'settings'),
+      new Button('SINGLE', W / 2, y, 200, 54, 'rgb(0,255,0)', 'single'),
+      new Button('COOP', W / 2, y += dy, 200, 54, 'rgb(0,120,255)', 'coop'),
+      new Button('VERSUS', W / 2, y += dy, 200, 54, 'rgb(255,140,0)', 'versus'),
+      new Button('ONLINE', W / 2, y += dy, 200, 54, 'rgb(0,220,255)', 'online'),
+      new Button('DAILY', W / 2, y += dy, 200, 54, 'rgb(255,210,0)', 'daily'),
+      new Button('SCORES', W / 2, y += dy, 200, 54, 'rgb(200,120,255)', 'scores'),
+      new Button('SETTINGS', W / 2, y += dy, 200, 54, 'rgb(255,0,0)', 'settings'),
     ]);
   }
 
@@ -53,6 +57,7 @@ export class MenuState {
     if (action === 'single') this.app.setState(new GameState(this.app, false));
     else if (action === 'coop') this.app.setState(new GameState(this.app, true));
     else if (action === 'versus') this.app.setState(new VersusState(this.app));
+    else if (action === 'online') this.app.setState(new OnlineState(this.app));
     else if (action === 'daily') {
       if (dailyAttemptsLeft() > 0) this.app.setState(new GameState(this.app, false, { daily: true }));
       else this.dailyBlock = 240; // ~4s "no attempts" note
