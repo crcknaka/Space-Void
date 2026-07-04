@@ -378,13 +378,15 @@ export class GameState extends BaseWorld {
       if (Math.hypot(pt.x - btn.x, pt.y - btn.y) <= btn.r) {
         p.fireRocket(this);
       } else if (Math.hypot(pt.x - pbtn.x, pt.y - pbtn.y) <= pbtn.r) {
-        this.togglePause();
+        // top-right button: leave in online, pause otherwise
+        if (this.online) this.requestLeave = true;
+        else this.togglePause();
         this.drag = null;
         return;
       } else if (!this.drag) {
         this.drag = { id, px: pt.x, py: pt.y, ox: p.x, oy: p.y };
-      } else {
-        // quick two-finger tap (both fingers down & still) also pauses
+      } else if (!this.online) {
+        // quick two-finger tap (both fingers down & still) also pauses (offline only)
         const dp = input.pointers.get(this.drag.id);
         if (dp && performance.now() - dp.downAt < 400 && Math.hypot(dp.x - dp.sx, dp.y - dp.sy) < 15) {
           this.togglePause();
@@ -739,9 +741,16 @@ export class GameState extends BaseWorld {
       g.arc(pb.x, pb.y, pb.r - 4, 0, Math.PI * 2);
       g.fill();
       g.globalAlpha = 0.85;
-      g.fillStyle = '#000';
-      g.fillRect(pb.x - 7, pb.y - 8, 5, 16); // pause bars
-      g.fillRect(pb.x + 2, pb.y - 8, 5, 16);
+      if (this.online) {
+        // leave (X)
+        g.strokeStyle = '#000'; g.lineWidth = 3;
+        g.beginPath(); g.moveTo(pb.x - 6, pb.y - 6); g.lineTo(pb.x + 6, pb.y + 6);
+        g.moveTo(pb.x + 6, pb.y - 6); g.lineTo(pb.x - 6, pb.y + 6); g.stroke();
+      } else {
+        g.fillStyle = '#000';
+        g.fillRect(pb.x - 7, pb.y - 8, 5, 16); // pause bars
+        g.fillRect(pb.x + 2, pb.y - 8, 5, 16);
+      }
       g.globalAlpha = 1;
     }
 

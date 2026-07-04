@@ -70,6 +70,26 @@ export class VersusOnline extends BaseWorld {
     p.invulnUntil = this.time + 1500;
   }
 
+  leaveBtn() { return { x: 34, y: 70, r: 22 }; } // below the score HUD
+
+  // touch: drag to move (auto-fire while alive); tap the top-left X to leave
+  handleTouch() {
+    if (!input.isTouch) return;
+    const lb = this.leaveBtn();
+    for (const [id, pt] of input.pointers) {
+      if (!pt.justDown) continue;
+      if (Math.hypot(pt.x - lb.x, pt.y - lb.y) <= lb.r) { this.leave(); return; }
+      if (!this.drag && this.local.alive) this.drag = { id, px: pt.x, py: pt.y, ox: this.local.x, oy: this.local.y };
+    }
+    if (this.drag) {
+      const pt = input.pointers.get(this.drag.id);
+      if (pt && this.local.alive) {
+        this.local.x = clamp(this.drag.ox + (pt.x - this.drag.px) * 1.25, this.local.w / 2, W - this.local.w / 2);
+        this.local.y = clamp(this.drag.oy + (pt.y - this.drag.py) * 1.25, this.local.h / 2, H - this.local.h / 2);
+      } else this.drag = null;
+    }
+  }
+
   onMessage(m) {
     if (m.k === 'go' && this.phase === 'wait') { this.phase = 'countdown'; this.countdown = 3000; }
     else if (m.k === 's') { this.remote.tx = m.x; this.remote.ty = m.y; this.remote.alive = !!m.a; }
@@ -116,8 +136,8 @@ export class VersusOnline extends BaseWorld {
       const bx = p.facingLeft ? p.x + p.w / 2 + 8 : p.x - p.w / 2 - 8;
       this.effects.push(new BoostParticle(bx, p.y, this.time));
     }
-    // shoot
-    const firing = k.has('Space') || k.has('Enter') || k.has('NumpadEnter') || (pad && pad.fire);
+    // shoot — auto-fire on touch (no room for a fire button while dragging)
+    const firing = input.isTouch || k.has('Space') || k.has('Enter') || k.has('NumpadEnter') || (pad && pad.fire);
     if (firing && this.time - p.lastShot > p.shootDelay) {
       const vx = p.facingLeft ? -10 : 10;
       const edgeX = p.facingLeft ? p.x - p.w / 2 : p.x + p.w / 2;
@@ -162,6 +182,7 @@ export class VersusOnline extends BaseWorld {
 
     if (this.phase === 'playing') {
       this.moveLocal(dt);
+      this.handleTouch();
 
       // local respawn
       if (!this.local.alive && this.localRespawn && this.time > this.localRespawn) {
@@ -226,6 +247,17 @@ export class VersusOnline extends BaseWorld {
     drawText(g, `P1: ${this.score1}${this.localId === 1 ? ' (you)' : ''}`, 10, 24, 24, p1c, 'left');
     drawText(g, `P2: ${this.score2}${this.localId === 2 ? ' (you)' : ''}`, W - 10, 24, 24, p2c, 'right');
     drawText(g, `First to ${SCORE_LIMIT}`, W / 2, 24, 16, 'rgb(160,160,160)');
+
+    // touch: leave button
+    if (input.isTouch && !this.winner && !this.disconnected) {
+      const lb = this.leaveBtn();
+      g.globalAlpha = 0.3; g.fillStyle = '#fff';
+      g.beginPath(); g.arc(lb.x, lb.y, lb.r, 0, Math.PI * 2); g.fill();
+      g.globalAlpha = 0.85; g.strokeStyle = '#000'; g.lineWidth = 3;
+      g.beginPath(); g.moveTo(lb.x - 6, lb.y - 6); g.lineTo(lb.x + 6, lb.y + 6);
+      g.moveTo(lb.x + 6, lb.y - 6); g.lineTo(lb.x - 6, lb.y + 6); g.stroke();
+      g.globalAlpha = 1;
+    }
 
     if (this.phase === 'wait') {
       drawText(g, 'Waiting for host…', W / 2, H / 2, 22, 'rgb(255,210,80)');

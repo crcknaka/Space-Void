@@ -51,7 +51,7 @@ class CoopHost {
   }
 
   update(dt) {
-    if (input.pressed.has('Escape')) { this.leave(); return; }
+    if (input.pressed.has('Escape') || this.g.requestLeave) { this.leave(); return; }
     if (this.disconnected) { if (input.pressed.size || input.pointer.justDown) this.leave(); return; }
     if (this.g.over && this.g.overAlpha >= 0.5 && (input.pressed.size || input.pointer.justDown)) { this.leave(); return; }
 
@@ -137,6 +137,28 @@ class CoopGuest extends BaseWorld {
     this.net.onState = (s) => { if (s === 'closed') this.disconnected = true; };
   }
 
+  rocketBtn() { return { x: W - 70, y: H - 80, r: 44 }; }
+  leaveBtn() { return { x: 34, y: 122, r: 22 }; }
+
+  // touch: drag to move, tap rocket button to fire, tap X to leave
+  handleTouch() {
+    if (!input.isTouch) return;
+    const rb = this.rocketBtn(), lb = this.leaveBtn();
+    for (const [id, pt] of input.pointers) {
+      if (!pt.justDown) continue;
+      if (Math.hypot(pt.x - lb.x, pt.y - lb.y) <= lb.r) { this.leave(); return; }
+      if (Math.hypot(pt.x - rb.x, pt.y - rb.y) <= rb.r) { this.net.send({ k: 'rk' }); continue; }
+      if (!this.drag && this.meAlive) this.drag = { id, px: pt.x, py: pt.y, ox: this.me.x, oy: this.me.y };
+    }
+    if (this.drag) {
+      const pt = input.pointers.get(this.drag.id);
+      if (pt && this.meAlive) {
+        this.me.x = clamp(this.drag.ox + (pt.x - this.drag.px) * 1.25, this.me.w / 2, W - this.me.w / 2);
+        this.me.y = clamp(this.drag.oy + (pt.y - this.drag.py) * 1.25, this.me.h / 2, H - this.me.h / 2);
+      } else this.drag = null;
+    }
+  }
+
   onMessage(m) {
     if (m.k === 'go') { this.phase = 'play'; }
     else if (m.k === 'bye') this.disconnected = true;
@@ -188,8 +210,13 @@ class CoopGuest extends BaseWorld {
       if (input.pressed.has('Space') || input.pressed.has('Enter') || input.pressed.has('NumpadEnter') || (pad && pad.fire && this.time - (this._lr || 0) > 300)) {
         this._lr = this.time; this.net.send({ k: 'rk' });
       }
+      this.handleTouch();
       this.sendAcc += dt;
       if (this.sendAcc >= SEND_MS) { this.sendAcc = 0; this.net.send({ k: 'in', x: Math.round(this.me.x), y: Math.round(this.me.y) }); }
+    } else if (input.isTouch) {
+      // still allow the leave button while dead/respawning
+      const lb = this.leaveBtn();
+      for (const [, pt] of input.pointers) if (pt.justDown && Math.hypot(pt.x - lb.x, pt.y - lb.y) <= lb.r) { this.leave(); return; }
     }
     if (this.time - (this.me.thrLast || 0) > 50) { this.me.thrLast = this.time; this.me.thrFrame = (this.me.thrFrame + 1) % this.me.thrusters.length; }
 
@@ -244,6 +271,21 @@ class CoopGuest extends BaseWorld {
       drawText(g, `Rockets: ${this.meRockets}`, 150, 90, 22, '#fff', 'left');
       if (s.warn) { const bl = 0.5 + 0.5 * Math.sin(this.time / 90); g.globalAlpha = 0.6 + 0.4 * bl; drawText(g, '!! BOSS APPROACHING !!', W / 2, H / 2 - 200, 30, 'rgb(255,60,60)'); g.globalAlpha = 1; }
       if (s.over) { g.fillStyle = 'rgba(0,0,0,0.6)'; g.fillRect(0, 0, W, H); drawText(g, 'GAME OVER', W / 2, H / 2 - 20, 52, 'rgb(255,0,0)'); drawText(g, 'waiting for host…', W / 2, H / 2 + 40, 16, 'rgb(180,180,180)'); }
+    }
+
+    // touch controls
+    if (input.isTouch && !this.disconnected) {
+      const rb = this.rocketBtn(), lb = this.leaveBtn();
+      g.globalAlpha = 0.35; g.fillStyle = '#fff';
+      g.beginPath(); g.arc(rb.x, rb.y, rb.r, 0, Math.PI * 2); g.fill();
+      g.globalAlpha = 0.9; g.drawImage(images.rocket, rb.x - 20, rb.y - 18, 40, 20);
+      drawText(g, `${this.meRockets}`, rb.x, rb.y + 16, 22, '#000');
+      g.globalAlpha = 0.3; g.fillStyle = '#fff';
+      g.beginPath(); g.arc(lb.x, lb.y, lb.r, 0, Math.PI * 2); g.fill();
+      g.globalAlpha = 0.85; g.strokeStyle = '#000'; g.lineWidth = 3;
+      g.beginPath(); g.moveTo(lb.x - 6, lb.y - 6); g.lineTo(lb.x + 6, lb.y + 6);
+      g.moveTo(lb.x + 6, lb.y - 6); g.lineTo(lb.x - 6, lb.y + 6); g.stroke();
+      g.globalAlpha = 1;
     }
 
     if (this.phase === 'wait') drawText(g, 'Connecting to host…', W / 2, H / 2, 22, 'rgb(255,210,80)');

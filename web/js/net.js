@@ -3,10 +3,18 @@
 // Guest joinRoom(code) -> connects to the host.
 // Once open, both use net.send(obj) / net.onMessage(fn) over a data channel.
 
+// STUN finds your public address; TURN relays traffic when a direct P2P path
+// is blocked (strict/symmetric NAT, mobile carriers). The free Open Relay TURN
+// makes connections work on almost any network — including ports 443/TCP that
+// slip through restrictive firewalls. (Best-effort public relay; swap in a
+// dedicated TURN key if you ever need guaranteed uptime.)
 const ICE = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
   ],
 };
 
@@ -27,7 +35,7 @@ function iceComplete(pc) {
     const done = () => { pc.removeEventListener('icegatheringstatechange', check); resolve(); };
     const check = () => { if (pc.iceGatheringState === 'complete') done(); };
     pc.addEventListener('icegatheringstatechange', check);
-    setTimeout(done, 3000);
+    setTimeout(done, 5000); // allow time to gather TURN relay candidates
   });
 }
 
