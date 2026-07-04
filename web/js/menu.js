@@ -19,10 +19,13 @@ export class MenuState {
   enter() {
     audio.playMusic('background_music');
     setRngSeed(null); // leave daily-seeded RNG
+    this.page = 'main'; // main | local
+    this.dailyBlock = 0;
+    this.starfield();
     this.layout();
   }
 
-  layout() {
+  starfield() {
     this.stars = [];
     this.staticStars = [];
     for (let i = 0; i < 50; i++) {
@@ -31,20 +34,38 @@ export class MenuState {
     for (let i = 0; i < 100; i++) {
       this.staticStars.push(new StaticStar(randInt(0, W), randInt(0, H), randInt(1, 4), randInt(50, 200)));
     }
-    const dy = 66;
-    let y = H / 2 - dy * 3;
-    this.menu = new ButtonGroup([
-      new Button('SINGLE', W / 2, y, 200, 54, 'rgb(0,255,0)', 'single'),
-      new Button('COOP', W / 2, y += dy, 200, 54, 'rgb(0,120,255)', 'coop'),
-      new Button('VERSUS', W / 2, y += dy, 200, 54, 'rgb(255,140,0)', 'versus'),
-      new Button('ONLINE', W / 2, y += dy, 200, 54, 'rgb(0,220,255)', 'online'),
-      new Button('DAILY', W / 2, y += dy, 200, 54, 'rgb(255,210,0)', 'daily'),
-      new Button('SCORES', W / 2, y += dy, 200, 54, 'rgb(200,120,255)', 'scores'),
-      new Button('SETTINGS', W / 2, y += dy, 200, 54, 'rgb(255,0,0)', 'settings'),
-    ]);
+  }
+
+  layout() {
+    const dy = 74;
+    if (this.page === 'local') {
+      const cy = H / 2 - dy / 2;
+      this.menu = new ButtonGroup([
+        new Button('CO-OP', W / 2, cy - dy, 220, 58, 'rgb(0,120,255)', 'coop'),
+        new Button('VERSUS', W / 2, cy, 220, 58, 'rgb(255,140,0)', 'versus'),
+        new Button('BACK', W / 2, cy + dy + 20, 200, 54, 'rgb(255,0,0)', 'back'),
+      ]);
+    } else {
+      let y = H / 2 - dy * 2.5;
+      this.menu = new ButtonGroup([
+        new Button('SINGLE', W / 2, y, 220, 58, 'rgb(0,255,0)', 'single'),
+        new Button('LOCAL 2P', W / 2, y += dy, 220, 58, 'rgb(0,120,255)', 'local'),
+        new Button('ONLINE 2P', W / 2, y += dy, 220, 58, 'rgb(0,220,255)', 'online'),
+        new Button('DAILY', W / 2, y += dy, 220, 58, 'rgb(255,210,0)', 'daily'),
+        new Button('SCORES', W / 2, y += dy, 220, 58, 'rgb(200,120,255)', 'scores'),
+        new Button('SETTINGS', W / 2, y += dy, 220, 58, 'rgb(255,0,0)', 'settings'),
+      ]);
+    }
+  }
+
+  goPage(p) {
+    this.page = p;
+    audio.play('click', 0.5);
+    this.layout();
   }
 
   onResize() {
+    this.starfield();
     this.layout();
   }
 
@@ -52,17 +73,22 @@ export class MenuState {
     const k = dt / STEP;
     for (const s of this.stars) s.update(k);
     for (const s of this.staticStars) s.update(k);
+    if (this.dailyBlock > 0) this.dailyBlock -= k;
 
     const action = this.menu.update();
+    if (this.page === 'local') {
+      if (action === 'coop') this.app.setState(new GameState(this.app, true));
+      else if (action === 'versus') this.app.setState(new VersusState(this.app));
+      else if (action === 'back' || input.pressed.has('Escape')) this.goPage('main');
+      return;
+    }
     if (action === 'single') this.app.setState(new GameState(this.app, false));
-    else if (action === 'coop') this.app.setState(new GameState(this.app, true));
-    else if (action === 'versus') this.app.setState(new VersusState(this.app));
+    else if (action === 'local') this.goPage('local');
     else if (action === 'online') this.app.setState(new OnlineState(this.app));
     else if (action === 'daily') {
       if (dailyAttemptsLeft() > 0) this.app.setState(new GameState(this.app, false, { daily: true }));
       else this.dailyBlock = 240; // ~4s "no attempts" note
     }
-    if (this.dailyBlock > 0) this.dailyBlock -= k;
     else if (action === 'scores') this.app.setState(new ScoresState(this.app));
     else if (action === 'settings') this.app.setState(new OptionsState(this.app));
   }
@@ -84,17 +110,23 @@ export class MenuState {
     for (const s of this.stars) s.draw(g);
 
     drawText(g, 'SPACE VOID', W / 2, H / 2 - 315, 58);
-    drawText(g, 'v1.1 web', W / 2, H / 2 - 275, 19, 'rgb(150,150,150)');
+    drawText(g, 'v1.2 web', W / 2, H / 2 - 275, 19, 'rgb(150,150,150)');
     if (this.app.highScore > 0) {
       drawText(g, `BEST: ${this.app.highScore}`, W / 2, H / 2 - 243, 22, 'rgb(255,210,80)');
     }
 
+    if (this.page === 'local') {
+      drawText(g, '2 PLAYERS · ONE DEVICE', W / 2, H / 2 - 150, 18, 'rgb(160,160,160)');
+    }
+
     this.menu.draw(g);
 
-    // daily challenge info: today's modifier, attempts, reset countdown
-    const tries = dailyAttemptsLeft();
-    const dailyLine = `DAILY · ${todayMod().name} · ${tries > 0 ? `${tries} ${tries === 1 ? 'try' : 'tries'} left` : 'no tries left'} · resets in ${timeToNextDaily()}`;
-    drawText(g, dailyLine, W / 2, H - 82, 13, tries > 0 ? 'rgb(255,210,80)' : 'rgb(150,120,60)');
+    if (this.page === 'main') {
+      // daily challenge info: today's modifier, attempts, reset countdown
+      const tries = dailyAttemptsLeft();
+      const dailyLine = `DAILY · ${todayMod().name} · ${tries > 0 ? `${tries} ${tries === 1 ? 'try' : 'tries'} left` : 'no tries left'} · resets in ${timeToNextDaily()}`;
+      drawText(g, dailyLine, W / 2, H - 78, 13, tries > 0 ? 'rgb(255,210,80)' : 'rgb(150,120,60)');
+    }
     if (this.dailyBlock > 0) {
       g.globalAlpha = Math.min(1, this.dailyBlock / 60);
       drawText(g, 'No daily attempts left — come back after the reset!', W / 2, H / 2 + 250, 16, 'rgb(255,110,110)');
@@ -102,12 +134,12 @@ export class MenuState {
     }
 
     // controls hint
-    if (input.isTouch) {
-      drawText(g, 'Drag to move · rocket button bottom-right', W / 2, H - 56, 13, 'rgb(150,150,150)');
-      drawText(g, 'Coop / Versus: connect Bluetooth gamepads (P1 = pad 1, P2 = pad 2)', W / 2, H - 36, 13, 'rgb(150,150,150)');
+    if (this.page === 'local') {
+      drawText(g, input.isTouch
+        ? 'Two players share this screen · gamepads recommended (P1=pad1, P2=pad2)'
+        : 'P1: WASD + Shift · Space   ·   P2: Arrows + RShift · Enter', W / 2, H - 48, 13, 'rgb(150,150,150)');
     } else {
-      drawText(g, 'P1: WASD + Shift · Space = rocket    P2: Arrows + RShift · Enter = rocket', W / 2, H - 56, 13, 'rgb(150,150,150)');
-      drawText(g, 'Gamepads: stick = move · A = fire · B = boost · Start = pause', W / 2, H - 36, 13, 'rgb(150,150,150)');
+      drawText(g, 'ONLINE 2P = play with a friend over the internet (room code)', W / 2, H - 48, 13, 'rgb(150,150,150)');
     }
     drawText(g, 'Made by cRc^', W - 10, H - 14, 14, 'rgb(200,200,200)', 'right');
   }

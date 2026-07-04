@@ -14,7 +14,7 @@ const ETYPE_NAME = ['basic', 'weaver', 'hunter', 'tank'];
 const ETINT = ['', 'rgba(0,230,190,0.35)', 'rgba(255,60,60,0.4)', 'rgba(190,110,255,0.42)'];
 const PU_TYPES = ['shooting', 'slow_motion', 'kill_all', 'rocket', 'spread', 'shield'];
 const PU_IMG = { shooting: 'powerup', slow_motion: 'slow_motion_powerup', kill_all: 'kill_all_powerup', rocket: 'rocket_powerup', spread: 'spread_powerup' };
-const SEND_MS = 33;
+const SEND_MS = 22; // ~45Hz snapshots; guest extrapolates between them
 
 // Factory: `new CoopOnline(app, net, isHost)` returns the right instance.
 export function CoopOnline(app, net, isHost) {
@@ -62,18 +62,19 @@ class CoopHost {
       p2.y = clamp(this.guest.y, p2.h / 2, H - p2.h / 2);
     }
 
-    this._fx.length = 0;
-    this.g.update(dt);
+    this.g.update(dt); // explosions accumulate in this._fx across frames
 
     this.sendAcc += dt;
     if (this.sendAcc >= SEND_MS) {
       this.sendAcc = 0;
       this.net.send(this.snapshot());
+      this._fx.length = 0; // clear only after the batch is sent (no lost explosions)
     }
   }
 
   snapshot() {
     const g = this.g;
+    const m = g.speedMul; // velocities are per-step; guest extrapolates between snapshots
     const enc = (p) => [Math.round(p.x), Math.round(p.y), p.alive ? 1 : 0, p.lives, p.rockets, g.time < (p.invulnUntil || 0) ? 1 : 0];
     return {
       k: 'w',
@@ -82,11 +83,15 @@ class CoopHost {
       ban: g.levelBanner ? g.levelBanner.level : 0,
       slow: g.speedMul < 1 ? 1 : 0,
       p1: enc(g.player1), p2: enc(g.player2),
-      en: g.enemies.map((e) => [Math.round(e.x), Math.round(e.y), e.isBoss ? 4 : ETYPE[e.type], e.dying ? 1 : 0, e.isBoss ? Math.max(0, e.health) / e.maxHealth : 1, Math.round(e.w)]),
-      eb: g.enemyBullets.map((b) => [Math.round(b.x), Math.round(b.y)]),
-      pb: g.bullets.map((b) => [Math.round(b.x), Math.round(b.y), b.flip ? 1 : 0]),
+      // [x, y, type, dying, hpFrac, w, vx, vy]
+      en: g.enemies.map((e) => [Math.round(e.x), Math.round(e.y), e.isBoss ? 4 : ETYPE[e.type], e.dying ? 1 : 0,
+        e.isBoss ? Math.max(0, e.health) / e.maxHealth : 1, Math.round(e.w),
+        Math.round((e.vx || 0) * m * 10) / 10, Math.round((e.dying ? (e.vyFall || 0) : (e.vy || 0)) * m * 10) / 10]),
+      eb: g.enemyBullets.map((b) => [Math.round(b.x), Math.round(b.y), Math.round(b.vx * m), Math.round(b.vy * m)]),
+      pb: g.bullets.map((b) => [Math.round(b.x), Math.round(b.y), Math.round(b.vx), Math.round(b.vy)]),
       ro: g.rockets.map((r) => [Math.round(r.x), Math.round(r.y), Math.round(r.angle)]),
-      as: g.asteroids.map((a) => [Math.round(a.x), Math.round(a.y), Math.round(a.w / 2), Math.round(a.angle)]),
+      as: g.asteroids.map((a) => [Math.round(a.x), Math.round(a.y), Math.round(a.w / 2), Math.round(a.angle),
+        Math.round(-a.vx * m * 10) / 10, Math.round(a.vy * m * 10) / 10]),
       pu: g.powerups.map((p) => [Math.round(p.x), Math.round(p.y), PU_TYPES.indexOf(p.type)]),
       fx: this._fx.slice(),
       over: g.over ? 1 : 0,
@@ -165,6 +170,7 @@ class CoopGuest extends BaseWorld {
     else if (m.k === 'w') {
       if (this.phase === 'wait') this.phase = 'play';
       this.snap = m;
+      this.snapAt = this.time; // for render-time extrapolation
       // adopt authoritative own-ship status
       this.meAlive = m.p2[2] === 1; this.meLives = m.p2[3]; this.meRockets = m.p2[4]; this.meInv = m.p2[5];
       if (!this.meAlive) { this.me.x = m.p2[0]; this.me.y = m.p2[1]; } // freeze at host pos while dead/respawning
@@ -245,26 +251,29 @@ class CoopGuest extends BaseWorld {
     const s = this.snap;
 
     if (s) {
+      // extrapolate positions between snapshots by velocity for smooth motion
+      const ex = Math.min(this.time - (this.snapAt || this.time), 60) / STEP;
       for (const p of s.pu) { const t = PU_TYPES[p[2]] || 'shooting'; const img = this.puImg[t]; g.drawImage(img, p[0] - 30, p[1] - 15, 60, 30); }
-      for (const a of s.as) { g.save(); g.translate(a[0], a[1]); g.rotate(a[3] * Math.PI / 180); g.drawImage(images.asteroid, -a[2], -a[2], a[2] * 2, a[2] * 2); g.restore(); }
+      for (const a of s.as) { const ax = a[0] + (a[4] || 0) * ex, ay = a[1] + (a[5] || 0) * ex; g.save(); g.translate(ax, ay); g.rotate(a[3] * Math.PI / 180); g.drawImage(images.asteroid, -a[2], -a[2], a[2] * 2, a[2] * 2); g.restore(); }
       // enemies
       const thr = images.thrusters.enemy[this.frame >> 2 & 3];
       for (const e of s.en) {
         const w = e[5] || 50, h = e[2] === 4 ? w : Math.round(w * 0.6);
+        const cx = e[0] + (e[6] || 0) * ex, cy = e[1] + (e[7] || 0) * ex;
         if (e[3]) g.globalAlpha = 0.6; // dying
         if (e[2] !== 4) {
-          g.save(); g.translate(e[0] + w / 2 + 12, e[1]); g.scale(-1, 1); g.drawImage(thr, -32, -32, 64, 64); g.restore();
+          g.save(); g.translate(cx + w / 2 + 12, cy); g.scale(-1, 1); g.drawImage(thr, -32, -32, 64, 64); g.restore();
         }
-        g.drawImage(this.tint(e[2], e[2] === 4 ? images.boss : images.enemy_ship), e[0] - w / 2, e[1] - h / 2, w, h);
+        g.drawImage(this.tint(e[2], e[2] === 4 ? images.boss : images.enemy_ship), cx - w / 2, cy - h / 2, w, h);
         g.globalAlpha = 1;
         if (e[2] === 4) { // boss health bar
-          const bw = 120; g.fillStyle = 'rgba(255,255,255,0.25)'; g.fillRect(e[0] - bw / 2, e[1] - h / 2 - 14, bw, 8);
-          g.fillStyle = '#f33'; g.fillRect(e[0] - bw / 2, e[1] - h / 2 - 14, bw * e[4], 8);
+          const bw = 120; g.fillStyle = 'rgba(255,255,255,0.25)'; g.fillRect(cx - bw / 2, cy - h / 2 - 14, bw, 8);
+          g.fillStyle = '#f33'; g.fillRect(cx - bw / 2, cy - h / 2 - 14, bw * e[4], 8);
         }
       }
-      for (const b of s.pb) { drawGlow(g, glowBullet, b[0], b[1]); g.drawImage(images.bullet, b[0] - 5, b[1] - 2.5, 10, 5); }
-      for (const b of s.eb) { drawGlow(g, glowEnemyBullet, b[0], b[1]); g.drawImage(images.enemy_bullet, b[0] - 5, b[1] - 2.5, 10, 5); }
-      for (const r of s.ro) { drawGlow(g, glowEngine, r[0], r[1], 0.8); g.save(); g.translate(r[0], r[1]); g.rotate(r[2] * Math.PI / 180); g.drawImage(images.rocket, -10, -5, 20, 10); g.restore(); }
+      for (const b of s.pb) { const x = b[0] + (b[2] || 0) * ex, y = b[1] + (b[3] || 0) * ex; drawGlow(g, glowBullet, x, y); g.drawImage(images.bullet, x - 5, y - 2.5, 10, 5); }
+      for (const b of s.eb) { const x = b[0] + (b[2] || 0) * ex, y = b[1] + (b[3] || 0) * ex; drawGlow(g, glowEnemyBullet, x, y); g.drawImage(images.enemy_bullet, x - 5, y - 2.5, 10, 5); }
+      for (const r of s.ro) { const rad = r[2] * Math.PI / 180, x = r[0] + 8 * Math.cos(rad) * ex, y = r[1] + 8 * Math.sin(rad) * ex; drawGlow(g, glowEngine, x, y, 0.8); g.save(); g.translate(x, y); g.rotate(rad); g.drawImage(images.rocket, -10, -5, 20, 10); g.restore(); }
       for (const fx of this.effects) fx.draw(g, this);
 
       // player1 (host) from snapshot
