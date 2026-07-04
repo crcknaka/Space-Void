@@ -455,6 +455,7 @@ export class GameState extends BaseWorld {
             if (rand(0, 1) < 0.45) {
               // disabled, not destroyed: sparks, smoke, tumbles off-screen
               enemy.startDying();
+              this.wreckCount = (this.wreckCount || 0) + 1; // for online sfx streaming
               this.spawnSparks(enemy.x, enemy.y, 10);
               audio.play('explosion', 0.3);
             } else {

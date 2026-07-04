@@ -342,6 +342,7 @@ export class Player {
       world.bullets.push(new Bullet(edgeX, this.y, this.bulletImg, vx, start + i * spreadAngle));
     }
     this.lastShot = world.time;
+    world._shots = (world._shots || 0) + 1; // for online sfx streaming
     audio.play('gun', 0.22);
   }
 

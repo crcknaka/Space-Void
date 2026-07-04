@@ -50,9 +50,11 @@ export class CoopHost {
     this.g.pauseDisabled = true;
     for (let i = 1; i < this.g.playerList.length; i++) { this.g.playerList[i].controls = {}; this.g.playerList[i].remote = true; }
     this._fx = [];
-    this._sd = [];          // sound events to replay on guests (rocket/powerup)
+    this._sd = [];          // sound events to replay on guests
     this._prevRockets = 0;
     this._prevRunPU = 0;
+    this._prevShots = 0;
+    this._prevWreck = 0;
     const orig = this.g.explode.bind(this.g);
     this.g.explode = (x, y, sound = true, scale = 1) => { this._fx.push([Math.round(x), Math.round(y), +scale.toFixed(2)]); return orig(x, y, sound, scale); };
     this.overMenu = null;
@@ -120,11 +122,18 @@ export class CoopHost {
 
     this.g.update(dt);
 
-    // detect rocket launches & power-up pickups to replay their sfx on guests
-    if (this.g.rockets.length > this._prevRockets) this._sd.push('rocket');
-    if (this.g.runPowerups > this._prevRunPU) this._sd.push('powerup');
-    this._prevRockets = this.g.rockets.length;
-    this._prevRunPU = this.g.runPowerups;
+    // detect events to replay their sfx on guests
+    const g = this.g;
+    if (g.rockets.length > this._prevRockets) this._sd.push('rocket');
+    if (g.runPowerups > this._prevRunPU) this._sd.push('powerup');
+    const shots = (g._shots || 0) - this._prevShots;
+    for (let i = 0; i < Math.min(shots, 4); i++) this._sd.push('gun');   // gunfire
+    const wrecks = (g.wreckCount || 0) - this._prevWreck;
+    for (let i = 0; i < Math.min(wrecks, 3); i++) this._sd.push('siren'); // downed enemy wail
+    this._prevRockets = g.rockets.length;
+    this._prevRunPU = g.runPowerups;
+    this._prevShots = g._shots || 0;
+    this._prevWreck = g.wreckCount || 0;
 
     this.sendAcc += dt;
     if (this.sendAcc >= SEND_MS) {
@@ -252,7 +261,10 @@ export class CoopGuest extends BaseWorld {
         if (!this.meAlive) { this.me.x = mine[0]; this.me.y = mine[1]; }
       }
       for (const f of m.fx) { this.effects.push(new Explosion(f[0], f[1], this.app.images.explosion_spritesheet, this.time, f[2])); audio.play('explosion', 0.4); }
-      if (m.sd) for (const s of m.sd) audio.play(s, s === 'rocket' ? 0.5 : 0.6); // rocket / powerup sfx
+      if (m.sd) for (const s of m.sd) {
+        if (s === 'siren') audio.playSynth('siren');
+        else audio.play(s, s === 'gun' ? 0.2 : s === 'rocket' ? 0.5 : 0.6);
+      }
       if (m.ban && m.ban !== this.lastBan) { audio.playSynth('fanfare'); this.lastBan = m.ban; }
       if (m.warn && !this.lastWarn) audio.playSynth('warning');
       this.lastWarn = m.warn;

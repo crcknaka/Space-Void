@@ -43,15 +43,32 @@ function makeCode() {
   return c;
 }
 
-// Resolve once ICE gathering finishes (non-trickle), capped so a stuck
-// gatherer never hangs the handshake.
+// Resolve once ICE gathering finishes (non-trickle). We wait for a TURN
+// relay candidate (needed on mobile/strict NAT) before resolving, with a
+// generous cap — otherwise a fast 'complete' with only host candidates would
+// post an SDP lacking the relay path and mobile peers could never connect.
 function iceComplete(pc) {
   return new Promise((resolve) => {
+    let sawRelay = false;
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      pc.removeEventListener('icegatheringstatechange', check);
+      pc.removeEventListener('icecandidate', onCand);
+      resolve();
+    };
+    const onCand = (e) => {
+      if (e.candidate && /typ relay/.test(e.candidate.candidate || '')) {
+        sawRelay = true;
+        setTimeout(finish, 400); // got a relay path — a moment for any extras, then go
+      }
+    };
+    const check = () => { if (pc.iceGatheringState === 'complete') finish(); };
     if (pc.iceGatheringState === 'complete') return resolve();
-    const done = () => { pc.removeEventListener('icegatheringstatechange', check); resolve(); };
-    const check = () => { if (pc.iceGatheringState === 'complete') done(); };
     pc.addEventListener('icegatheringstatechange', check);
-    setTimeout(done, 5000); // allow time to gather TURN relay candidates
+    pc.addEventListener('icecandidate', onCand);
+    setTimeout(finish, 9000); // hard cap so a stuck gatherer never hangs
   });
 }
 
