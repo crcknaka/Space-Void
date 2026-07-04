@@ -40,7 +40,9 @@ function fit() {
   canvas.height = Math.round(H * view * dpr);
   scale = view * dpr;
   g.imageSmoothingEnabled = true;
-  g.imageSmoothingQuality = 'high';
+  // 'high' resampling is costly on mobile GPUs at HiDPI; 'low' is imperceptible
+  // for these sprites and noticeably cheaper per frame.
+  g.imageSmoothingQuality = input.isTouch ? 'low' : 'high';
   vignette = makeVignette();
   if (app.state?.onResize) app.state.onResize();
 }

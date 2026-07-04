@@ -123,7 +123,7 @@ export class GameState extends BaseWorld {
     // touch state (mobile: drag to move, on-screen rocket button)
     this.drag = null;
 
-    this.rocketTargets = () => this.enemies.filter((e) => !e.dying).concat(this.asteroids);
+    this._rtAt = -1; // per-frame cache key for rocketTargets()
 
     // apply daily modifier to the players
     if (this.mod) {
@@ -137,6 +137,16 @@ export class GameState extends BaseWorld {
 
   players() {
     return this.playerList;
+  }
+
+  // Homing-rocket targets, computed once per frame (all rockets share it)
+  // instead of allocating a filtered+concat array per rocket per frame.
+  rocketTargets() {
+    if (this._rtAt !== this.time) {
+      this._rt = this.enemies.filter((e) => !e.dying).concat(this.asteroids);
+      this._rtAt = this.time;
+    }
+    return this._rt;
   }
 
   rocketBtn() {
