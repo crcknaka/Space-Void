@@ -22,12 +22,31 @@ const P2_CONTROLS = {
   rocket: 'Enter', rocketAlt: 'NumpadEnter', speed: 'Numpad0', speedAlt: 'ShiftRight',
 };
 
+// Distinct per-player identity: HUD colour + ship tint (null = keep art as-is)
+export const PLAYER_COLORS = ['rgb(90,200,255)', 'rgb(90,255,140)', 'rgb(255,170,60)', 'rgb(230,120,255)'];
+const PLAYER_TINTS = [null, 'rgba(90,255,140,0.45)', 'rgba(255,150,40,0.55)', 'rgba(220,90,255,0.5)'];
+
+// Colored ship sprite for player index i. Local modes keep the original
+// player1/player2 art; online (colored) tints every ship a distinct hue.
+export function playerShip(images, i, colored) {
+  if (!colored) return i === 1 ? images.player2_ship : images.player1_ship;
+  const tint = PLAYER_TINTS[i % PLAYER_TINTS.length];
+  const base = i === 1 ? images.player2_ship : images.player1_ship;
+  return tint ? tinted(base, tint, `ship_${i}`) : base;
+}
+
+export function spawnY(i, total) {
+  return Math.round((H * (i + 1)) / (total + 1));
+}
+
 export class GameState extends BaseWorld {
   constructor(app, coop, opts = {}) {
     super(app, 'game_background');
     this.coop = coop;
     this.daily = !!opts.daily;
-    this.online = !!opts.online; // driven by CoopHost; no pause/menu/leaderboard
+    this.online = !!opts.online;   // driven by CoopHost; no pause/menu/leaderboard
+    this.extraPlayers = opts.extraPlayers || 0; // guest-controlled ships (online 4p)
+    this.colored = !!opts.colored; // distinct ship colours per player
   }
 
   enter() {
@@ -80,26 +99,28 @@ export class GameState extends BaseWorld {
     this.overMenu = null;
     this.levelBanner = null;
 
-    this.player1 = new Player(images, {
-      img: images.player1_ship,
-      thrusters: images.thrusters.player1,
-      controls: P1_CONTROLS,
-      padIndex: 0,
-    });
-    this.player1.x = 100;
-    this.player1.y = H / 2;
-
-    this.player2 = null;
-    if (this.coop) {
-      this.player2 = new Player(images, {
-        img: images.player2_ship,
-        thrusters: images.thrusters.player2,
-        controls: P2_CONTROLS,
-        padIndex: 1,
+    // Build the player list. Local: 1 (single) or 2 (co-op) with keyboard
+    // controls. Online co-op host: 1 local host + N guest-controlled ships
+    // (extraPlayers), each a distinct colour so they're easy to tell apart.
+    const total = 1 + (this.coop ? 1 : 0) + (this.extraPlayers || 0);
+    this.playerList = [];
+    for (let i = 0; i < total; i++) {
+      const local = i === 0;
+      const p = new Player(images, {
+        img: playerShip(images, i, this.colored),
+        thrusters: images.thrusters[i === 1 ? 'player2' : 'player1'],
+        controls: local ? P1_CONTROLS : (i === 1 && !this.online ? P2_CONTROLS : {}),
+        padIndex: local ? 0 : (i === 1 && !this.online ? 1 : null),
+        autoShoot: true,
       });
-      this.player2.x = 100;
-      this.player2.y = H / 3;
+      p.color = PLAYER_COLORS[i % PLAYER_COLORS.length];
+      p.slot = i;
+      p.x = 100;
+      p.y = spawnY(i, total);
+      this.playerList.push(p);
     }
+    this.player1 = this.playerList[0];
+    this.player2 = this.playerList[1] || null;
 
     // touch state (mobile: drag to move, on-screen rocket button)
     this.drag = null;
@@ -117,7 +138,7 @@ export class GameState extends BaseWorld {
   }
 
   players() {
-    return this.player2 ? [this.player1, this.player2] : [this.player1];
+    return this.playerList;
   }
 
   rocketBtn() {
@@ -315,7 +336,7 @@ export class GameState extends BaseWorld {
         p.alive = true;
         p.respawnAt = 0;
         p.x = 100;
-        p.y = p === this.player2 ? H / 3 : H / 2;
+        p.y = spawnY(p.slot || 0, this.playerList.length);
         p.invulnUntil = this.time + 2500;
         audio.playSynth('respawn');
       }
@@ -706,17 +727,15 @@ export class GameState extends BaseWorld {
       drawText(g, `attempt ${'●'.repeat(3 - dailyAttemptsLeft())}${'○'.repeat(dailyAttemptsLeft())}`, W / 2, H / 2 - 58, 15, 'rgb(160,160,160)');
       g.globalAlpha = 1;
     }
-    // lives + rockets per player
-    const p1 = this.player1;
-    drawText(g, 'P1', 10, 58, 22, '#fff', 'left');
-    drawText(g, '♥'.repeat(Math.max(0, p1.lives)), 48, 58, 22, 'rgb(255,80,90)', 'left');
-    drawText(g, `Rockets: ${p1.rockets}`, 128, 58, 22, '#fff', 'left');
-    if (this.player2) {
-      const p2 = this.player2;
-      drawText(g, 'P2', 10, 90, 22, '#fff', 'left');
-      drawText(g, '♥'.repeat(Math.max(0, p2.lives)), 48, 90, 22, 'rgb(255,80,90)', 'left');
-      drawText(g, `Rockets: ${p2.rockets}`, 128, 90, 22, '#fff', 'left');
-    }
+    // lives + rockets per player (colour-coded)
+    const many = this.playerList.length > 2;
+    const fs = many ? 18 : 22;
+    this.playerList.forEach((p, i) => {
+      const y = 58 + i * (many ? 26 : 32);
+      drawText(g, `P${i + 1}`, 10, y, fs, p.color, 'left');
+      drawText(g, '♥'.repeat(Math.max(0, p.lives)), 44, y, fs, 'rgb(255,80,90)', 'left');
+      drawText(g, `🚀${p.rockets}`, many ? 108 : 124, y, fs, '#fff', 'left');
+    });
     if (this.speedMul < 1) drawText(g, 'SLOW-MO', W / 2, 24, 24, 'rgb(120,200,255)');
 
     // achievement toasts
