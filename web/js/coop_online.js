@@ -3,7 +3,7 @@
 import { W, H, STEP, clamp } from './const.js';
 import * as input from './input.js';
 import * as audio from './audio.js';
-import { drawText } from './ui.js';
+import { Button, ButtonGroup, drawText } from './ui.js';
 import { BaseWorld } from './world.js';
 import { GameState } from './game.js';
 import { Player, Explosion, RocketTrailParticle, SmokeParticle, Spark } from './entities.js';
@@ -27,6 +27,22 @@ class CoopHost {
   constructor(app, net) { this.app = app; this.net = net; }
 
   enter() {
+    this.guest = { x: 100, y: H / 3, has: false };
+    this.sendAcc = 0;
+    this.disconnected = false;
+    this.reconnecting = false;
+    this.overMenu = null;
+    this.initGame();
+    this.net.onMessage = (m) => this.onMessage(m);
+    this.net.onState = (s) => {
+      if (s === 'closed') this.disconnected = true;
+      else if (s === 'reconnecting') this.reconnecting = true;
+      else if (s === 'open') this.reconnecting = false;
+    };
+    this.net.send({ k: 'go' });
+  }
+
+  initGame() {
     this.g = new GameState(this.app, true, { online: true });
     this.g.enter();
     this.g.pauseDisabled = true;          // no pause in online
@@ -35,12 +51,12 @@ class CoopHost {
     this._fx = [];
     const orig = this.g.explode.bind(this.g);
     this.g.explode = (x, y, sound = true, scale = 1) => { this._fx.push([Math.round(x), Math.round(y), +scale.toFixed(2)]); return orig(x, y, sound, scale); };
+    this.overMenu = null;
+  }
 
-    this.guest = { x: 100, y: H / 3, has: false };
-    this.sendAcc = 0;
-    this.disconnected = false;
-    this.net.onMessage = (m) => this.onMessage(m);
-    this.net.onState = (s) => { if (s === 'closed') this.disconnected = true; };
+  playAgain() {
+    this.net.send({ k: 'restart' });
+    this.initGame();
     this.net.send({ k: 'go' });
   }
 
@@ -53,7 +69,23 @@ class CoopHost {
   update(dt) {
     if (input.pressed.has('Escape') || this.g.requestLeave) { this.leave(); return; }
     if (this.disconnected) { if (input.pressed.size || input.pointer.justDown) this.leave(); return; }
-    if (this.g.over && this.g.overAlpha >= 0.5 && (input.pressed.size || input.pointer.justDown)) { this.leave(); return; }
+
+    // game over: offer PLAY AGAIN / LEAVE (host-driven)
+    if (this.g.over && this.g.overAlpha >= 0.5) {
+      if (!this.overMenu) {
+        this.overMenu = new ButtonGroup([
+          new Button('PLAY AGAIN', W / 2, H / 2 + 90, 220, 56, 'rgb(0,220,130)', 'again'),
+          new Button('LEAVE', W / 2, H / 2 + 160, 220, 56, 'rgb(255,0,0)', 'leave'),
+        ]);
+      }
+      const a = this.overMenu.update();
+      if (a === 'again') { this.playAgain(); return; }
+      if (a === 'leave') { this.leave(); return; }
+      // keep streaming the frozen over-state so the guest shows game over
+      this.sendAcc += dt;
+      if (this.sendAcc >= SEND_MS) { this.sendAcc = 0; this.net.send(this.snapshot()); }
+      return;
+    }
 
     // place guest-controlled ship before the world simulates collisions
     const p2 = this.g.player2;
@@ -104,12 +136,26 @@ class CoopHost {
   draw(gg) {
     this.g.draw(gg);
     drawText(gg, 'ONLINE · HOST', W / 2, H - 16, 13, 'rgb(0,200,255)');
+    drawPing(gg, this.net.rtt);
+    if (this.overMenu && this.g.over) this.overMenu.draw(gg);
+    if (this.reconnecting && !this.disconnected) {
+      gg.fillStyle = 'rgba(0,0,0,0.5)'; gg.fillRect(0, 0, W, H);
+      const dots = '.'.repeat(1 + (Math.floor(this.g.time / 400) % 3));
+      drawText(gg, `RECONNECTING${dots}`, W / 2, H / 2, 30, 'rgb(255,210,80)');
+    }
     if (this.disconnected) {
       gg.fillStyle = 'rgba(0,0,0,0.6)'; gg.fillRect(0, 0, W, H);
       drawText(gg, 'PARTNER DISCONNECTED', W / 2, H / 2, 26, 'rgb(255,90,90)');
       drawText(gg, 'press any key to return', W / 2, H / 2 + 40, 15, 'rgb(180,180,180)');
     }
   }
+}
+
+// shared ping badge
+function drawPing(g, rtt) {
+  if (!rtt) return;
+  const col = rtt < 80 ? 'rgb(0,220,130)' : rtt < 160 ? 'rgb(255,210,60)' : 'rgb(255,90,90)';
+  drawText(g, `${rtt} ms`, W / 2, H - 34, 13, col);
 }
 
 /* ------------------------------------ GUEST ----------------------------------- */
@@ -121,25 +167,35 @@ class CoopGuest extends BaseWorld {
     const { images } = this.app;
     audio.playMusic('background_music');
     this.initBackdrop();
-    this.snap = null;
     this.disconnected = false;
-    this.phase = 'wait';
-    this.sendAcc = 0;
+    this.reconnecting = false;
     this.frame = 0;
-    this.lastBan = 0;
-    this.lastWarn = 0;
 
     // locally-predicted own ship (player2)
     this.me = new Player(images, { img: images.player2_ship, thrusters: images.thrusters.player2, controls: {}, autoShoot: false, useRockets: false });
-    this.me.x = 100; this.me.y = H / 3;
-    this.meAlive = true; this.meLives = 3; this.meRockets = 3; this.meInv = 0;
+    this.resetRound();
 
     this.puImg = {};
     for (const t of PU_TYPES) this.puImg[t] = t === 'shield' ? tinted(images.powerup, 'rgba(0,210,255,0.55)', 'powerup_shield') : images[PU_IMG[t]];
     this.enemyTint = {};
 
     this.net.onMessage = (m) => this.onMessage(m);
-    this.net.onState = (s) => { if (s === 'closed') this.disconnected = true; };
+    this.net.onState = (s) => {
+      if (s === 'closed') this.disconnected = true;
+      else if (s === 'reconnecting') this.reconnecting = true;
+      else if (s === 'open') this.reconnecting = false;
+    };
+  }
+
+  resetRound() {
+    this.snap = null;
+    this.phase = 'wait';
+    this.sendAcc = 0;
+    this.lastBan = 0;
+    this.lastWarn = 0;
+    this.me.x = 100; this.me.y = H / 3;
+    this.meAlive = true; this.meLives = 3; this.meRockets = 3; this.meInv = 0;
+    this.effects = [];
   }
 
   rocketBtn() { return { x: W - 70, y: H - 80, r: 44 }; }
@@ -165,7 +221,8 @@ class CoopGuest extends BaseWorld {
   }
 
   onMessage(m) {
-    if (m.k === 'go') { this.phase = 'play'; }
+    if (m.k === 'restart') { this.resetRound(); }
+    else if (m.k === 'go') { this.phase = 'play'; }
     else if (m.k === 'bye') this.disconnected = true;
     else if (m.k === 'w') {
       if (this.phase === 'wait') this.phase = 'play';
@@ -310,9 +367,15 @@ class CoopGuest extends BaseWorld {
       g.globalAlpha = 1;
     }
 
-    if (this.phase === 'wait') drawText(g, 'Connecting to host…', W / 2, H / 2, 22, 'rgb(255,210,80)');
+    if (this.phase === 'wait' && !this.reconnecting) drawText(g, 'Connecting to host…', W / 2, H / 2, 22, 'rgb(255,210,80)');
     drawText(g, 'ONLINE · GUEST', W / 2, H - 16, 13, 'rgb(0,200,255)');
+    drawPing(g, this.net.rtt);
 
+    if (this.reconnecting && !this.disconnected) {
+      g.fillStyle = 'rgba(0,0,0,0.5)'; g.fillRect(0, 0, W, H);
+      const dots = '.'.repeat(1 + (Math.floor(this.time / 400) % 3));
+      drawText(g, `RECONNECTING${dots}`, W / 2, H / 2, 30, 'rgb(255,210,80)');
+    }
     if (this.disconnected) {
       g.fillStyle = 'rgba(0,0,0,0.6)'; g.fillRect(0, 0, W, H);
       drawText(g, 'HOST DISCONNECTED', W / 2, H / 2, 26, 'rgb(255,90,90)');

@@ -86,8 +86,11 @@ export class Net {
     this.pc = null;
     this.dc = null;
     this.code = null;
-    this.state = 'idle'; // idle | signaling | connecting | open | failed | closed
+    this.state = 'idle'; // idle | signaling | connecting | open | reconnecting | failed | closed
+    this.rtt = 0;        // round-trip time in ms (ping)
     this._cancelled = false;
+    this._pingTimer = null;
+    this._recoverTimer = null;
     this.onMessage = () => {};
     this.onState = () => {};
   }
@@ -97,13 +100,21 @@ export class Net {
   _wireChannel(dc) {
     this.dc = dc;
     dc.binaryType = 'arraybuffer';
-    dc.onopen = () => this._set('open');
+    dc.onopen = () => { this._set('open'); this._startPing(); };
     dc.onclose = () => this._set('closed');
     dc.onmessage = (e) => {
       let msg;
       try { msg = JSON.parse(e.data); } catch { return; }
+      // intercept ping/pong before handing off to the game
+      if (msg.k === '__ping') { this.send({ k: '__pong', t: msg.t }); return; }
+      if (msg.k === '__pong') { this.rtt = Date.now() - msg.t; return; }
       this.onMessage(msg);
     };
+  }
+
+  _startPing() {
+    if (this._pingTimer) return;
+    this._pingTimer = setInterval(() => this.send({ k: '__ping', t: Date.now() }), 1000);
   }
 
   send(obj) {
@@ -155,8 +166,19 @@ export class Net {
   _watchConnection() {
     this.pc.onconnectionstatechange = () => {
       const s = this.pc.connectionState;
-      if ((s === 'failed' || s === 'disconnected') && this.state !== 'open') this._set('failed');
-      if (s === 'failed' && this.state === 'open') this._set('closed');
+      if (s === 'connected') {
+        if (this._recoverTimer) { clearTimeout(this._recoverTimer); this._recoverTimer = null; }
+        if (this.state === 'reconnecting') this._set('open');
+      } else if (s === 'disconnected') {
+        // transient drop (wifi hiccup): give ICE a chance to recover before giving up
+        if (this.state === 'open') {
+          this._set('reconnecting');
+          this._recoverTimer = setTimeout(() => { if (this.state === 'reconnecting') this._set('closed'); }, 12000);
+        }
+      } else if (s === 'failed') {
+        if (this.state === 'open' || this.state === 'reconnecting') this._set('closed');
+        else this._set('failed');
+      }
     };
   }
 
@@ -171,6 +193,8 @@ export class Net {
   }
 
   close() {
+    if (this._pingTimer) { clearInterval(this._pingTimer); this._pingTimer = null; }
+    if (this._recoverTimer) { clearTimeout(this._recoverTimer); this._recoverTimer = null; }
     try { this.dc?.close(); } catch {}
     try { this.pc?.close(); } catch {}
     this.dc = null;

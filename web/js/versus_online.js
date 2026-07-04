@@ -5,7 +5,7 @@
 import { W, H, STEP, clamp, rand } from './const.js';
 import * as input from './input.js';
 import * as audio from './audio.js';
-import { drawText } from './ui.js';
+import { Button, ButtonGroup, drawText } from './ui.js';
 import { BaseWorld } from './world.js';
 import { Player, Bullet, Explosion, BoostParticle } from './entities.js';
 
@@ -24,10 +24,15 @@ export class VersusOnline extends BaseWorld {
     this.initBackdrop();
 
     this.localId = this.net.isHost ? 1 : 2;
+    this.remoteId = this.localId === 1 ? 2 : 1;
     this.score1 = 0;
     this.score2 = 0;
     this.winner = null;
     this.disconnected = false;
+    this.reconnecting = false;
+    this.rematchMe = false;
+    this.rematchThem = false;
+    this.endMenu = null;
     this.sendAcc = 0;
     this.localRespawn = 0;
 
@@ -41,7 +46,6 @@ export class VersusOnline extends BaseWorld {
 
     this.local = mkLocal();
     this.remote = mkRemote();
-    this.remoteId = this.localId === 1 ? 2 : 1;
     this.spawnLocal();
     this.remote.x = this.remoteId === 1 ? 80 : W - 80;
     this.remote.y = H / 2;
@@ -56,8 +60,23 @@ export class VersusOnline extends BaseWorld {
     this.phase = this.net.isHost ? 'countdown' : 'wait';
     this.countdown = 3000;
     this.net.onMessage = (m) => this.onMessage(m);
-    this.net.onState = (s) => { if (s === 'closed') this.disconnected = true; };
+    this.net.onState = (s) => {
+      if (s === 'closed') this.disconnected = true;
+      else if (s === 'reconnecting') this.reconnecting = true;
+      else if (s === 'open') this.reconnecting = false;
+    };
     if (this.net.isHost) this.net.send({ k: 'go' });
+  }
+
+  resetMatch() {
+    this.score1 = 0; this.score2 = 0;
+    this.winner = null; this.endMenu = null;
+    this.rematchMe = false; this.rematchThem = false;
+    this.localBullets = []; this.remoteBullets = [];
+    this.spawnLocal();
+    this.remote.alive = true;
+    this.phase = 'countdown';
+    this.countdown = 3000;
   }
 
   players() { return [this.local, this.remote]; }
@@ -99,6 +118,7 @@ export class VersusOnline extends BaseWorld {
       this.remoteBullets.push(new Bullet(m.x, m.y, this.app.images.bullet, m.vx));
     }
     else if (m.k === 'd') { this.applyDeath(m.v, true); }
+    else if (m.k === 'rm') { this.rematchThem = true; if (this.rematchMe) this.resetMatch(); }
     else if (m.k === 'bye') { this.disconnected = true; }
   }
 
@@ -155,16 +175,29 @@ export class VersusOnline extends BaseWorld {
     this.time += dt;
     this.updateBackdrop(dt);
 
-    if (this.disconnected || this.winner) {
-      // let bullets/effects settle, wait for input to leave
+    if (this.disconnected) {
+      if (input.pressed.size || input.pointer.justDown) { this.leave(); return; }
+      return;
+    }
+
+    if (this.winner) {
+      // settle bullets/effects, offer rematch or leave
       for (const b of this.localBullets) b.update(this);
       for (const b of this.remoteBullets) b.update(this);
       for (const fx of this.effects) fx.update(this);
       this.localBullets = this.localBullets.filter((b) => !b.dead);
       this.remoteBullets = this.remoteBullets.filter((b) => !b.dead);
       this.effects = this.effects.filter((fx) => !fx.dead);
-      if (input.pressed.size || input.pointer.justDown) {
-        if (this.disconnected || this.winner) { this.leave(); return; }
+      if (!this.endMenu) {
+        this.endMenu = new ButtonGroup([
+          new Button('REMATCH', W / 2, H / 2 + 70, 220, 56, 'rgb(0,220,130)', 'rematch'),
+          new Button('LEAVE', W / 2, H / 2 + 140, 220, 56, 'rgb(255,0,0)', 'leave'),
+        ]);
+      }
+      if (!this.rematchMe) {
+        const a = this.endMenu.update();
+        if (a === 'rematch') { this.rematchMe = true; this.net.send({ k: 'rm' }); if (this.rematchThem) this.resetMatch(); }
+        else if (a === 'leave') { this.leave(); return; }
       }
       return;
     }
@@ -247,6 +280,7 @@ export class VersusOnline extends BaseWorld {
     drawText(g, `P1: ${this.score1}${this.localId === 1 ? ' (you)' : ''}`, 10, 24, 24, p1c, 'left');
     drawText(g, `P2: ${this.score2}${this.localId === 2 ? ' (you)' : ''}`, W - 10, 24, 24, p2c, 'right');
     drawText(g, `First to ${SCORE_LIMIT}`, W / 2, 24, 16, 'rgb(160,160,160)');
+    this.drawPing(g);
 
     // touch: leave button
     if (input.isTouch && !this.winner && !this.disconnected) {
@@ -270,15 +304,33 @@ export class VersusOnline extends BaseWorld {
       g.fillStyle = 'rgba(0,0,0,0.6)';
       g.fillRect(0, 0, W, H);
       const iWon = (this.winner === 'PLAYER 1' && this.localId === 1) || (this.winner === 'PLAYER 2' && this.localId === 2);
-      drawText(g, iWon ? 'YOU WIN!' : 'YOU LOSE', W / 2, H / 2 - 40, 56, iWon ? 'rgb(0,255,140)' : 'rgb(255,90,90)');
-      drawText(g, `${this.winner} · ${this.score1} – ${this.score2}`, W / 2, H / 2 + 20, 24, '#fff');
-      drawText(g, 'press any key to continue', W / 2, H / 2 + 70, 16, 'rgb(180,180,180)');
+      drawText(g, iWon ? 'YOU WIN!' : 'YOU LOSE', W / 2, H / 2 - 60, 56, iWon ? 'rgb(0,255,140)' : 'rgb(255,90,90)');
+      drawText(g, `${this.winner} · ${this.score1} – ${this.score2}`, W / 2, H / 2 - 10, 24, '#fff');
+      if (this.rematchMe) {
+        drawText(g, this.rematchThem ? 'starting…' : 'waiting for partner…', W / 2, H / 2 + 90, 18, 'rgb(255,210,80)');
+      } else {
+        if (this.rematchThem) drawText(g, 'partner wants a rematch!', W / 2, H / 2 + 30, 16, 'rgb(0,255,140)');
+        this.endMenu?.draw(g);
+      }
     } else if (this.disconnected) {
       g.fillStyle = 'rgba(0,0,0,0.6)';
       g.fillRect(0, 0, W, H);
       drawText(g, 'OPPONENT DISCONNECTED', W / 2, H / 2 - 10, 28, 'rgb(255,90,90)');
       drawText(g, 'press any key to return', W / 2, H / 2 + 40, 16, 'rgb(180,180,180)');
+    } else if (this.reconnecting) {
+      g.fillStyle = 'rgba(0,0,0,0.55)';
+      g.fillRect(0, 0, W, H);
+      const dots = '.'.repeat(1 + (Math.floor(this.time / 400) % 3));
+      drawText(g, `RECONNECTING${dots}`, W / 2, H / 2, 30, 'rgb(255,210,80)');
     }
+  }
+
+  // ping badge, colour-coded by latency
+  drawPing(g) {
+    const r = this.net.rtt || 0;
+    if (!r) return;
+    const col = r < 80 ? 'rgb(0,220,130)' : r < 160 ? 'rgb(255,210,60)' : 'rgb(255,90,90)';
+    drawText(g, `${r} ms`, W / 2, 46, 13, col);
   }
 
   onResize() { super.onResize(); }
