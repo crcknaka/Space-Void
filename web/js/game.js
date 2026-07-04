@@ -574,38 +574,42 @@ export class GameState extends BaseWorld {
       }
       if (!p.alive) continue;
 
+      // Remote (guest-controlled) ships pick up power-ups client-side to avoid
+      // latency misses — the host applies those via grabPowerup(). Skip here.
+      if (p.remote) continue;
       for (const pu of this.powerups) {
         if (pu.dead || !overlap(p, pu, 0.9)) continue;
         pu.dead = true;
-        this.runPowerups += 1;
-        this.pushToasts(bumpStats({ maxRunPowerups: this.runPowerups }));
-        if (pu.type === 'shooting') {
-          p.powerUp(this);
-          audio.play('powerup', 0.6);
-        } else if (pu.type === 'slow_motion') {
-          this.speedMul = 0.5;
-          this.slowMoEnd = this.time + 10000;
-          audio.play('powerup', 0.6);
-        } else if (pu.type === 'kill_all') {
-          for (const e of this.enemies) {
-            if (!e.isBoss && !e.dead && !e.dying) { e.dead = true; this.explode(e.x, e.y, false); }
-          }
-          for (const a of this.asteroids) {
-            if (!a.dead) { a.dead = true; this.explode(a.x, a.y, false); }
-          }
-          audio.play('explosion', 0.6);
-        } else if (pu.type === 'rocket') {
-          p.rockets += 1;
-          audio.play('powerup', 0.6);
-        } else if (pu.type === 'spread') {
-          p.spread += 1;
-          audio.play('powerup', 0.6);
-        } else if (pu.type === 'shield') {
-          p.shield = true;
-          audio.play('powerup', 0.6);
-        }
+        this.applyPowerup(p, pu.type);
       }
     }
+  }
+
+  // Apply a power-up's effect to a player (shared by local pickup + guest grab).
+  applyPowerup(p, type) {
+    this.runPowerups += 1;
+    this.pushToasts(bumpStats({ maxRunPowerups: this.runPowerups }));
+    if (type === 'shooting') { p.powerUp(this); audio.play('powerup', 0.6); }
+    else if (type === 'slow_motion') { this.speedMul = 0.5; this.slowMoEnd = this.time + 10000; audio.play('powerup', 0.6); }
+    else if (type === 'kill_all') {
+      for (const e of this.enemies) if (!e.isBoss && !e.dead && !e.dying) { e.dead = true; this.explode(e.x, e.y, false); }
+      for (const a of this.asteroids) if (!a.dead) { a.dead = true; this.explode(a.x, a.y, false); }
+      audio.play('explosion', 0.6);
+    }
+    else if (type === 'rocket') { p.rockets += 1; audio.play('powerup', 0.6); }
+    else if (type === 'spread') { p.spread += 1; audio.play('powerup', 0.6); }
+    else if (type === 'shield') { p.shield = true; audio.play('powerup', 0.6); }
+  }
+
+  // Guest grabbed a power-up near (x,y): find & apply to that player.
+  grabPowerup(p, x, y) {
+    let best = null, bestD = 60 * 60;
+    for (const pu of this.powerups) {
+      if (pu.dead) continue;
+      const d = (pu.x - x) ** 2 + (pu.y - y) ** 2;
+      if (d < bestD) { bestD = d; best = pu; }
+    }
+    if (best) { best.dead = true; this.applyPowerup(p, best.type); }
   }
 
   updateGameOver() {

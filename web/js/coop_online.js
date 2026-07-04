@@ -15,7 +15,7 @@ const ETYPE = { basic: 0, weaver: 1, hunter: 2, tank: 3 };
 const ETINT = ['', 'rgba(0,230,190,0.35)', 'rgba(255,60,60,0.4)', 'rgba(190,110,255,0.42)'];
 const PU_TYPES = ['shooting', 'slow_motion', 'kill_all', 'rocket', 'spread', 'shield'];
 const PU_IMG = { shooting: 'powerup', slow_motion: 'slow_motion_powerup', kill_all: 'kill_all_powerup', rocket: 'rocket_powerup', spread: 'spread_powerup' };
-const SEND_MS = 22; // ~45Hz snapshots
+const SEND_MS = 33; // ~30Hz snapshots (mobile-friendly; guest extrapolates)
 
 // shared ping badge
 function drawPing(g, rtt, label) {
@@ -48,8 +48,11 @@ export class CoopHost {
     this.g = new GameState(this.app, true, { online: true, extraPlayers: Math.max(0, guests - 1), colored: true });
     this.g.enter();
     this.g.pauseDisabled = true;
-    for (let i = 1; i < this.g.playerList.length; i++) this.g.playerList[i].controls = {};
+    for (let i = 1; i < this.g.playerList.length; i++) { this.g.playerList[i].controls = {}; this.g.playerList[i].remote = true; }
     this._fx = [];
+    this._sd = [];          // sound events to replay on guests (rocket/powerup)
+    this._prevRockets = 0;
+    this._prevRunPU = 0;
     const orig = this.g.explode.bind(this.g);
     this.g.explode = (x, y, sound = true, scale = 1) => { this._fx.push([Math.round(x), Math.round(y), +scale.toFixed(2)]); return orig(x, y, sound, scale); };
     this.overMenu = null;
@@ -74,6 +77,7 @@ export class CoopHost {
     if (!p) return;
     if (m.k === 'in') { this.inputs.set(slot, { x: m.x, y: m.y }); }
     else if (m.k === 'rk') { if (p.alive) p.fireRocket(this.g); }
+    else if (m.k === 'grab') { if (p.alive) this.g.grabPowerup(p, m.x, m.y); } // client-side pickup
   }
 
   onLeave(slot) {
@@ -99,7 +103,7 @@ export class CoopHost {
       if (a === 'again') { this.playAgain(); return; }
       if (a === 'leave') { this.leave(); return; }
       this.sendAcc += dt;
-      if (this.sendAcc >= SEND_MS) { this.sendAcc = 0; this.hub.broadcast(this.snapshot()); }
+      if (this.sendAcc >= SEND_MS) { this.sendAcc = 0; this.hub.broadcast(this.snapshot()); this._fx.length = 0; this._sd.length = 0; }
       return;
     }
 
@@ -115,11 +119,19 @@ export class CoopHost {
     }
 
     this.g.update(dt);
+
+    // detect rocket launches & power-up pickups to replay their sfx on guests
+    if (this.g.rockets.length > this._prevRockets) this._sd.push('rocket');
+    if (this.g.runPowerups > this._prevRunPU) this._sd.push('powerup');
+    this._prevRockets = this.g.rockets.length;
+    this._prevRunPU = this.g.runPowerups;
+
     this.sendAcc += dt;
     if (this.sendAcc >= SEND_MS) {
       this.sendAcc = 0;
       this.hub.broadcast(this.snapshot());
       this._fx.length = 0;
+      this._sd.length = 0;
     }
   }
 
@@ -132,16 +144,18 @@ export class CoopHost {
       sc: g.score, lv: g.level, warn: g.bossWarnStart ? 1 : 0,
       ban: g.levelBanner ? g.levelBanner.level : 0, slow: g.speedMul < 1 ? 1 : 0, over: g.over ? 1 : 0,
       ps: g.playerList.map(enc),
+      // integer velocities keep packets small; extrapolation over ~33ms doesn't need decimals
       en: g.enemies.map((e) => [Math.round(e.x), Math.round(e.y), e.isBoss ? 4 : ETYPE[e.type], e.dying ? 1 : 0,
-        e.isBoss ? Math.max(0, e.health) / e.maxHealth : 1, Math.round(e.w),
-        Math.round((e.vx || 0) * m * 10) / 10, Math.round((e.dying ? (e.vyFall || 0) : (e.vy || 0)) * m * 10) / 10]),
+        e.isBoss ? Math.round(Math.max(0, e.health) / e.maxHealth * 100) / 100 : 1, Math.round(e.w),
+        Math.round((e.vx || 0) * m), Math.round((e.dying ? (e.vyFall || 0) : (e.vy || 0)) * m)]),
       eb: g.enemyBullets.map((b) => [Math.round(b.x), Math.round(b.y), Math.round(b.vx * m), Math.round(b.vy * m)]),
       pb: g.bullets.map((b) => [Math.round(b.x), Math.round(b.y), Math.round(b.vx), Math.round(b.vy)]),
       ro: g.rockets.map((r) => [Math.round(r.x), Math.round(r.y), Math.round(r.angle)]),
       as: g.asteroids.map((a) => [Math.round(a.x), Math.round(a.y), Math.round(a.w / 2), Math.round(a.angle),
-        Math.round(-a.vx * m * 10) / 10, Math.round(a.vy * m * 10) / 10]),
+        Math.round(-a.vx * m), Math.round(a.vy * m)]),
       pu: g.powerups.map((p) => [Math.round(p.x), Math.round(p.y), PU_TYPES.indexOf(p.type)]),
       fx: this._fx.slice(),
+      sd: this._sd.slice(),
     };
   }
 
@@ -238,6 +252,7 @@ export class CoopGuest extends BaseWorld {
         if (!this.meAlive) { this.me.x = mine[0]; this.me.y = mine[1]; }
       }
       for (const f of m.fx) { this.effects.push(new Explosion(f[0], f[1], this.app.images.explosion_spritesheet, this.time, f[2])); audio.play('explosion', 0.4); }
+      if (m.sd) for (const s of m.sd) audio.play(s, s === 'rocket' ? 0.5 : 0.6); // rocket / powerup sfx
       if (m.ban && m.ban !== this.lastBan) { audio.playSynth('fanfare'); this.lastBan = m.ban; }
       if (m.warn && !this.lastWarn) audio.playSynth('warning');
       this.lastWarn = m.warn;
@@ -273,6 +288,14 @@ export class CoopGuest extends BaseWorld {
       this.me.y = clamp(this.me.y, this.me.h / 2, H - this.me.h / 2);
       if (input.pressed.has('Space') || input.pressed.has('Enter') || input.pressed.has('NumpadEnter') || (pad && pad.fire && this.time - (this._lr || 0) > 300)) { this._lr = this.time; this.net.send({ k: 'rk' }); }
       this.handleTouch();
+      // client-side power-up grab: I see the overlap locally, tell the host
+      if (this.snap && this.time - (this._grabT || 0) > 300) {
+        for (const pu of this.snap.pu) {
+          if (Math.abs(pu[0] - this.me.x) < 45 && Math.abs(pu[1] - this.me.y) < 32) {
+            this._grabT = this.time; this.net.send({ k: 'grab', x: pu[0], y: pu[1] }); break;
+          }
+        }
+      }
       this.sendAcc += dt;
       if (this.sendAcc >= SEND_MS) { this.sendAcc = 0; this.net.send({ k: 'in', x: Math.round(this.me.x), y: Math.round(this.me.y) }); }
     } else if (input.isTouch) {
@@ -311,7 +334,7 @@ export class CoopGuest extends BaseWorld {
     const s = this.snap;
 
     if (s) {
-      const ex = Math.min(this.time - (this.snapAt || this.time), 60) / STEP;
+      const ex = Math.min(this.time - (this.snapAt || this.time), 90) / STEP;
       for (const p of s.pu) { const t = PU_TYPES[p[2]] || 'shooting'; g.drawImage(this.puImg[t], p[0] - 30, p[1] - 15, 60, 30); }
       for (const a of s.as) { const ax = a[0] + (a[4] || 0) * ex, ay = a[1] + (a[5] || 0) * ex; g.save(); g.translate(ax, ay); g.rotate(a[3] * Math.PI / 180); g.drawImage(images.asteroid, -a[2], -a[2], a[2] * 2, a[2] * 2); g.restore(); }
       const thr = images.thrusters.enemy[this.frame >> 2 & 3];
