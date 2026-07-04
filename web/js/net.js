@@ -4,11 +4,10 @@
 // Once open, both use net.send(obj) / net.onMessage(fn) over a data channel.
 
 // STUN finds your public address; TURN relays traffic when a direct P2P path
-// is blocked (strict/symmetric NAT, mobile carriers). The free Open Relay TURN
-// makes connections work on almost any network — including ports 443/TCP that
-// slip through restrictive firewalls. (Best-effort public relay; swap in a
-// dedicated TURN key if you ever need guaranteed uptime.)
-const ICE = {
+// is blocked (strict/symmetric NAT, mobile carriers). The live server list is
+// fetched from /api/ice so a reliable TURN can be configured via env vars; this
+// is the offline/fallback set (best-effort public relay).
+const FALLBACK_ICE = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
@@ -17,6 +16,23 @@ const ICE = {
     { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
   ],
 };
+
+let iceCache = null;
+async function getIce() {
+  if (iceCache) return iceCache;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 3000);
+    const r = await fetch('/api/ice', { signal: ctrl.signal });
+    clearTimeout(t);
+    if (r.ok) {
+      const data = await r.json();
+      if (data.iceServers?.length) { iceCache = data; return data; }
+    }
+  } catch { /* offline / error -> fallback */ }
+  iceCache = FALLBACK_ICE;
+  return FALLBACK_ICE;
+}
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no ambiguous chars
 function makeCode() {
@@ -99,7 +115,7 @@ export class Net {
   async createRoom() {
     this._set('signaling');
     this.code = makeCode();
-    this.pc = new RTCPeerConnection(ICE);
+    this.pc = new RTCPeerConnection(await getIce());
     this._watchConnection();
     this._wireChannel(this.pc.createDataChannel('game', { ordered: true }));
 
@@ -124,7 +140,7 @@ export class Net {
     if (this._cancelled) return;
     if (!offer) { this._set('failed'); return; }
 
-    this.pc = new RTCPeerConnection(ICE);
+    this.pc = new RTCPeerConnection(await getIce());
     this._watchConnection();
     this.pc.ondatachannel = (e) => this._wireChannel(e.channel);
 

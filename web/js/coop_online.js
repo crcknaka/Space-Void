@@ -6,8 +6,8 @@ import * as audio from './audio.js';
 import { drawText } from './ui.js';
 import { BaseWorld } from './world.js';
 import { GameState } from './game.js';
-import { Player, Explosion } from './entities.js';
-import { tinted, glowBullet, glowEnemyBullet, drawGlow } from './fx.js';
+import { Player, Explosion, RocketTrailParticle, SmokeParticle, Spark } from './entities.js';
+import { tinted, glowBullet, glowEnemyBullet, glowEngine, drawGlow } from './fx.js';
 
 const ETYPE = { basic: 0, weaver: 1, hunter: 2, tank: 3 };
 const ETYPE_NAME = ['basic', 'weaver', 'hunter', 'tank'];
@@ -220,6 +220,19 @@ class CoopGuest extends BaseWorld {
     }
     if (this.time - (this.me.thrLast || 0) > 50) { this.me.thrLast = this.time; this.me.thrFrame = (this.me.thrFrame + 1) % this.me.thrusters.length; }
 
+    // Cosmetic effects the host simulates but doesn't stream: regenerate them
+    // locally from the snapshot so the guest sees rocket trails + wrecks that
+    // spark, smoke and fall — matching the host's view.
+    const s = this.snap;
+    if (s && this.phase === 'play' && !s.over) {
+      for (const r of s.ro) this.effects.push(new RocketTrailParticle(r[0], r[1], this.time));
+      for (const e of s.en) {
+        if (!e[3]) continue; // only dying wrecks
+        if (Math.random() < 0.6) this.effects.push(new SmokeParticle(e[0], e[1], this.time));
+        if (Math.random() < 0.25) this.effects.push(new Spark(e[0], e[1], this.time, -Math.PI / 2));
+      }
+    }
+
     for (const fx of this.effects) fx.update(this);
     this.effects = this.effects.filter((fx) => !fx.dead);
   }
@@ -251,7 +264,7 @@ class CoopGuest extends BaseWorld {
       }
       for (const b of s.pb) { drawGlow(g, glowBullet, b[0], b[1]); g.drawImage(images.bullet, b[0] - 5, b[1] - 2.5, 10, 5); }
       for (const b of s.eb) { drawGlow(g, glowEnemyBullet, b[0], b[1]); g.drawImage(images.enemy_bullet, b[0] - 5, b[1] - 2.5, 10, 5); }
-      for (const r of s.ro) { g.save(); g.translate(r[0], r[1]); g.rotate(r[2] * Math.PI / 180); g.drawImage(images.rocket, -10, -5, 20, 10); g.restore(); }
+      for (const r of s.ro) { drawGlow(g, glowEngine, r[0], r[1], 0.8); g.save(); g.translate(r[0], r[1]); g.rotate(r[2] * Math.PI / 180); g.drawImage(images.rocket, -10, -5, 20, 10); g.restore(); }
       for (const fx of this.effects) fx.draw(g, this);
 
       // player1 (host) from snapshot
