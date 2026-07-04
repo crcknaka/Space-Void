@@ -18,8 +18,10 @@ const FALLBACK_ICE = {
 };
 
 let iceCache = null;
+let iceCacheAt = 0;
+const ICE_TTL = 4 * 60 * 1000; // TURN creds rotate; re-fetch periodically
 async function getIce() {
-  if (iceCache) return iceCache;
+  if (iceCache && Date.now() - iceCacheAt < ICE_TTL) return iceCache;
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 3000);
@@ -27,10 +29,10 @@ async function getIce() {
     clearTimeout(t);
     if (r.ok) {
       const data = await r.json();
-      if (data.iceServers?.length) { iceCache = data; return data; }
+      if (data.iceServers?.length) { iceCache = data; iceCacheAt = Date.now(); return data; }
     }
-  } catch { /* offline / error -> fallback */ }
-  iceCache = FALLBACK_ICE;
+  } catch { /* offline / error -> fallback (NOT cached, so a transient failure
+                doesn't poison the whole session with the weak public relay) */ }
   return FALLBACK_ICE;
 }
 
@@ -101,6 +103,20 @@ function randSlot() {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// High-rate, self-contained state (snapshots, positions) goes on an unreliable
+// unordered channel so a single lost packet can't head-of-line-block the whole
+// stream (a killer of mobile/TURN feel). Everything else stays reliable+ordered.
+const UNRELIABLE = new Set(['w', 'in', 's']);
+function createChannels(pc) {
+  return [
+    pc.createDataChannel('ctrl', { ordered: true }),
+    pc.createDataChannel('state', { ordered: false, maxRetransmits: 0 }),
+  ];
+}
+function pickChannel(ctrl, state, k) {
+  return (UNRELIABLE.has(k) && state && state.readyState === 'open') ? state : ctrl;
+}
+
 async function poll(fn, intervalMs, timeoutMs, cancelled) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -116,7 +132,8 @@ export class Net {
   constructor(isHost) {
     this.isHost = isHost;
     this.pc = null;
-    this.dc = null;
+    this.dcCtrl = null;
+    this.dcState = null;
     this.code = null;
     this.state = 'idle'; // idle | signaling | connecting | open | reconnecting | failed | closed
     this.rtt = 0;        // round-trip time in ms (ping)
@@ -129,15 +146,14 @@ export class Net {
 
   _set(s) { this.state = s; this.onState(s); }
 
-  _wireChannel(dc) {
-    this.dc = dc;
+  _wire(dc) {
     dc.binaryType = 'arraybuffer';
-    dc.onopen = () => { this._set('open'); this._startPing(); };
-    dc.onclose = () => this._set('closed');
+    if (dc.label === 'state') this.dcState = dc; else this.dcCtrl = dc;
+    dc.onopen = () => { if (dc.label !== 'state') { this._set('open'); this._startPing(); } };
+    dc.onclose = () => { if (dc.label !== 'state') this._set('closed'); };
     dc.onmessage = (e) => {
       let msg;
       try { msg = JSON.parse(e.data); } catch { return; }
-      // intercept ping/pong before handing off to the game
       if (msg.k === '__ping') { this.send({ k: '__pong', t: msg.t }); return; }
       if (msg.k === '__pong') { this.rtt = Date.now() - msg.t; return; }
       this.onMessage(msg);
@@ -150,9 +166,8 @@ export class Net {
   }
 
   send(obj) {
-    if (this.dc && this.dc.readyState === 'open') {
-      try { this.dc.send(JSON.stringify(obj)); } catch {}
-    }
+    const ch = pickChannel(this.dcCtrl, this.dcState, obj.k);
+    if (ch && ch.readyState === 'open') { try { ch.send(JSON.stringify(obj)); } catch {} }
   }
 
   async createRoom() {
@@ -160,7 +175,7 @@ export class Net {
     this.code = makeCode();
     this.pc = new RTCPeerConnection(await getIce());
     this._watchConnection();
-    this._wireChannel(this.pc.createDataChannel('game', { ordered: true }));
+    for (const ch of createChannels(this.pc)) this._wire(ch);
 
     const offer = await this.pc.createOffer();
     await this.pc.setLocalDescription(offer);
@@ -185,7 +200,7 @@ export class Net {
 
     this.pc = new RTCPeerConnection(await getIce());
     this._watchConnection();
-    this.pc.ondatachannel = (e) => this._wireChannel(e.channel);
+    this.pc.ondatachannel = (e) => this._wire(e.channel);
 
     await this.pc.setRemoteDescription(offer);
     const answer = await this.pc.createAnswer();
@@ -227,9 +242,10 @@ export class Net {
   close() {
     if (this._pingTimer) { clearInterval(this._pingTimer); this._pingTimer = null; }
     if (this._recoverTimer) { clearTimeout(this._recoverTimer); this._recoverTimer = null; }
-    try { this.dc?.close(); } catch {}
+    try { this.dcCtrl?.close(); } catch {}
+    try { this.dcState?.close(); } catch {}
     try { this.pc?.close(); } catch {}
-    this.dc = null;
+    this.dcCtrl = this.dcState = null;
     this.pc = null;
     if (this.state !== 'closed') this._set('closed');
   }
@@ -251,7 +267,7 @@ export class CoopHub {
     this.onMessage = () => {};   // (slot, msg)
   }
 
-  get count() { return [...this.peers.values()].filter((p) => p.dc?.readyState === 'open').length; }
+  get count() { return [...this.peers.values()].filter((p) => p.dcCtrl?.readyState === 'open').length; }
 
   async createRoom() { this.code = makeCode(); this._loop(); return this.code; }
 
@@ -272,9 +288,9 @@ export class CoopHub {
       const offer = await getSDP(this.code, slot, 'offer');
       if (!offer || this._cancelled) return;
       const pc = new RTCPeerConnection(await getIce());
-      const peer = { pc, dc: null, rtt: 0, _pt: null };
+      const peer = { pc, dcCtrl: null, dcState: null, rtt: 0, _pt: null };
       this.peers.set(slot, peer);
-      pc.ondatachannel = (e) => { peer.dc = e.channel; this._wire(slot, peer, e.channel); };
+      pc.ondatachannel = (e) => this._wire(slot, peer, e.channel);
       pc.onconnectionstatechange = () => {
         const s = pc.connectionState;
         if (s === 'failed' || s === 'closed') this._drop(slot);
@@ -289,8 +305,11 @@ export class CoopHub {
 
   _wire(slot, peer, dc) {
     dc.binaryType = 'arraybuffer';
-    dc.onopen = () => { this.onGuestJoin(slot); peer._pt = setInterval(() => this.sendTo(slot, { k: '__ping', t: Date.now() }), 1000); };
-    dc.onclose = () => this._drop(slot);
+    if (dc.label === 'state') peer.dcState = dc; else peer.dcCtrl = dc;
+    dc.onopen = () => {
+      if (dc.label !== 'state') { this.onGuestJoin(slot); peer._pt = setInterval(() => this.sendTo(slot, { k: '__ping', t: Date.now() }), 1000); }
+    };
+    dc.onclose = () => { if (dc.label !== 'state') this._drop(slot); };
     dc.onmessage = (e) => {
       let m; try { m = JSON.parse(e.data); } catch { return; }
       if (m.k === '__ping') { this.sendTo(slot, { k: '__pong', t: m.t }); return; }
@@ -303,7 +322,8 @@ export class CoopHub {
     const p = this.peers.get(slot);
     if (!p) return;
     if (p._pt) clearInterval(p._pt);
-    try { p.dc?.close(); } catch {}
+    try { p.dcCtrl?.close(); } catch {}
+    try { p.dcState?.close(); } catch {}
     try { p.pc?.close(); } catch {}
     this.peers.delete(slot);
     this.onGuestLeave(slot);
@@ -311,12 +331,17 @@ export class CoopHub {
 
   sendTo(slot, o) {
     const p = this.peers.get(slot);
-    if (p?.dc?.readyState === 'open') { try { p.dc.send(JSON.stringify(o)); } catch {} }
+    if (!p) return;
+    const ch = pickChannel(p.dcCtrl, p.dcState, o.k);
+    if (ch && ch.readyState === 'open') { try { ch.send(JSON.stringify(o)); } catch {} }
   }
 
   broadcast(o) {
     const s = JSON.stringify(o);
-    for (const p of this.peers.values()) if (p.dc?.readyState === 'open') { try { p.dc.send(s); } catch {} }
+    for (const p of this.peers.values()) {
+      const ch = pickChannel(p.dcCtrl, p.dcState, o.k);
+      if (ch && ch.readyState === 'open') { try { ch.send(s); } catch {} }
+    }
   }
 
   avgPing() {
@@ -336,7 +361,8 @@ export class CoopLink {
     this.code = null;
     this.slot = null;
     this.pc = null;
-    this.dc = null;
+    this.dcCtrl = null;
+    this.dcState = null;
     this.state = 'idle';
     this.rtt = 0;
     this._cancelled = false;
@@ -347,13 +373,16 @@ export class CoopLink {
   }
 
   _set(s) { this.state = s; this.onState(s); }
-  send(o) { if (this.dc?.readyState === 'open') { try { this.dc.send(JSON.stringify(o)); } catch {} } }
+  send(o) {
+    const ch = pickChannel(this.dcCtrl, this.dcState, o.k);
+    if (ch && ch.readyState === 'open') { try { ch.send(JSON.stringify(o)); } catch {} }
+  }
 
   _wire(dc) {
-    this.dc = dc;
     dc.binaryType = 'arraybuffer';
-    dc.onopen = () => { this._set('open'); if (!this._pingTimer) this._pingTimer = setInterval(() => this.send({ k: '__ping', t: Date.now() }), 1000); };
-    dc.onclose = () => this._set('closed');
+    if (dc.label === 'state') this.dcState = dc; else this.dcCtrl = dc;
+    dc.onopen = () => { if (dc.label !== 'state') { this._set('open'); if (!this._pingTimer) this._pingTimer = setInterval(() => this.send({ k: '__ping', t: Date.now() }), 1000); } };
+    dc.onclose = () => { if (dc.label !== 'state') this._set('closed'); };
     dc.onmessage = (e) => {
       let m; try { m = JSON.parse(e.data); } catch { return; }
       if (m.k === '__ping') { this.send({ k: '__pong', t: m.t }); return; }
@@ -368,7 +397,7 @@ export class CoopLink {
     this._set('signaling');
     this.pc = new RTCPeerConnection(await getIce());
     this._watch();
-    this._wire(this.pc.createDataChannel('game', { ordered: true }));
+    for (const ch of createChannels(this.pc)) this._wire(ch);
     const offer = await this.pc.createOffer();
     await this.pc.setLocalDescription(offer);
     await iceComplete(this.pc);
@@ -402,9 +431,10 @@ export class CoopLink {
   close() {
     if (this._pingTimer) { clearInterval(this._pingTimer); this._pingTimer = null; }
     if (this._recoverTimer) { clearTimeout(this._recoverTimer); this._recoverTimer = null; }
-    try { this.dc?.close(); } catch {}
+    try { this.dcCtrl?.close(); } catch {}
+    try { this.dcState?.close(); } catch {}
     try { this.pc?.close(); } catch {}
-    this.dc = null; this.pc = null;
+    this.dcCtrl = this.dcState = null; this.pc = null;
     if (this.state !== 'closed') this._set('closed');
   }
 }

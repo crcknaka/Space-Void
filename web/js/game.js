@@ -55,10 +55,8 @@ export class GameState extends BaseWorld {
     // daily challenge: everyone plays the same seeded spawn stream today
     setRngSeed(this.daily ? dailySeed() : null);
     this.mod = this.daily ? todayMod() : null;
-    if (this.daily) {
-      useDailyAttempt();
-      this.pushToasts(bumpStats({ dailyRuns: 1 }));
-    }
+    this._dailyCharged = false; // an attempt is spent only once the run is committed
+    if (this.daily) this.pushToasts(bumpStats({ dailyRuns: 1 }));
 
     this.initBackdrop();
     this.score = 0;
@@ -284,6 +282,7 @@ export class GameState extends BaseWorld {
     }
 
     this.time += dt;
+    if (this.daily) this.maybeConsumeDaily(); // charge once the run is committed, any exit path
 
     // --- spawn timers (pygame USEREVENT timers); paused during the post-boss breather ---
     const spawningAllowed = this.time >= this.spawnHoldUntil;
@@ -586,6 +585,15 @@ export class GameState extends BaseWorld {
     }
   }
 
+  // Spend a daily attempt once the run is committed (played >2s or scored),
+  // so accidentally opening DAILY and backing straight out is free.
+  maybeConsumeDaily() {
+    if (this.daily && !this._dailyCharged && (this.time > 2000 || this.score > 0)) {
+      this._dailyCharged = true;
+      useDailyAttempt();
+    }
+  }
+
   // Apply a power-up's effect to a player (shared by local pickup + guest grab).
   applyPowerup(p, type) {
     this.runPowerups += 1;
@@ -598,7 +606,7 @@ export class GameState extends BaseWorld {
       audio.play('explosion', 0.6);
     }
     else if (type === 'rocket') { p.rockets += 1; audio.play('powerup', 0.6); }
-    else if (type === 'spread') { p.spread += 1; audio.play('powerup', 0.6); }
+    else if (type === 'spread') { p.spread = Math.min(5, p.spread + 1); audio.play('powerup', 0.6); } // capped so runs don't snowball
     else if (type === 'shield') { p.shield = true; audio.play('powerup', 0.6); }
   }
 
@@ -733,11 +741,12 @@ export class GameState extends BaseWorld {
       g.globalAlpha = 1;
     }
     // lives + rockets per player (colour-coded)
-    const many = this.playerList.length > 2;
+    const shown = this.playerList.filter((p) => !p.gone); // drop guests who left
+    const many = shown.length > 2;
     const fs = many ? 18 : 22;
-    this.playerList.forEach((p, i) => {
+    shown.forEach((p, i) => {
       const y = 58 + i * (many ? 26 : 32);
-      drawText(g, `P${i + 1}`, 10, y, fs, p.color, 'left');
+      drawText(g, `P${p.slot + 1}`, 10, y, fs, p.color, 'left');
       drawText(g, '♥'.repeat(Math.max(0, p.lives)), 44, y, fs, 'rgb(255,80,90)', 'left');
       drawText(g, `🚀${p.rockets}`, many ? 108 : 124, y, fs, '#fff', 'left');
     });

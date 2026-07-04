@@ -117,19 +117,21 @@ export class VersusOnline extends BaseWorld {
       // opponent shots render correctly with no extra handling.
       this.remoteBullets.push(new Bullet(m.x, m.y, this.app.images.bullet, m.vx));
     }
-    else if (m.k === 'd') { this.applyDeath(m.v, true); }
+    // The victim is authoritative for the score after its own death and sends
+    // the resulting totals; the receiver ADOPTS them (never increments) so a
+    // lost/duplicated packet can't desync who's winning across the two screens.
+    else if (m.k === 'd') {
+      this.score1 = m.s1; this.score2 = m.s2;
+      this.effects.push(new Explosion(this.remote.x, this.remote.y, this.app.images.explosion_spritesheet, this.time));
+      audio.play('explosion', 0.5);
+      audio.play(this.remoteId === 1 ? 'player2_kill' : 'player1_kill', 0.7);
+      this.checkWinner();
+    }
     else if (m.k === 'rm') { this.rematchThem = true; if (this.rematchMe) this.resetMatch(); }
     else if (m.k === 'bye') { this.disconnected = true; }
   }
 
-  applyDeath(victimId, remote) {
-    // a death increments the OTHER player's score (idempotent per machine)
-    if (victimId === 1) this.score2 += 1; else this.score1 += 1;
-    if (remote && victimId === this.remoteId) {
-      this.effects.push(new Explosion(this.remote.x, this.remote.y, this.app.images.explosion_spritesheet, this.time));
-      audio.play('explosion', 0.5);
-      audio.play(this.remoteId === 1 ? 'player2_kill' : 'player1_kill', 0.7);
-    }
+  checkWinner() {
     if (this.score1 >= SCORE_LIMIT) this.winner = 'PLAYER 1';
     else if (this.score2 >= SCORE_LIMIT) this.winner = 'PLAYER 2';
   }
@@ -238,8 +240,11 @@ export class VersusOnline extends BaseWorld {
             this.localRespawn = this.time + 1000;
             this.effects.push(new Explosion(this.local.x, this.local.y, this.app.images.explosion_spritesheet, this.time));
             audio.play('explosion', 0.5);
-            this.applyDeath(this.localId, false); // increment opponent locally
-            this.net.send({ k: 'd', v: this.localId });
+            // I died: increment the opponent locally, then broadcast the
+            // authoritative totals for the other side to adopt.
+            if (this.localId === 1) this.score2 += 1; else this.score1 += 1;
+            this.checkWinner();
+            this.net.send({ k: 'd', s1: this.score1, s2: this.score2 });
             break;
           }
         }

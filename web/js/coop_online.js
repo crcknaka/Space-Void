@@ -153,10 +153,16 @@ export class CoopHost {
       sc: g.score, lv: g.level, warn: g.bossWarnStart ? 1 : 0,
       ban: g.levelBanner ? g.levelBanner.level : 0, slow: g.speedMul < 1 ? 1 : 0, over: g.over ? 1 : 0,
       ps: g.playerList.map(enc),
-      // integer velocities keep packets small; extrapolation over ~33ms doesn't need decimals
-      en: g.enemies.map((e) => [Math.round(e.x), Math.round(e.y), e.isBoss ? 4 : ETYPE[e.type], e.dying ? 1 : 0,
-        e.isBoss ? Math.round(Math.max(0, e.health) / e.maxHealth * 100) / 100 : 1, Math.round(e.w),
-        Math.round((e.vx || 0) * m), Math.round((e.dying ? (e.vyFall || 0) : (e.vy || 0)) * m)]),
+      // integer velocities keep packets small; extrapolation over ~33ms doesn't need decimals.
+      // boss rows carry 3 extra fields so guests can SEE the laser + shield (else they
+      // die to an invisible instakill beam from level 3 on).
+      en: g.enemies.map((e) => {
+        const row = [Math.round(e.x), Math.round(e.y), e.isBoss ? 4 : ETYPE[e.type], e.dying ? 1 : 0,
+          e.isBoss ? Math.round(Math.max(0, e.health) / Math.max(1, e.maxHealth) * 100) / 100 : 1, Math.round(e.w),
+          Math.round((e.vx || 0) * m), Math.round((e.dying ? (e.vyFall || 0) : (e.vy || 0)) * m)];
+        if (e.isBoss) row.push(e.laser ? (e.laser.phase === 'fire' ? 2 : 1) : 0, Math.round(e.laser ? e.laser.y : 0), e.shieldUntil > g.time ? 1 : 0);
+        return row;
+      }),
       eb: g.enemyBullets.map((b) => [Math.round(b.x), Math.round(b.y), Math.round(b.vx * m), Math.round(b.vy * m)]),
       pb: g.bullets.map((b) => [Math.round(b.x), Math.round(b.y), Math.round(b.vx), Math.round(b.vy)]),
       ro: g.rockets.map((r) => [Math.round(r.x), Math.round(r.y), Math.round(r.angle)]),
@@ -332,6 +338,26 @@ export class CoopGuest extends BaseWorld {
 
   leave() { try { this.net.send({ k: 'bye' }); } catch {} this.net.close(); this.app.goMenu(); }
 
+  // Boss laser telegraph (phase 1) / beam (phase 2) — mirrors Boss.draw so
+  // guests can see and dodge the instakill beam.
+  drawBossLaser(g, bx, w, phase, y) {
+    if (!phase) return;
+    const t = this.time, x0 = bx - w / 2 + 10, prev = g.globalCompositeOperation;
+    g.save(); g.globalCompositeOperation = 'lighter';
+    if (phase === 1) {
+      g.globalAlpha = 0.35 + 0.3 * Math.sin(t / 60);
+      g.strokeStyle = 'rgb(255,60,60)'; g.lineWidth = 2; g.setLineDash([10, 8]);
+      g.beginPath(); g.moveTo(x0, y); g.lineTo(0, y); g.stroke(); g.setLineDash([]);
+    } else {
+      g.globalAlpha = 0.9 * (0.8 + 0.2 * Math.sin(t / 25));
+      const grad = g.createLinearGradient(0, y - 16, 0, y + 16);
+      grad.addColorStop(0, 'rgba(255,60,60,0)'); grad.addColorStop(0.5, 'rgba(255,180,160,0.95)'); grad.addColorStop(1, 'rgba(255,60,60,0)');
+      g.fillStyle = grad; g.fillRect(0, y - 16, x0, 32);
+      g.globalAlpha = 0.9; g.fillStyle = '#fff'; g.fillRect(0, y - 3, x0, 6);
+    }
+    g.globalAlpha = 1; g.globalCompositeOperation = prev; g.restore();
+  }
+
   drawShip(g, img, thrusters, x, y, inv) {
     const thr = thrusters[this.frame >> 2 & 3];
     if (inv) g.globalAlpha = 0.5 + 0.25 * Math.sin(this.time / 55);
@@ -353,11 +379,19 @@ export class CoopGuest extends BaseWorld {
       for (const e of s.en) {
         const w = e[5] || 50, h = e[2] === 4 ? w : Math.round(w * 0.6);
         const cx = e[0] + (e[6] || 0) * ex, cy = e[1] + (e[7] || 0) * ex;
+        if (e[2] === 4) this.drawBossLaser(g, cx, w, e[8] || 0, e[9] || 0); // laser behind the boss
         if (e[3]) g.globalAlpha = 0.6;
         if (e[2] !== 4) { g.save(); g.translate(cx + w / 2 + 12, cy); g.scale(-1, 1); g.drawImage(thr, -32, -32, 64, 64); g.restore(); }
         g.drawImage(this.tint(e[2], e[2] === 4 ? images.boss : images.enemy_ship), cx - w / 2, cy - h / 2, w, h);
         g.globalAlpha = 1;
-        if (e[2] === 4) { const bw = 120; g.fillStyle = 'rgba(255,255,255,0.25)'; g.fillRect(cx - bw / 2, cy - h / 2 - 14, bw, 8); g.fillStyle = '#f33'; g.fillRect(cx - bw / 2, cy - h / 2 - 14, bw * e[4], 8); }
+        if (e[2] === 4) {
+          if (e[10]) { // shield ring
+            g.save(); g.globalCompositeOperation = 'lighter'; g.globalAlpha = 0.5 + 0.2 * Math.sin(this.time / 90);
+            g.strokeStyle = 'rgb(90,220,255)'; g.lineWidth = 3; g.beginPath(); g.arc(cx, cy, w / 2 + 14, 0, Math.PI * 2); g.stroke(); g.restore();
+          }
+          const bw = 120; g.fillStyle = 'rgba(255,255,255,0.25)'; g.fillRect(cx - bw / 2, cy - h / 2 - 14, bw, 8);
+          g.fillStyle = e[10] ? 'rgb(90,220,255)' : '#f33'; g.fillRect(cx - bw / 2, cy - h / 2 - 14, bw * e[4], 8);
+        }
       }
       for (const b of s.pb) { const x = b[0] + (b[2] || 0) * ex, y = b[1] + (b[3] || 0) * ex; drawGlow(g, glowBullet, x, y); g.drawImage(images.bullet, x - 5, y - 2.5, 10, 5); }
       for (const b of s.eb) { const x = b[0] + (b[2] || 0) * ex, y = b[1] + (b[3] || 0) * ex; drawGlow(g, glowEnemyBullet, x, y); g.drawImage(images.enemy_bullet, x - 5, y - 2.5, 10, 5); }
