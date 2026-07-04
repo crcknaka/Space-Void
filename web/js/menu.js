@@ -47,10 +47,12 @@ export class MenuState {
       ]);
     } else {
       let y = H / 2 - dy * 2.5;
+      const online = new Button('ONLINE', W / 2, 0, 220, 58, 'rgb(0,220,255)', 'online');
+      online.accent = true; // permanently highlighted
       this.menu = new ButtonGroup([
         new Button('SINGLE', W / 2, y, 220, 58, 'rgb(0,255,0)', 'single'),
         new Button('LOCAL 2P', W / 2, y += dy, 220, 58, 'rgb(0,120,255)', 'local'),
-        new Button('ONLINE 2P', W / 2, y += dy, 220, 58, 'rgb(0,220,255)', 'online'),
+        Object.assign(online, { cy: (y += dy) }),
         new Button('DAILY', W / 2, y += dy, 220, 58, 'rgb(255,210,0)', 'daily'),
         new Button('SCORES', W / 2, y += dy, 220, 58, 'rgb(200,120,255)', 'scores'),
         new Button('SETTINGS', W / 2, y += dy, 220, 58, 'rgb(255,0,0)', 'settings'),
@@ -139,7 +141,7 @@ export class MenuState {
         ? 'Two players share this screen · gamepads recommended (P1=pad1, P2=pad2)'
         : 'P1: WASD + Shift · Space   ·   P2: Arrows + RShift · Enter', W / 2, H - 48, 13, 'rgb(150,150,150)');
     } else {
-      drawText(g, 'ONLINE 2P = play with a friend over the internet (room code)', W / 2, H - 48, 13, 'rgb(150,150,150)');
+      drawText(g, 'ONLINE = play with friends over the internet · up to 4 in co-op', W / 2, H - 48, 13, 'rgb(120,220,255)');
     }
     drawText(g, 'Made by cRc^', W - 10, H - 14, 14, 'rgb(200,200,200)', 'right');
   }

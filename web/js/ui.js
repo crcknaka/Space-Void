@@ -40,9 +40,27 @@ export class Button {
     const active = this.hovered || this.selected;
     const grow = active ? 1.1 : 1;            // 10% growth like the pygame menus
     const w = this.w * grow, h = this.h * grow;
-    g.fillStyle = active ? this.hoverColor : 'rgb(70,70,70)';
-    roundRect(g, this.cx - w / 2, this.cy - h / 2, w, h, 6);
-    g.fill();
+    const x = this.cx - w / 2, y = this.cy - h / 2;
+    if (active) {
+      g.fillStyle = this.hoverColor;
+      roundRect(g, x, y, w, h, 6); g.fill();
+    } else if (this.accent) {
+      // permanent highlight: tinted fill + glowing coloured border
+      g.fillStyle = 'rgb(55,55,55)';
+      roundRect(g, x, y, w, h, 6); g.fill();
+      g.save();
+      g.globalAlpha = 0.22; g.fillStyle = this.hoverColor;
+      roundRect(g, x, y, w, h, 6); g.fill();
+      g.restore();
+      g.save();
+      g.strokeStyle = this.hoverColor; g.lineWidth = 2.5;
+      g.shadowColor = this.hoverColor; g.shadowBlur = 12;
+      roundRect(g, x, y, w, h, 6); g.stroke();
+      g.restore();
+    } else {
+      g.fillStyle = 'rgb(70,70,70)';
+      roundRect(g, x, y, w, h, 6); g.fill();
+    }
     drawText(g, this.text, this.cx, this.cy + 1, Math.round(24 * (active ? 1.1 : 1)));
   }
 }
