@@ -10,7 +10,7 @@ import {
   POWERUP_TYPES, POWERUP_IMG,
 } from './entities.js';
 import { makeNebulaField, tinted } from './fx.js';
-import { askName, submitScore } from './lb.js';
+import { askName, submitScore, savedName } from './lb.js';
 import { bumpStats, vibrate } from './settings.js';
 import { dailySeed, todayMod, useDailyAttempt, dailyAttemptsLeft } from './daily.js';
 
@@ -743,22 +743,25 @@ export class GameState extends BaseWorld {
     if (this.online) return; // host wrapper owns the online game-over flow
     if (!this.overMenu) this.overMenu = this.buildOverMenu();
 
-    // one-time leaderboard submission
+    // one-time leaderboard submission — a saved name submits straight away,
+    // otherwise ask once (and remember it for next time)
     if (this.lb.status === 'idle') {
       if (this.score <= 0) {
         this.lb.status = 'skipped';
       } else {
-        this.lb.status = 'asking';
-        askName().then((name) => {
-          if (!name) { this.lb = { status: 'skipped' }; return; }
+        const mode = this.daily ? 'daily' : this.coop ? 'coop' : 'single';
+        const send = (name) => {
           this.lb = { status: 'sending' };
-          const mode = this.daily ? 'daily' : this.coop ? 'coop' : 'single';
           submitScore(name, this.score, mode).then((res) => {
-            this.lb = res && res.ok
-              ? { status: 'done', rank: res.rank, top: res.top, name }
-              : { status: 'offline' };
+            this.lb = res && res.ok ? { status: 'done', rank: res.rank, top: res.top, name } : { status: 'offline' };
           });
-        });
+        };
+        const saved = savedName();
+        if (saved) { send(saved); }
+        else {
+          this.lb.status = 'asking';
+          askName().then((name) => name ? send(name) : (this.lb = { status: 'skipped' }));
+        }
       }
     }
     if (this.lb.status === 'asking') return; // overlay is open, don't react to Enter/clicks

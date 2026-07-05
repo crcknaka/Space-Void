@@ -4,17 +4,21 @@ import * as input from './input.js';
 import * as audio from './audio.js';
 import { Button, ButtonGroup, drawText } from './ui.js';
 import { BaseWorld } from './world.js';
-import { Player, Bullet, Explosion } from './entities.js';
+import { Player, Bullet, Explosion, Rocket, LaserBeam } from './entities.js';
 
 const SCORE_LIMIT = 10;
+const RK_MAX = 3, RK_REGEN = 3500, RK_CD = 700;   // rockets: 3 max, refill every 3.5s
+const LZ_MAX = 2, LZ_REGEN = 6000, LZ_CD = 1000;  // lasers: 2 max, refill every 6s
+const LZ_BAND = 22;
 
 const P1_CONTROLS = {
   up: 'KeyW', down: 'KeyS', left: 'KeyA', right: 'KeyD',
-  shoot: 'Space', speed: 'ShiftLeft',
+  shoot: 'Space', speed: 'ShiftLeft', rocket: 'KeyE', laser: 'KeyQ',
 };
 const P2_CONTROLS = {
   up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight',
   shoot: 'Enter', shootAlt: 'NumpadEnter', speed: 'Numpad0', speedAlt: 'ShiftRight',
+  rocket: 'Slash', laser: 'Period',
 };
 
 export class VersusState extends BaseWorld {
@@ -35,6 +39,7 @@ export class VersusState extends BaseWorld {
 
     this.bullets1 = [];
     this.bullets2 = [];
+    this.rockets = []; // each carries .ownerId (1|2); homes on the opponent
 
     this.player1 = new Player(images, {
       img: images.player1_ship,
@@ -54,10 +59,49 @@ export class VersusState extends BaseWorld {
       useRockets: false,
       padIndex: 1,
     });
+    for (const p of [this.player1, this.player2]) {
+      p.rockets = 2; p.lasers = 1;       // starting secondary ammo
+      p.rkRegenAt = 0; p.lzRegenAt = 0;
+      p.lastRk = -9999; p.lastLz = -9999;
+    }
     this.respawn1 = 0;
     this.respawn2 = 0;
     this.spawn(this.player1, 1);
     this.spawn(this.player2, 2);
+  }
+
+  // regenerate secondary ammo over time
+  regen(p) {
+    if (p.rockets < RK_MAX && this.time > p.rkRegenAt) { p.rockets++; p.rkRegenAt = this.time + RK_REGEN; }
+    if (p.lasers < LZ_MAX && this.time > p.lzRegenAt) { p.lasers++; p.lzRegenAt = this.time + LZ_REGEN; }
+  }
+
+  fireRocketVs(p, id, opponent, controls) {
+    const k = input.keys, pad = p.pad();
+    if (!(k.has(controls.rocket) || (pad && pad.fire2))) return;
+    if (p.rockets <= 0 || this.time - p.lastRk <= RK_CD) return;
+    p.lastRk = this.time; p.rockets--;
+    const angle = p.facingLeft ? 180 : 0;
+    const rk = new Rocket(p.facingLeft ? p.x - p.w / 2 : p.x + p.w / 2, p.y, this.app.images.rocket, opponent, angle);
+    rk.ownerId = id;
+    this.rockets.push(rk);
+    audio.play('rocket', 0.5);
+  }
+
+  fireLaserVs(p, id, opponent, controls) {
+    const k = input.keys, pad = p.pad();
+    if (!(k.has(controls.laser) || (pad && pad.fire3))) return;
+    if (p.lasers <= 0 || this.time - p.lastLz <= LZ_CD) return;
+    p.lastLz = this.time; p.lasers--;
+    const x0 = p.facingLeft ? p.x - p.w / 2 : p.x + p.w / 2;
+    const dir = p.facingLeft ? -1 : 1;
+    this.effects.push(new LaserBeam(x0, p.y, this.time, 'rgb(120,220,255)', dir));
+    audio.playSynth('plaser');
+    this.shake = Math.min(12, (this.shake || 0) + 3);
+    // instant hit if the opponent is on the beam's path and side
+    if (opponent.alive && Math.abs(opponent.y - p.y) < LZ_BAND && (dir > 0 ? opponent.x > x0 : opponent.x < x0)) {
+      this.kill(opponent, id);
+    }
   }
 
   players() {
@@ -111,14 +155,25 @@ export class VersusState extends BaseWorld {
     this.time += dt;
     this.updateBackdrop(dt);
 
+    this.shake = (this.shake || 0) * Math.pow(0.88, this.k);
     this.player1.update(this);
     this.player2.update(this);
     this.shootFor(this.player1, this.bullets1, P1_CONTROLS);
     this.shootFor(this.player2, this.bullets2, P2_CONTROLS);
+    if (this.player1.alive) { this.regen(this.player1); this.fireRocketVs(this.player1, 1, this.player2, P1_CONTROLS); this.fireLaserVs(this.player1, 1, this.player2, P1_CONTROLS); }
+    if (this.player2.alive) { this.regen(this.player2); this.fireRocketVs(this.player2, 2, this.player1, P2_CONTROLS); this.fireLaserVs(this.player2, 2, this.player1, P2_CONTROLS); }
 
     for (const b of this.bullets1) b.update(this);
     for (const b of this.bullets2) b.update(this);
+    for (const r of this.rockets) r.update(this);
     for (const fx of this.effects) fx.update(this);
+
+    // rockets vs the opponent
+    for (const r of this.rockets) {
+      if (r.dead) continue;
+      const foe = r.ownerId === 1 ? this.player2 : this.player1;
+      if (foe.alive && overlap(foe, r, 0.9)) { r.dead = true; this.kill(foe, r.ownerId); }
+    }
 
     // hits
     if (this.player1.alive) {
@@ -152,6 +207,7 @@ export class VersusState extends BaseWorld {
 
     this.bullets1 = this.bullets1.filter((b) => !b.dead);
     this.bullets2 = this.bullets2.filter((b) => !b.dead);
+    this.rockets = this.rockets.filter((r) => !r.dead);
     this.effects = this.effects.filter((fx) => !fx.dead);
 
     // winner check
@@ -175,13 +231,17 @@ export class VersusState extends BaseWorld {
 
     for (const b of this.bullets1) b.draw(g);
     for (const b of this.bullets2) b.draw(g);
+    for (const r of this.rockets) r.draw(g);
     for (const fx of this.effects) fx.draw(g, this);
     this.player1.draw(g, this);
     this.player2.draw(g, this);
 
-    drawText(g, `P1 Score: ${this.score1}`, 10, 24, 26, '#fff', 'left');
-    drawText(g, `P2 Score: ${this.score2}`, W - 10, 24, 26, '#fff', 'right');
+    drawText(g, `P1: ${this.score1}`, 10, 24, 26, '#fff', 'left');
+    drawText(g, `P2: ${this.score2}`, W - 10, 24, 26, '#fff', 'right');
     drawText(g, `First to ${SCORE_LIMIT}`, W / 2, 24, 18, 'rgb(160,160,160)');
+    // secondary-ammo readout per player
+    drawText(g, `🚀${this.player1.rockets} ⚡${this.player1.lasers}`, 10, 50, 16, 'rgb(120,220,255)', 'left');
+    drawText(g, `🚀${this.player2.rockets} ⚡${this.player2.lasers}`, W - 10, 50, 16, 'rgb(120,220,255)', 'right');
 
     this.drawPauseOverlay(g);
 

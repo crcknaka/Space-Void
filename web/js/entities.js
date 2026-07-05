@@ -201,22 +201,26 @@ export class BoostParticle {
 }
 
 export class Rocket {
-  constructor(x, y, img) {
+  constructor(x, y, img, forcedTarget = null, angle = 0) {
     this.img = img;
     this.w = 20; this.h = 10;
     this.x = x; this.y = y;
     this.speed = 8;
     this.rotSpeed = 2;   // degrees per 60Hz step
-    this.angle = 0;      // 0 = pointing right
+    this.angle = angle;  // 0 = pointing right
+    this.forcedTarget = forcedTarget; // versus: home on a specific ship
     this.lastEmit = 0;
     this.dead = false;
   }
   update(world) {
-    // steer toward nearest target (enemy / boss / asteroid)
-    let target = null, minD = Infinity;
-    for (const t of world.rocketTargets()) {
-      const d = Math.hypot(this.x - t.x, this.y - t.y);
-      if (d < minD) { minD = d; target = t; }
+    // steer toward a forced target (versus) or the nearest world target
+    let target = this.forcedTarget && this.forcedTarget.alive !== false ? this.forcedTarget : null;
+    if (!target) {
+      let minD = Infinity;
+      for (const t of world.rocketTargets ? world.rocketTargets() : []) {
+        const d = Math.hypot(this.x - t.x, this.y - t.y);
+        if (d < minD) { minD = d; target = t; }
+      }
     }
     if (target) {
       const targetAngle = (Math.atan2(target.y - this.y, target.x - this.x) * 180) / Math.PI;
@@ -1022,11 +1026,12 @@ export class PowerUp {
 /* ------------------------------ player laser beam ---------------------------- */
 // Visual for the instantaneous piercing beam (damage is resolved on fire).
 export class LaserBeam {
-  constructor(x0, y, time, color = 'rgb(120,220,255)') {
+  constructor(x0, y, time, color = 'rgb(120,220,255)', dir = 1) {
     this.x0 = x0; this.y = y;
     this.spawn = time;
     this.life = 520; // lingering beam so it reads clearly
     this.color = color;
+    this.dir = dir; // +1 sweeps right, -1 sweeps left
     this.dead = false;
   }
   update(world) {
@@ -1037,16 +1042,18 @@ export class LaserBeam {
     const a = 1 - t;
     const prev = g.globalCompositeOperation;
     g.globalCompositeOperation = 'lighter';
+    const bx = this.dir > 0 ? this.x0 : 0;
+    const bw = this.dir > 0 ? W - this.x0 : this.x0;
     g.globalAlpha = 0.75 * a;
     const grad = g.createLinearGradient(0, this.y - 12, 0, this.y + 12);
     grad.addColorStop(0, 'rgba(120,220,255,0)');
     grad.addColorStop(0.5, this.color);
     grad.addColorStop(1, 'rgba(120,220,255,0)');
     g.fillStyle = grad;
-    g.fillRect(this.x0, this.y - 12 * a, W - this.x0, 24 * a);
+    g.fillRect(bx, this.y - 12 * a, bw, 24 * a);
     g.globalAlpha = 0.95 * a;
     g.fillStyle = '#fff';
-    g.fillRect(this.x0, this.y - 2.5 * a, W - this.x0, 5 * a);
+    g.fillRect(bx, this.y - 2.5 * a, bw, 5 * a);
     g.globalAlpha = 1;
     g.globalCompositeOperation = prev;
   }

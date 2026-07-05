@@ -43,8 +43,40 @@ export function savedName() {
   try { return localStorage.getItem('spacevoid_name') || ''; } catch { return ''; }
 }
 
-function saveName(n) {
-  try { localStorage.setItem('spacevoid_name', n); } catch {}
+export function saveName(n) {
+  try { localStorage.setItem('spacevoid_name', String(n).toUpperCase().slice(0, 14)); } catch {}
+}
+
+// DOM overlay to set the persistent player name (used by SETTINGS)
+let nameEditor = null;
+export function askPlayerName() {
+  if (!nameEditor) {
+    nameEditor = document.createElement('div');
+    nameEditor.style.cssText = 'position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.65);z-index:10;font-family:Orbitron,sans-serif;';
+    nameEditor.innerHTML = `
+      <div style="background:#111;border:2px solid #0c6;border-radius:10px;padding:26px 30px;text-align:center;max-width:90vw">
+        <div style="color:#fff;font-size:19px;font-weight:700;margin-bottom:14px">YOUR NAME</div>
+        <input id="pname-input" maxlength="14" placeholder="PILOT" autocomplete="off" spellcheck="false"
+          style="width:220px;max-width:70vw;background:#000;color:#0f8;border:1px solid #333;border-radius:6px;padding:10px 12px;font:700 18px Orbitron,sans-serif;text-align:center;outline:none;text-transform:uppercase">
+        <div style="margin-top:16px;display:flex;gap:10px;justify-content:center">
+          <button id="pname-ok" style="background:#0c6;color:#000;border:0;border-radius:6px;padding:10px 22px;font:700 15px Orbitron,sans-serif;cursor:pointer">SAVE</button>
+          <button id="pname-cancel" style="background:#444;color:#fff;border:0;border-radius:6px;padding:10px 22px;font:700 15px Orbitron,sans-serif;cursor:pointer">CANCEL</button>
+        </div>
+      </div>`;
+    document.body.appendChild(nameEditor);
+  }
+  const inp = nameEditor.querySelector('#pname-input');
+  const ok = nameEditor.querySelector('#pname-ok');
+  const cancel = nameEditor.querySelector('#pname-cancel');
+  inp.value = savedName();
+  nameEditor.style.display = 'flex';
+  setTimeout(() => inp.focus(), 50);
+  return new Promise((resolve) => {
+    const done = (v) => { nameEditor.style.display = 'none'; ok.onclick = cancel.onclick = inp.onkeydown = null; resolve(v); };
+    ok.onclick = () => { const n = inp.value.trim().toUpperCase().slice(0, 14); if (n) { saveName(n); done(n); } else inp.focus(); };
+    cancel.onclick = () => done(null);
+    inp.onkeydown = (e) => { e.stopPropagation(); if (e.key === 'Enter') ok.onclick(); if (e.key === 'Escape') cancel.onclick(); };
+  });
 }
 
 let overlay = null;

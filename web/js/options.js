@@ -5,6 +5,7 @@ import * as audio from './audio.js';
 import { Button, ButtonGroup, drawText } from './ui.js';
 import { Star } from './entities.js';
 import { settings, saveSettings, ACHIEVEMENTS, isUnlocked, unlockedCount } from './settings.js';
+import { savedName, askPlayerName } from './lb.js';
 
 const VOLUME_STEPS = [0, 0.3, 0.6, 1];
 const pct = (v) => `${Math.round(v * 100)}%`;
@@ -30,13 +31,15 @@ export class OptionsState {
     for (let i = 0; i < 60; i++) {
       this.stars.push(new Star(randInt(0, W), randInt(0, H), rand(0.1, 0.4), randInt(1, 3), randInt(50, 200)));
     }
-    const y0 = 190;
-    this.btnMusic = new Button(`MUSIC: ${pct(settings.music)}`, W / 2, y0, 300, 56, 'rgb(0,220,130)', 'music');
-    this.btnSfx = new Button(`SOUND FX: ${pct(settings.sfx)}`, W / 2, y0 + 72, 300, 56, 'rgb(0,220,130)', 'sfx');
-    this.btnVibro = new Button(`VIBRATION: ${settings.vibro ? 'ON' : 'OFF'}`, W / 2, y0 + 144, 300, 56, 'rgb(0,220,130)', 'vibro');
-    this.btnFs = new Button('FULLSCREEN', W / 2, y0 + 216, 300, 56, 'rgb(255,140,0)', 'fullscreen');
+    const y0 = 158;
+    const dy = 66;
+    this.btnName = new Button(`NAME: ${savedName() || '—'}`, W / 2, y0, 300, 54, 'rgb(0,200,255)', 'name');
+    this.btnMusic = new Button(`MUSIC: ${pct(settings.music)}`, W / 2, y0 + dy, 300, 54, 'rgb(0,220,130)', 'music');
+    this.btnSfx = new Button(`SOUND FX: ${pct(settings.sfx)}`, W / 2, y0 + dy * 2, 300, 54, 'rgb(0,220,130)', 'sfx');
+    this.btnVibro = new Button(`VIBRATION: ${settings.vibro ? 'ON' : 'OFF'}`, W / 2, y0 + dy * 3, 300, 54, 'rgb(0,220,130)', 'vibro');
+    this.btnFs = new Button('FULLSCREEN', W / 2, y0 + dy * 4, 300, 54, 'rgb(255,140,0)', 'fullscreen');
     this.menu = new ButtonGroup([
-      this.btnMusic, this.btnSfx, this.btnVibro, this.btnFs,
+      this.btnName, this.btnMusic, this.btnSfx, this.btnVibro, this.btnFs,
       new Button('BACK', W / 2, H - 90, 200, 56, 'rgb(255,0,0)', 'back'),
     ]);
   }
@@ -56,7 +59,9 @@ export class OptionsState {
     for (const s of this.stars) s.update(k);
 
     const action = this.menu.update();
-    if (action === 'music') {
+    if (action === 'name') {
+      askPlayerName().then(() => { this.btnName.text = `NAME: ${savedName() || '—'}`; });
+    } else if (action === 'music') {
       this.cycleVolume('music');
       audio.applyMusicVolume();
       this.btnMusic.text = `MUSIC: ${pct(settings.music)}`;

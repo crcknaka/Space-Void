@@ -10,6 +10,7 @@ import { BaseWorld } from './world.js';
 import { GameState, PLAYER_COLORS, playerShip, spawnY } from './game.js';
 import { Player, Explosion, RocketTrailParticle, SmokeParticle, Spark, LaserBeam, ScorePopup } from './entities.js';
 import { tinted, glowBullet, glowEnemyBullet, glowEngine, drawGlow } from './fx.js';
+import { savedName } from './lb.js';
 
 const ETYPE = { basic: 0, weaver: 1, hunter: 2, tank: 3 };
 const ETINT = ['', 'rgba(0,230,190,0.35)', 'rgba(255,60,60,0.4)', 'rgba(190,110,255,0.42)'];
@@ -34,11 +35,20 @@ export class CoopHost {
     this.overMenu = null;
     this.slotOrder = [...this.hub.peers.keys()]; // slot -> player index (1..3)
     this.inputs = new Map();  // slot -> {x,y}
+    this.names = [savedName() || 'HOST']; // player index -> name
+    this.guestNames = new Map(); // slot -> name (received before/at start)
     this.sendAcc = 0;
     this.hub.onMessage = (slot, m) => this.onMessage(slot, m);
     this.hub.onGuestLeave = (slot) => this.onLeave(slot);
     this.initGame();
     this.broadcastGo();
+    this.rebuildNames();
+  }
+
+  rebuildNames() {
+    this.names = [savedName() || 'HOST'];
+    for (const slot of this.slotOrder) this.names[this.playerIndexOf(slot)] = this.guestNames.get(slot) || `P${this.playerIndexOf(slot) + 1}`;
+    this.hub.broadcast({ k: 'nm', names: this.names });
   }
 
   playerIndexOf(slot) { return this.slotOrder.indexOf(slot) + 1; } // host is 0
@@ -70,9 +80,11 @@ export class CoopHost {
     this.initGame();
     this.hub.broadcast({ k: 'restart' });
     this.broadcastGo();
+    this.rebuildNames();
   }
 
   onMessage(slot, m) {
+    if (m.k === 'hi') { this.guestNames.set(slot, String(m.name || '').slice(0, 14)); this.rebuildNames(); return; }
     const idx = this.playerIndexOf(slot);
     if (idx < 1) return;
     const p = this.g.playerList[idx];
@@ -192,6 +204,11 @@ export class CoopHost {
 
   draw(gg) {
     this.g.draw(gg);
+    // names above each living ship
+    for (const p of this.g.playerList) {
+      if (p.gone || !p.alive) continue;
+      const nm = this.names[p.slot]; if (nm) drawText(gg, nm, p.x, p.y - 26, 12, p.color);
+    }
     drawText(gg, `ONLINE · HOST · ${this.g.playerList.length}P`, W / 2, H - 16, 13, 'rgb(0,200,255)');
     drawPing(gg, this.hub.avgPing(), '~');
     if (this.overMenu && this.g.over) this.overMenu.draw(gg);
@@ -233,12 +250,14 @@ export class CoopGuest extends BaseWorld {
     }
     this.enemyTint = {};
 
+    this.names = [];
     this.net.onMessage = (m) => this.onMessage(m);
     this.net.onState = (s) => {
       if (s === 'closed') this.disconnected = true;
       else if (s === 'reconnecting') this.reconnecting = true;
       else if (s === 'open') this.reconnecting = false;
     };
+    this.net.send({ k: 'hi', name: savedName() || 'PILOT' });
   }
 
   resetRound() {
@@ -287,6 +306,7 @@ export class CoopGuest extends BaseWorld {
   onMessage(m) {
     if (m.k === 'restart') { this.resetRound(); }
     else if (m.k === 'go') { if (typeof m.n === 'number') this.total = m.n; if (typeof m.me === 'number') this.meIndex = m.me; }
+    else if (m.k === 'nm') { this.names = m.names || []; }
     else if (m.k === 'bye') this.disconnected = true;
     else if (m.k === 'ev') {
       // one-shot events arrive reliably — never lost even if snapshots drop
@@ -328,6 +348,9 @@ export class CoopGuest extends BaseWorld {
     this.time += dt;
     this.frame++;
     this.updateBackdrop(dt);
+
+    // re-announce our name shortly after connect (robust against any race)
+    if (!this._hiDone && this.time > 600) { this._hiDone = true; this.net.send({ k: 'hi', name: savedName() || 'PILOT' }); }
 
     if (input.pressed.has('Escape')) { this.leave(); return; }
     if (this.disconnected) { if (input.pressed.size || input.pointer.justDown) this.leave(); return; }
@@ -450,13 +473,22 @@ export class CoopGuest extends BaseWorld {
       for (const r of s.ro) { const rad = r[2] * Math.PI / 180, x = r[0] + 8 * Math.cos(rad) * ex, y = r[1] + 8 * Math.sin(rad) * ex; drawGlow(g, glowEngine, x, y, 0.8); g.save(); g.translate(x, y); g.rotate(rad); g.drawImage(images.rocket, -10, -5, 20, 10); g.restore(); }
       for (const fx of this.effects) fx.draw(g, this);
 
-      // players: others from snapshot, self predicted (+ shield bubbles)
+      // players: others from snapshot, self predicted (+ shield bubbles + names)
       const thrOf = (i) => images.thrusters[i === 1 ? 'player2' : 'player1'];
+      const nameOf = (i) => this.names[i] || '';
       s.ps.forEach((p, i) => {
         if (i === this.meIndex) return;
-        if (p[2]) { this.drawShip(g, this.shipImg[i], thrOf(i), p[0], p[1], p[5]); if (p[7]) this.drawShieldRing(g, p[0], p[1]); }
+        if (p[2]) {
+          this.drawShip(g, this.shipImg[i], thrOf(i), p[0], p[1], p[5]);
+          if (p[7]) this.drawShieldRing(g, p[0], p[1]);
+          if (nameOf(i)) drawText(g, nameOf(i), p[0], p[1] - 26, 12, PLAYER_COLORS[i % 4]);
+        }
       });
-      if (this.meAlive) { this.drawShip(g, this.shipImg[this.meIndex], this.me.thrusters, this.me.x, this.me.y, this.meInv); if (this.meShield) this.drawShieldRing(g, this.me.x, this.me.y); }
+      if (this.meAlive) {
+        this.drawShip(g, this.shipImg[this.meIndex], this.me.thrusters, this.me.x, this.me.y, this.meInv);
+        if (this.meShield) this.drawShieldRing(g, this.me.x, this.me.y);
+        if (nameOf(this.meIndex)) drawText(g, nameOf(this.meIndex), this.me.x, this.me.y - 26, 12, this.myColor);
+      }
 
       if (s.slow) { g.fillStyle = 'rgba(80,150,255,0.08)'; g.fillRect(0, 0, W, H); }
 

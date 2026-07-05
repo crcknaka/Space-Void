@@ -2,15 +2,18 @@
 // Authority model: each client fully owns its own ship and its own death.
 // You render remote bullets from spawn events and check them against YOURSELF;
 // when you're hit you die locally and tell the opponent (who scored).
-import { W, H, STEP, clamp, rand } from './const.js';
+import { W, H, STEP, clamp, overlap, rand } from './const.js';
 import * as input from './input.js';
 import * as audio from './audio.js';
 import { Button, ButtonGroup, drawText } from './ui.js';
 import { BaseWorld } from './world.js';
-import { Player, Bullet, Explosion, BoostParticle } from './entities.js';
+import { Player, Bullet, Explosion, BoostParticle, Rocket, LaserBeam } from './entities.js';
+import { savedName } from './lb.js';
 
 const SCORE_LIMIT = 10;
 const SEND_MS = 33; // ~30Hz ship state
+const RK_MAX = 3, RK_REGEN = 3500, RK_CD = 700;
+const LZ_MAX = 2, LZ_REGEN = 6000, LZ_CD = 1000, LZ_BAND = 22;
 
 export class VersusOnline extends BaseWorld {
   constructor(app, net) {
@@ -55,6 +58,12 @@ export class VersusOnline extends BaseWorld {
 
     this.localBullets = [];   // mine — remote checks these
     this.remoteBullets = [];  // opponent's — I check these vs myself
+    this.localRockets = [];   // mine — cosmetic, home toward the opponent
+    this.remoteRockets = [];  // incoming — home toward me, checked vs me
+    this.resetAmmo();
+
+    this.myName = savedName() || 'PILOT';
+    this.oppName = 'OPPONENT';
 
     // start countdown; host kicks it off so both start together
     this.phase = this.net.isHost ? 'countdown' : 'wait';
@@ -65,7 +74,25 @@ export class VersusOnline extends BaseWorld {
       else if (s === 'reconnecting') this.reconnecting = true;
       else if (s === 'open') this.reconnecting = false;
     };
+    this.net.send({ k: 'hi', name: this.myName });
     if (this.net.isHost) this.net.send({ k: 'go' });
+  }
+
+  resetAmmo() {
+    const p = this.local;
+    p.rockets = 2; p.lasers = 1;
+    p.rkRegenAt = 0; p.lzRegenAt = 0;
+    p.lastRk = -9999; p.lastLz = -9999;
+  }
+
+  localDie() {
+    this.local.alive = false;
+    this.localRespawn = this.time + 1000;
+    this.effects.push(new Explosion(this.local.x, this.local.y, this.app.images.explosion_spritesheet, this.time));
+    audio.play('explosion', 0.5);
+    if (this.localId === 1) this.score2 += 1; else this.score1 += 1;
+    this.checkWinner();
+    this.net.send({ k: 'd', s1: this.score1, s2: this.score2 });
   }
 
   resetMatch() {
@@ -73,6 +100,8 @@ export class VersusOnline extends BaseWorld {
     this.winner = null; this.endMenu = null;
     this.rematchMe = false; this.rematchThem = false;
     this.localBullets = []; this.remoteBullets = [];
+    this.localRockets = []; this.remoteRockets = [];
+    this.resetAmmo();
     this.spawnLocal();
     this.remote.alive = true;
     this.phase = 'countdown';
@@ -90,14 +119,18 @@ export class VersusOnline extends BaseWorld {
   }
 
   leaveBtn() { return { x: 34, y: 70, r: 22 }; } // below the score HUD
+  rocketBtn() { return { x: W - 70, y: H - 80, r: 44 }; }
+  laserBtn() { return { x: W - 70, y: H - 185, r: 38 }; }
 
-  // touch: drag to move (auto-fire while alive); tap the top-left X to leave
+  // touch: drag to move (auto-fire while alive); buttons for rocket/laser/leave
   handleTouch() {
     if (!input.isTouch) return;
-    const lb = this.leaveBtn();
+    const lb = this.leaveBtn(), rb = this.rocketBtn(), zb = this.laserBtn();
     for (const [id, pt] of input.pointers) {
       if (!pt.justDown) continue;
       if (Math.hypot(pt.x - lb.x, pt.y - lb.y) <= lb.r) { this.leave(); return; }
+      if (Math.hypot(pt.x - rb.x, pt.y - rb.y) <= rb.r) { this.fireRocketTouch(); continue; }
+      if (Math.hypot(pt.x - zb.x, pt.y - zb.y) <= zb.r) { this.fireLaserTouch(); continue; }
       if (!this.drag && this.local.alive) this.drag = { id, px: pt.x, py: pt.y, ox: this.local.x, oy: this.local.y };
     }
     if (this.drag) {
@@ -111,11 +144,25 @@ export class VersusOnline extends BaseWorld {
 
   onMessage(m) {
     if (m.k === 'go' && this.phase === 'wait') { this.phase = 'countdown'; this.countdown = 3000; }
+    else if (m.k === 'hi') { this.oppName = String(m.name || 'OPPONENT').slice(0, 14); }
     else if (m.k === 's') { this.remote.tx = m.x; this.remote.ty = m.y; this.remote.alive = !!m.a; }
     else if (m.k === 'f') {
       // Bullet auto-flips its sprite from the sign of vx, so left-moving
       // opponent shots render correctly with no extra handling.
       this.remoteBullets.push(new Bullet(m.x, m.y, this.app.images.bullet, m.vx));
+    }
+    else if (m.k === 'rf') {
+      // incoming rocket homes toward MY ship; I check it against myself
+      const angle = this.remoteId === 1 ? 0 : 180;
+      this.remoteRockets.push(new Rocket(m.x, m.y, this.app.images.rocket, this.local, angle));
+    }
+    else if (m.k === 'lf') {
+      // incoming laser: show the beam, and if I'm on its path I die
+      this.effects.push(new LaserBeam(m.x0, m.y, this.time, 'rgb(255,120,120)', m.dir));
+      if (this.local.alive && this.time > (this.local.invulnUntil || 0) &&
+          Math.abs(this.local.y - m.y) < LZ_BAND && (m.dir > 0 ? this.local.x > m.x0 : this.local.x < m.x0)) {
+        this.localDie();
+      }
     }
     // The victim is authoritative for the score after its own death and sends
     // the resulting totals; the receiver ADOPTS them (never increments) so a
@@ -158,18 +205,55 @@ export class VersusOnline extends BaseWorld {
       const bx = p.facingLeft ? p.x + p.w / 2 + 8 : p.x - p.w / 2 - 8;
       this.effects.push(new BoostParticle(bx, p.y, this.time));
     }
+    const vx = p.facingLeft ? -10 : 10;
+    const edgeX = p.facingLeft ? p.x - p.w / 2 : p.x + p.w / 2;
     // shoot — auto-fire on touch (no room for a fire button while dragging)
     const firing = input.isTouch || k.has('Space') || k.has('Enter') || k.has('NumpadEnter') || (pad && pad.fire);
     if (firing && this.time - p.lastShot > p.shootDelay) {
-      const vx = p.facingLeft ? -10 : 10;
-      const edgeX = p.facingLeft ? p.x - p.w / 2 : p.x + p.w / 2;
       this.localBullets.push(new Bullet(edgeX, p.y, this.app.images.bullet, vx));
       this.net.send({ k: 'f', x: edgeX, y: p.y, vx });
       p.lastShot = this.time;
       audio.play('gun', 0.22);
     }
+    // rocket (E / Slash / pad X)
+    if ((k.has('KeyE') || k.has('Slash') || (pad && pad.fire2)) && p.rockets > 0 && this.time - p.lastRk > RK_CD) {
+      p.lastRk = this.time; p.rockets--;
+      const rk = new Rocket(edgeX, p.y, this.app.images.rocket, this.remote, p.facingLeft ? 180 : 0);
+      this.localRockets.push(rk);
+      this.net.send({ k: 'rf', x: Math.round(edgeX), y: Math.round(p.y) });
+      audio.play('rocket', 0.5);
+    }
+    // laser (Q / Period / pad Y)
+    if ((k.has('KeyQ') || k.has('Period') || (pad && pad.fire3)) && p.lasers > 0 && this.time - p.lastLz > LZ_CD) {
+      p.lastLz = this.time; p.lasers--;
+      const dir = p.facingLeft ? -1 : 1;
+      this.effects.push(new LaserBeam(edgeX, p.y, this.time, 'rgb(120,220,255)', dir));
+      audio.playSynth('plaser');
+      this.net.send({ k: 'lf', x0: Math.round(edgeX), y: Math.round(p.y), dir });
+    }
     // thruster anim
     if (this.time - p.thrLast > 50) { p.thrLast = this.time; p.thrFrame = (p.thrFrame + 1) % p.thrusters.length; }
+  }
+
+  fireLaserTouch() {
+    const p = this.local;
+    if (!p.alive || p.lasers <= 0 || this.time - p.lastLz <= LZ_CD) return;
+    p.lastLz = this.time; p.lasers--;
+    const edgeX = p.facingLeft ? p.x - p.w / 2 : p.x + p.w / 2;
+    const dir = p.facingLeft ? -1 : 1;
+    this.effects.push(new LaserBeam(edgeX, p.y, this.time, 'rgb(120,220,255)', dir));
+    audio.playSynth('plaser');
+    this.net.send({ k: 'lf', x0: Math.round(edgeX), y: Math.round(p.y), dir });
+  }
+
+  fireRocketTouch() {
+    const p = this.local;
+    if (!p.alive || p.rockets <= 0 || this.time - p.lastRk <= RK_CD) return;
+    p.lastRk = this.time; p.rockets--;
+    const edgeX = p.facingLeft ? p.x - p.w / 2 : p.x + p.w / 2;
+    this.localRockets.push(new Rocket(edgeX, p.y, this.app.images.rocket, this.remote, p.facingLeft ? 180 : 0));
+    this.net.send({ k: 'rf', x: Math.round(edgeX), y: Math.round(p.y) });
+    audio.play('rocket', 0.5);
   }
 
   update(dt) {
@@ -177,18 +261,23 @@ export class VersusOnline extends BaseWorld {
     this.time += dt;
     this.updateBackdrop(dt);
 
+    // re-announce our name shortly after connect to beat the handshake race
+    // (whoever entered first may have sent 'hi' before the peer wired onMessage)
+    if (!this._hiDone && this.time > 600) { this._hiDone = true; this.net.send({ k: 'hi', name: this.myName }); }
+
     if (this.disconnected) {
       if (input.pressed.size || input.pointer.justDown) { this.leave(); return; }
       return;
     }
 
     if (this.winner) {
-      // settle bullets/effects, offer rematch or leave
+      // settle projectiles/effects, offer rematch or leave
       for (const b of this.localBullets) b.update(this);
       for (const b of this.remoteBullets) b.update(this);
       for (const fx of this.effects) fx.update(this);
       this.localBullets = this.localBullets.filter((b) => !b.dead);
       this.remoteBullets = this.remoteBullets.filter((b) => !b.dead);
+      this.localRockets = []; this.remoteRockets = [];
       this.effects = this.effects.filter((fx) => !fx.dead);
       if (!this.endMenu) {
         this.endMenu = new ButtonGroup([
@@ -225,28 +314,30 @@ export class VersusOnline extends BaseWorld {
         this.localRespawn = 0;
       }
 
-      // bullets
+      // regen secondary ammo
+      if (this.local.alive) {
+        const p = this.local;
+        if (p.rockets < RK_MAX && this.time > p.rkRegenAt) { p.rockets++; p.rkRegenAt = this.time + RK_REGEN; }
+        if (p.lasers < LZ_MAX && this.time > p.lzRegenAt) { p.lasers++; p.lzRegenAt = this.time + LZ_REGEN; }
+      }
+
+      // projectiles
       for (const b of this.localBullets) b.update(this);
       for (const b of this.remoteBullets) b.update(this);
+      for (const r of this.localRockets) r.update(this);
+      for (const r of this.remoteRockets) r.update(this);
 
-      // remote bullets vs local ship — I own my death
+      // remote bullets & rockets vs local ship — I own my death
       if (this.local.alive && this.time > (this.local.invulnUntil || 0)) {
         for (const b of this.remoteBullets) {
           if (b.dead) continue;
           if (Math.abs(b.x - this.local.x) < (b.w + this.local.w * 0.8) / 2 &&
               Math.abs(b.y - this.local.y) < (b.h + this.local.h * 0.8) / 2) {
-            b.dead = true;
-            this.local.alive = false;
-            this.localRespawn = this.time + 1000;
-            this.effects.push(new Explosion(this.local.x, this.local.y, this.app.images.explosion_spritesheet, this.time));
-            audio.play('explosion', 0.5);
-            // I died: increment the opponent locally, then broadcast the
-            // authoritative totals for the other side to adopt.
-            if (this.localId === 1) this.score2 += 1; else this.score1 += 1;
-            this.checkWinner();
-            this.net.send({ k: 'd', s1: this.score1, s2: this.score2 });
-            break;
+            b.dead = true; this.localDie(); break;
           }
+        }
+        for (const r of this.remoteRockets) {
+          if (!r.dead && overlap(this.local, r, 0.9)) { r.dead = true; this.localDie(); break; }
         }
       }
 
@@ -261,6 +352,8 @@ export class VersusOnline extends BaseWorld {
     for (const fx of this.effects) fx.update(this);
     this.localBullets = this.localBullets.filter((b) => !b.dead);
     this.remoteBullets = this.remoteBullets.filter((b) => !b.dead);
+    this.localRockets = this.localRockets.filter((r) => !r.dead);
+    this.remoteRockets = this.remoteRockets.filter((r) => !r.dead);
     this.effects = this.effects.filter((fx) => !fx.dead);
   }
 
@@ -275,19 +368,25 @@ export class VersusOnline extends BaseWorld {
 
     for (const b of this.localBullets) b.draw(g);
     for (const b of this.remoteBullets) b.draw(g);
+    for (const r of this.localRockets) r.draw(g);
+    for (const r of this.remoteRockets) r.draw(g);
     for (const fx of this.effects) fx.draw(g, this);
     if (this.remote.alive) this.remote.draw(g, this);
     this.local.draw(g, this);
 
-    // HUD — P1 left, P2 right regardless of who you are; your side marked YOU
+    // HUD — P1 left, P2 right; names shown, your side marked
     const p1c = this.localId === 1 ? 'rgb(0,255,140)' : '#fff';
     const p2c = this.localId === 2 ? 'rgb(0,255,140)' : '#fff';
-    drawText(g, `P1: ${this.score1}${this.localId === 1 ? ' (you)' : ''}`, 10, 24, 24, p1c, 'left');
-    drawText(g, `P2: ${this.score2}${this.localId === 2 ? ' (you)' : ''}`, W - 10, 24, 24, p2c, 'right');
+    const name1 = this.localId === 1 ? this.myName : this.oppName;
+    const name2 = this.localId === 2 ? this.myName : this.oppName;
+    drawText(g, `${name1}: ${this.score1}`, 10, 24, 22, p1c, 'left');
+    drawText(g, `${name2}: ${this.score2}`, W - 10, 24, 22, p2c, 'right');
     drawText(g, `First to ${SCORE_LIMIT}`, W / 2, 24, 16, 'rgb(160,160,160)');
+    // my secondary ammo
+    drawText(g, `🚀${this.local.rockets} ⚡${this.local.lasers}`, W / 2, 50, 16, 'rgb(120,220,255)');
     this.drawPing(g);
 
-    // touch: leave button
+    // touch controls: leave + rocket + laser
     if (input.isTouch && !this.winner && !this.disconnected) {
       const lb = this.leaveBtn();
       g.globalAlpha = 0.3; g.fillStyle = '#fff';
@@ -295,6 +394,16 @@ export class VersusOnline extends BaseWorld {
       g.globalAlpha = 0.85; g.strokeStyle = '#000'; g.lineWidth = 3;
       g.beginPath(); g.moveTo(lb.x - 6, lb.y - 6); g.lineTo(lb.x + 6, lb.y + 6);
       g.moveTo(lb.x + 6, lb.y - 6); g.lineTo(lb.x - 6, lb.y + 6); g.stroke();
+      g.globalAlpha = 1;
+      // rocket button (bottom-right) + laser button (above it)
+      const rb = this.rocketBtn(), zb = this.laserBtn();
+      g.globalAlpha = this.local.rockets > 0 ? 0.4 : 0.2; g.fillStyle = '#fff';
+      g.beginPath(); g.arc(rb.x, rb.y, rb.r, 0, Math.PI * 2); g.fill();
+      g.globalAlpha = 0.9; g.drawImage(this.app.images.rocket, rb.x - 20, rb.y - 18, 40, 20);
+      drawText(g, `${this.local.rockets}`, rb.x, rb.y + 16, 20, '#000');
+      g.globalAlpha = this.local.lasers > 0 ? 0.4 : 0.2; g.fillStyle = 'rgb(120,220,255)';
+      g.beginPath(); g.arc(zb.x, zb.y, zb.r, 0, Math.PI * 2); g.fill();
+      g.globalAlpha = 0.95; drawText(g, '⚡', zb.x, zb.y - 4, 26, '#000'); drawText(g, `${this.local.lasers}`, zb.x, zb.y + 18, 20, '#000');
       g.globalAlpha = 1;
     }
 
