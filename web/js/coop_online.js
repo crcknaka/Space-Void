@@ -105,7 +105,7 @@ export class CoopHost {
       if (a === 'again') { this.playAgain(); return; }
       if (a === 'leave') { this.leave(); return; }
       this.sendAcc += dt;
-      if (this.sendAcc >= SEND_MS) { this.sendAcc = 0; this.hub.broadcast(this.snapshot()); this._fx.length = 0; this._sd.length = 0; }
+      if (this.sendAcc >= SEND_MS) { this.sendAcc = 0; this.flushNet(); }
       return;
     }
 
@@ -138,7 +138,17 @@ export class CoopHost {
     this.sendAcc += dt;
     if (this.sendAcc >= SEND_MS) {
       this.sendAcc = 0;
-      this.hub.broadcast(this.snapshot());
+      this.flushNet();
+    }
+  }
+
+  // Snapshot goes UNRELIABLE (a drop is healed by the next one), but one-shot
+  // events (explosions, sounds) must never be lost — they ride a separate
+  // RELIABLE 'ev' message, sent only when there is something to say.
+  flushNet() {
+    this.hub.broadcast(this.snapshot());
+    if (this._fx.length || this._sd.length) {
+      this.hub.broadcast({ k: 'ev', fx: this._fx.slice(), sd: this._sd.slice() });
       this._fx.length = 0;
       this._sd.length = 0;
     }
@@ -169,8 +179,6 @@ export class CoopHost {
       as: g.asteroids.map((a) => [Math.round(a.x), Math.round(a.y), Math.round(a.w / 2), Math.round(a.angle),
         Math.round(-a.vx * m), Math.round(a.vy * m)]),
       pu: g.powerups.map((p) => [Math.round(p.x), Math.round(p.y), PU_TYPES.indexOf(p.type)]),
-      fx: this._fx.slice(),
-      sd: this._sd.slice(),
     };
   }
 
@@ -258,6 +266,14 @@ export class CoopGuest extends BaseWorld {
     if (m.k === 'restart') { this.resetRound(); }
     else if (m.k === 'go') { if (typeof m.n === 'number') this.total = m.n; if (typeof m.me === 'number') this.meIndex = m.me; }
     else if (m.k === 'bye') this.disconnected = true;
+    else if (m.k === 'ev') {
+      // one-shot events arrive reliably — never lost even if snapshots drop
+      for (const f of m.fx || []) { this.effects.push(new Explosion(f[0], f[1], this.app.images.explosion_spritesheet, this.time, f[2])); audio.play('explosion', 0.4); }
+      for (const s of m.sd || []) {
+        if (s === 'siren') audio.playSynth('siren');
+        else audio.play(s, s === 'gun' ? 0.2 : s === 'rocket' ? 0.5 : 0.6);
+      }
+    }
     else if (m.k === 'w') {
       this.snap = m;
       this.snapAt = this.time;
@@ -265,11 +281,6 @@ export class CoopGuest extends BaseWorld {
       if (mine) {
         this.meAlive = mine[2] === 1; this.meLives = mine[3]; this.meRockets = mine[4]; this.meInv = mine[5];
         if (!this.meAlive) { this.me.x = mine[0]; this.me.y = mine[1]; }
-      }
-      for (const f of m.fx) { this.effects.push(new Explosion(f[0], f[1], this.app.images.explosion_spritesheet, this.time, f[2])); audio.play('explosion', 0.4); }
-      if (m.sd) for (const s of m.sd) {
-        if (s === 'siren') audio.playSynth('siren');
-        else audio.play(s, s === 'gun' ? 0.2 : s === 'rocket' ? 0.5 : 0.6);
       }
       if (m.ban && m.ban !== this.lastBan) { audio.playSynth('fanfare'); this.lastBan = m.ban; }
       if (m.warn && !this.lastWarn) audio.playSynth('warning');

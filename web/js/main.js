@@ -160,6 +160,10 @@ async function boot() {
     pre.style.display = 'none';
     pre.textContent = (window.__svlog || []).join('\n');
     document.body.appendChild(pre);
+    // live error capture: runtime errors after the ff loop land in the pre too
+    const pushErr = (msg) => { pre.textContent += `\nERR: ${msg}`; };
+    addEventListener('error', (e) => pushErr(`${e.message} @${(e.filename || '').split('/').pop()}:${e.lineno}`));
+    addEventListener('unhandledrejection', (e) => pushErr(`rejection: ${e.reason?.message || e.reason}`));
   }
 
   let last = performance.now();
