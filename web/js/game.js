@@ -6,6 +6,7 @@ import { Button, ButtonGroup, drawText } from './ui.js';
 import { BaseWorld } from './world.js';
 import {
   Player, Enemy, Boss, Asteroid, PowerUp, Explosion, Spark, Shockwave,
+  LaserBeam, ScorePopup,
   POWERUP_TYPES, POWERUP_IMG,
 } from './entities.js';
 import { makeNebulaField, tinted } from './fx.js';
@@ -15,11 +16,12 @@ import { dailySeed, todayMod, useDailyAttempt, dailyAttemptsLeft } from './daily
 
 const P1_CONTROLS = {
   up: 'KeyW', down: 'KeyS', left: 'KeyA', right: 'KeyD',
-  rocket: 'Space', speed: 'ShiftLeft',
+  rocket: 'Space', speed: 'ShiftLeft', laser: 'KeyE', laserAlt: 'KeyQ',
 };
 const P2_CONTROLS = {
   up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight',
   rocket: 'Enter', rocketAlt: 'NumpadEnter', speed: 'Numpad0', speedAlt: 'ShiftRight',
+  laser: 'Numpad1', laserAlt: 'Slash',
 };
 
 // Distinct per-player identity: HUD colour + ship tint (null = keep art as-is)
@@ -81,8 +83,9 @@ export class GameState extends BaseWorld {
     this.bossReadyAt = 30000; // min wave time before the first boss
     this.runPowerups = 0;
     this.toasts = this.toasts || [];
-    // cyan-tinted shield powerup sprite
+    // tinted powerup sprites (shield = cyan, laser = electric blue)
     this.shieldImg = tinted(images.powerup, 'rgba(0,210,255,0.55)', 'powerup_shield');
+    this.laserImg = tinted(images.powerup, 'rgba(90,140,255,0.6)', 'powerup_laser');
 
     this.enemyInterval = 2000;
     this.asteroidInterval = 5000;
@@ -153,6 +156,10 @@ export class GameState extends BaseWorld {
     return { x: W - 70, y: H - 80, r: 44 }; // live: follows resizes
   }
 
+  laserBtn() {
+    return { x: W - 70, y: H - 185, r: 38 }; // above the rocket button
+  }
+
   pauseBtn() {
     return { x: W - 34, y: 72, r: 24 }; // touch pause, under the Level text
   }
@@ -197,8 +204,66 @@ export class GameState extends BaseWorld {
     for (let i = 0; i < count; i++) this.effects.push(new Spark(x, y, this.time, dir));
   }
 
+  popup(x, y, text, color) {
+    this.effects.push(new ScorePopup(x, y, text, this.time, color));
+    if (this.online) (this._spQ = this._spQ || []).push([Math.round(x), Math.round(y), text]);
+  }
+
+  // Piercing laser: instant hitscan along y from the ship's nose to the right
+  // edge. Damages EVERY enemy on the line, burns enemy bullets, blows wrecks,
+  // splits asteroids. Charges are finite (Player.lasers).
+  laserBlast(p) {
+    const x0 = p.x + p.w / 2;
+    const y = p.y;
+    const HALF = 14; // beam half-height for hit tests
+    this.effects.push(new LaserBeam(x0, y, this.time));
+    if (this.online) (this._lzQ = this._lzQ || []).push([Math.round(x0), Math.round(y)]);
+    audio.playSynth('plaser');
+    vibrate(40);
+    this.shake = Math.min(12, this.shake + 3);
+
+    // enemy bullets on the line burn up
+    for (const b of this.enemyBullets) {
+      if (!b.dead && b.x > x0 && Math.abs(b.y - y) < HALF + 4) { b.dead = true; this.spawnSparks(b.x, b.y, 3); }
+    }
+    // enemies (incl. boss) — pierces through all of them
+    for (const e of this.enemies) {
+      if (e.dead || e.x + e.w / 2 < x0 || Math.abs(e.y - y) > HALF + e.h * 0.4) continue;
+      this.spawnSparks(Math.max(x0, e.x - e.w / 2), e.y, 10);
+      if (e.dying) {
+        e.dead = true;
+        this.explode(e.x, e.y, true, 1.1);
+        continue;
+      }
+      if (e.isBoss && e.shieldUntil > this.time) continue; // shield eats it
+      if (e.takeDamage(2)) {
+        this.addKill(e.points, e.x, e.y);
+        this.pushToasts(bumpStats({ kills: 1 }));
+        if (e.isBoss) {
+          e.dead = true;
+          this.explode(e.x, e.y, true, 2.5);
+          this.levelUp(e.x, e.y);
+        } else {
+          e.dead = true;
+          this.explode(e.x, e.y, true, e.type === 'tank' ? 1.5 : 1);
+          if (e.type === 'tank' && rand(0, 1) < 0.4) this.dropPowerup(e.x, e.y);
+        }
+      }
+    }
+    // asteroids split like a bullet hit
+    for (const a of this.asteroids) {
+      if (a.dead || a.x + a.w / 2 < x0 || Math.abs(a.y - y) > HALF + a.h * 0.35) continue;
+      a.dead = true;
+      this.explode(a.x, a.y);
+      this.addKill(5, a.x, a.y);
+      this.asteroids.push(...a.breakApart());
+    }
+  }
+
   powerupImage(type) {
-    return type === 'shield' ? this.shieldImg : this.app.images[POWERUP_IMG[type]];
+    if (type === 'shield') return this.shieldImg;
+    if (type === 'laser') return this.laserImg;
+    return this.app.images[POWERUP_IMG[type]];
   }
 
   dropPowerup(x, y) {
@@ -232,13 +297,14 @@ export class GameState extends BaseWorld {
     }
     this.explode(p.x, p.y, true, 1.6);
     vibrate(140);
+    this.dmgFlash = 1; // red screen-edge pulse
     p.alive = false;
     p.lives -= 1;
     if (p.lives > 0) p.respawnAt = this.time + 1500;
   }
 
   // combo: consecutive kills raise the score multiplier (up to x5); resets on hit or 4s idle
-  addKill(points) {
+  addKill(points, x, y) {
     this.combo += 1;
     this.comboEnd = this.time + 4000;
     const tier = Math.min(5, 1 + Math.floor(this.combo / 5));
@@ -248,7 +314,9 @@ export class GameState extends BaseWorld {
       audio.playSynth('combo');
       this.pushToasts(bumpStats({ maxMult: tier }));
     }
-    this.score += points * this.mult * (this.mod?.scoreMul || 1);
+    const gained = points * this.mult * (this.mod?.scoreMul || 1);
+    this.score += gained;
+    if (x !== undefined) this.popup(x, y, `+${gained}`, this.mult > 1 ? 'rgb(255,215,90)' : 'rgb(220,220,220)');
   }
 
   resetCombo() {
@@ -265,15 +333,16 @@ export class GameState extends BaseWorld {
     this.bossReadyAt = this.time + Math.min(70000, 45000 + (this.level - 1) * 5000);
     this.enemyInterval = Math.max(500, this.enemyInterval - 200);
     this.asteroidInterval = Math.max(2000, this.asteroidInterval - 500);
-    for (const p of this.players()) p.rockets += 3;
+    for (const p of this.players()) { p.rockets += 3; p.lasers += 1; }
     // breather: no new spawns for a few seconds
     this.spawnHoldUntil = this.time + 4000;
     // fresh nebula palette + planet zoom step for the new level
     this.nebulaHue = (170 + (this.level - 1) * 47) % 360;
     this.nebulae = makeNebulaField(3, this.nebulaHue);
     this.bgZoomTarget = 1 + ((this.level - 1) % 4) * 0.05;
-    // celebration: shockwave from the boss + LEVEL N banner + fanfare
+    // celebration: shockwave + hit-stop (a juicy ~90ms world freeze) + banner
     this.effects.push(new Shockwave(x ?? W / 2, y ?? H / 2, this.time));
+    this.freezeLeft = 90;
     this.levelBanner = { level: this.level, start: this.time };
     this.logEvent('LEVELUP (boss killed)');
     audio.playSynth('fanfare');
@@ -288,6 +357,12 @@ export class GameState extends BaseWorld {
 
     if (this.over) {
       this.updateGameOver();
+      return;
+    }
+
+    // hit-stop: brief dramatic world freeze (boss kill); HUD/banners keep drawing
+    if (this.freezeLeft > 0) {
+      this.freezeLeft -= dt;
       return;
     }
 
@@ -356,6 +431,7 @@ export class GameState extends BaseWorld {
     this.shake *= Math.pow(0.88, this.k);
     if (this.combo > 0 && this.time > this.comboEnd) this.resetCombo();
     if (this.levelBanner && this.time - this.levelBanner.start >= 2200) this.levelBanner = null;
+    if (this.dmgFlash > 0) this.dmgFlash = Math.max(0, this.dmgFlash - 0.03 * this.k);
 
     // --- updates ---
     for (const p of this.players()) p.update(this);
@@ -400,13 +476,16 @@ export class GameState extends BaseWorld {
     const p = this.player1;
     if (!p.alive) return;
     const btn = this.rocketBtn();
+    const lbtn = this.laserBtn();
     const pbtn = this.pauseBtn();
-    // multi-touch: any new finger on the rocket button fires; the pause button
-    // pauses; the first other finger owns the movement drag
+    // multi-touch: any new finger on the rocket/laser buttons fires; the pause
+    // button pauses; the first other finger owns the movement drag
     for (const [id, pt] of input.pointers) {
       if (!pt.justDown) continue;
       if (Math.hypot(pt.x - btn.x, pt.y - btn.y) <= btn.r) {
         p.fireRocket(this);
+      } else if (Math.hypot(pt.x - lbtn.x, pt.y - lbtn.y) <= lbtn.r) {
+        p.fireLaser(this);
       } else if (Math.hypot(pt.x - pbtn.x, pt.y - pbtn.y) <= pbtn.r) {
         // top-right button: leave in online, pause otherwise
         if (this.online) this.requestLeave = true;
@@ -437,6 +516,28 @@ export class GameState extends BaseWorld {
   }
 
   handleCollisions() {
+    // bullets & rockets vs FALLING WRECKS: shootable! sparks + knockback kick,
+    // second bullet (or any rocket) blows them up for bonus points
+    for (const w of this.enemies) {
+      if (w.dead || !w.dying) continue;
+      for (const [group, dmg, isRocket] of [[this.bullets, 1, false], [this.rockets, 2, true]]) {
+        for (const b of group) {
+          if (b.dead || !overlap(w, b, 0.85)) continue;
+          b.dead = true;
+          this.spawnSparks(b.x, b.y, isRocket ? 14 : 7, Math.PI + rand(-0.5, 0.5));
+          if (w.wreckHit(dmg, isRocket ? 2.2 : 1.1)) {
+            w.dead = true;
+            this.explode(w.x, w.y, true, 1.15);
+            this.addKill(isRocket ? 5 : 2, w.x, w.y);
+          } else {
+            audio.play('explosion', 0.12);
+          }
+          break;
+        }
+        if (w.dead) break;
+      }
+    }
+
     // player bullets & rockets vs enemies/boss — with juicy hit feedback
     for (const enemy of this.enemies) {
       if (enemy.dead || enemy.dying) continue;
@@ -453,7 +554,7 @@ export class GameState extends BaseWorld {
             audio.play('explosion', isRocket ? 0.3 : 0.12);
             continue;
           }
-          this.addKill(enemy.points + (isRocket ? 10 : 0));
+          this.addKill(enemy.points + (isRocket ? 10 : 0), enemy.x, enemy.y);
           this.pushToasts(bumpStats({ kills: 1 }));
           if (enemy.isBoss) {
             enemy.dead = true;
@@ -486,7 +587,7 @@ export class GameState extends BaseWorld {
         b.dead = true;
         a.dead = true;
         this.explode(a.x, a.y);
-        this.addKill(5);
+        this.addKill(5, a.x, a.y);
         this.asteroids.push(...a.breakApart());
         break;
       }
@@ -500,7 +601,7 @@ export class GameState extends BaseWorld {
         r.dead = true;
         a.dead = true;
         this.explode(a.x, a.y);
-        this.addKill(10);
+        this.addKill(10, a.x, a.y);
         break;
       }
     }
@@ -549,7 +650,7 @@ export class GameState extends BaseWorld {
           w.dead = true;
           e.dead = true;
           this.explode(e.x, e.y, true, 1.2);
-          this.addKill(e.points);
+          this.addKill(e.points, e.x, e.y);
           this.pushToasts(bumpStats({ kills: 1 }));
         }
         break;
@@ -608,6 +709,8 @@ export class GameState extends BaseWorld {
   applyPowerup(p, type) {
     this.runPowerups += 1;
     this.pushToasts(bumpStats({ maxRunPowerups: this.runPowerups }));
+    const NAME = { shooting: 'RAPID FIRE', slow_motion: 'SLOW-MO', kill_all: 'NUKE', rocket: '+ROCKET', spread: 'SPREAD+', shield: 'SHIELD', laser: '+LASER' };
+    this.popup(p.x, p.y - 28, NAME[type] || type.toUpperCase(), 'rgb(120,255,180)');
     if (type === 'shooting') { p.powerUp(this); audio.play('powerup', 0.6); }
     else if (type === 'slow_motion') { this.speedMul = 0.5; this.slowMoEnd = this.time + 10000; audio.play('powerup', 0.6); }
     else if (type === 'kill_all') {
@@ -618,6 +721,7 @@ export class GameState extends BaseWorld {
     else if (type === 'rocket') { p.rockets += 1; audio.play('powerup', 0.6); }
     else if (type === 'spread') { p.spread = Math.min(5, p.spread + 1); audio.play('powerup', 0.6); } // capped so runs don't snowball
     else if (type === 'shield') { p.shield = true; audio.play('powerup', 0.6); }
+    else if (type === 'laser') { p.lasers += 1; audio.play('powerup', 0.6); }
   }
 
   // Guest grabbed a power-up near (x,y): find & apply to that player.
@@ -690,6 +794,15 @@ export class GameState extends BaseWorld {
       g.fillRect(0, 0, W, H);
     }
 
+    // damage flash: red edge pulse when a life is lost
+    if (this.dmgFlash > 0) {
+      const grad = g.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, H * 0.7);
+      grad.addColorStop(0, 'rgba(255,0,0,0)');
+      grad.addColorStop(1, `rgba(255,30,30,${0.35 * this.dmgFlash})`);
+      g.fillStyle = grad;
+      g.fillRect(0, 0, W, H);
+    }
+
     // boss WARNING banner
     if (this.bossWarnStart) {
       const blink = 0.5 + 0.5 * Math.sin(this.time / 90);
@@ -759,6 +872,7 @@ export class GameState extends BaseWorld {
       drawText(g, `P${p.slot + 1}`, 10, y, fs, p.color, 'left');
       drawText(g, '♥'.repeat(Math.max(0, p.lives)), 44, y, fs, 'rgb(255,80,90)', 'left');
       drawText(g, `🚀${p.rockets}`, many ? 108 : 124, y, fs, '#fff', 'left');
+      drawText(g, `⚡${p.lasers}`, many ? 168 : 192, y, fs, 'rgb(120,220,255)', 'left');
     });
     if (this.speedMul < 1) drawText(g, 'SLOW-MO', W / 2, 24, 24, 'rgb(120,200,255)');
 
@@ -776,6 +890,23 @@ export class GameState extends BaseWorld {
       g.globalAlpha = 0.9;
       g.drawImage(images.rocket, b.x - 20, b.y - 18, 40, 20);
       drawText(g, `${this.player1.rockets}`, b.x, b.y + 16, 22, '#000');
+
+      // laser button (charges + cooldown arc)
+      const lb = this.laserBtn();
+      const p1 = this.player1;
+      const cd = Math.max(0, p1.lastLaser + p1.laserDelay - this.time) / p1.laserDelay;
+      const ready = p1.lasers > 0 && cd <= 0;
+      g.globalAlpha = ready ? 0.4 : 0.22;
+      g.fillStyle = ready ? 'rgb(120,220,255)' : '#888';
+      g.beginPath(); g.arc(lb.x, lb.y, lb.r, 0, Math.PI * 2); g.fill();
+      if (cd > 0) { // cooldown sweep
+        g.globalAlpha = 0.5;
+        g.strokeStyle = '#fff'; g.lineWidth = 4;
+        g.beginPath(); g.arc(lb.x, lb.y, lb.r - 3, -Math.PI / 2, -Math.PI / 2 + (1 - cd) * Math.PI * 2); g.stroke();
+      }
+      g.globalAlpha = 0.95;
+      drawText(g, '⚡', lb.x, lb.y - 4, 26, '#000');
+      drawText(g, `${p1.lasers}`, lb.x, lb.y + 18, 20, '#000');
 
       const pb = this.pauseBtn();
       g.globalAlpha = 0.3;

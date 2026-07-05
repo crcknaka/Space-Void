@@ -8,12 +8,12 @@ import * as audio from './audio.js';
 import { Button, ButtonGroup, drawText } from './ui.js';
 import { BaseWorld } from './world.js';
 import { GameState, PLAYER_COLORS, playerShip, spawnY } from './game.js';
-import { Player, Explosion, RocketTrailParticle, SmokeParticle, Spark } from './entities.js';
+import { Player, Explosion, RocketTrailParticle, SmokeParticle, Spark, LaserBeam, ScorePopup } from './entities.js';
 import { tinted, glowBullet, glowEnemyBullet, glowEngine, drawGlow } from './fx.js';
 
 const ETYPE = { basic: 0, weaver: 1, hunter: 2, tank: 3 };
 const ETINT = ['', 'rgba(0,230,190,0.35)', 'rgba(255,60,60,0.4)', 'rgba(190,110,255,0.42)'];
-const PU_TYPES = ['shooting', 'slow_motion', 'kill_all', 'rocket', 'spread', 'shield'];
+const PU_TYPES = ['shooting', 'slow_motion', 'kill_all', 'rocket', 'spread', 'shield', 'laser'];
 const PU_IMG = { shooting: 'powerup', slow_motion: 'slow_motion_powerup', kill_all: 'kill_all_powerup', rocket: 'rocket_powerup', spread: 'spread_powerup' };
 const SEND_MS = 33; // ~30Hz snapshots (mobile-friendly; guest extrapolates)
 
@@ -79,6 +79,7 @@ export class CoopHost {
     if (!p) return;
     if (m.k === 'in') { this.inputs.set(slot, { x: m.x, y: m.y }); }
     else if (m.k === 'rk') { if (p.alive) p.fireRocket(this.g); }
+    else if (m.k === 'lz') { if (p.alive) p.fireLaser(this.g); }
     else if (m.k === 'grab') { if (p.alive) this.g.grabPowerup(p, m.x, m.y); } // client-side pickup
   }
 
@@ -143,21 +144,25 @@ export class CoopHost {
   }
 
   // Snapshot goes UNRELIABLE (a drop is healed by the next one), but one-shot
-  // events (explosions, sounds) must never be lost — they ride a separate
-  // RELIABLE 'ev' message, sent only when there is something to say.
+  // events (explosions, sounds, laser beams, score popups) must never be lost —
+  // they ride a separate RELIABLE 'ev' message, sent only when non-empty.
   flushNet() {
     this.hub.broadcast(this.snapshot());
-    if (this._fx.length || this._sd.length) {
-      this.hub.broadcast({ k: 'ev', fx: this._fx.slice(), sd: this._sd.slice() });
+    const g = this.g;
+    const lz = g._lzQ || [], sp = g._spQ || [];
+    if (this._fx.length || this._sd.length || lz.length || sp.length) {
+      this.hub.broadcast({ k: 'ev', fx: this._fx.slice(), sd: this._sd.slice(), lz: lz.slice(), sp: sp.slice() });
       this._fx.length = 0;
       this._sd.length = 0;
+      lz.length = 0;
+      sp.length = 0;
     }
   }
 
   snapshot() {
     const g = this.g;
     const m = g.speedMul;
-    const enc = (p) => [Math.round(p.x), Math.round(p.y), p.alive ? 1 : 0, p.lives, p.rockets, g.time < (p.invulnUntil || 0) ? 1 : 0];
+    const enc = (p) => [Math.round(p.x), Math.round(p.y), p.alive ? 1 : 0, p.lives, p.rockets, g.time < (p.invulnUntil || 0) ? 1 : 0, p.lasers];
     return {
       k: 'w',
       sc: g.score, lv: g.level, warn: g.bossWarnStart ? 1 : 0,
@@ -237,20 +242,31 @@ export class CoopGuest extends BaseWorld {
     this.lastBan = 0;
     this.lastWarn = 0;
     this.me.x = 100; this.me.y = spawnY(this.meIndex, this.total || 2);
-    this.meAlive = true; this.meLives = 3; this.meRockets = 3; this.meInv = 0;
+    this.meAlive = true; this.meLives = 3; this.meRockets = 3; this.meLasers = 2; this.meInv = 0;
+    this.dmgFlash = 0;
+    this._lzCd = 0; // local cooldown echo for the button arc
     this.effects = [];
   }
 
   rocketBtn() { return { x: W - 70, y: H - 80, r: 44 }; }
+  laserBtn() { return { x: W - 70, y: H - 185, r: 38 }; }
   leaveBtn() { return { x: 34, y: 122, r: 22 }; }
+
+  tryLaser() {
+    if (this.meLasers <= 0 || this.time < this._lzCd) return;
+    this._lzCd = this.time + 1200;
+    this.net.send({ k: 'lz' });
+  }
 
   handleTouch() {
     if (!input.isTouch) return;
     const rb = this.rocketBtn(), lb = this.leaveBtn();
+    const zb = this.laserBtn();
     for (const [id, pt] of input.pointers) {
       if (!pt.justDown) continue;
       if (Math.hypot(pt.x - lb.x, pt.y - lb.y) <= lb.r) { this.leave(); return; }
       if (Math.hypot(pt.x - rb.x, pt.y - rb.y) <= rb.r) { this.net.send({ k: 'rk' }); continue; }
+      if (Math.hypot(pt.x - zb.x, pt.y - zb.y) <= zb.r) { this.tryLaser(); continue; }
       if (!this.drag && this.meAlive) this.drag = { id, px: pt.x, py: pt.y, ox: this.me.x, oy: this.me.y };
     }
     if (this.drag) {
@@ -273,13 +289,18 @@ export class CoopGuest extends BaseWorld {
         if (s === 'siren') audio.playSynth('siren');
         else audio.play(s, s === 'gun' ? 0.2 : s === 'rocket' ? 0.5 : 0.6);
       }
+      for (const l of m.lz || []) { this.effects.push(new LaserBeam(l[0], l[1], this.time)); audio.playSynth('plaser'); }
+      for (const s of m.sp || []) this.effects.push(new ScorePopup(s[0], s[1], s[2], this.time));
     }
     else if (m.k === 'w') {
       this.snap = m;
       this.snapAt = this.time;
       const mine = m.ps[this.meIndex];
       if (mine) {
+        const wasAlive = this.meAlive;
         this.meAlive = mine[2] === 1; this.meLives = mine[3]; this.meRockets = mine[4]; this.meInv = mine[5];
+        this.meLasers = mine[6] ?? this.meLasers;
+        if (wasAlive && !this.meAlive) { this.dmgFlash = 1; } // I just died: red pulse
         if (!this.meAlive) { this.me.x = mine[0]; this.me.y = mine[1]; }
       }
       if (m.ban && m.ban !== this.lastBan) { audio.playSynth('fanfare'); this.lastBan = m.ban; }
@@ -316,6 +337,7 @@ export class CoopGuest extends BaseWorld {
       this.me.x = clamp(this.me.x, this.me.w / 2, W - this.me.w / 2);
       this.me.y = clamp(this.me.y, this.me.h / 2, H - this.me.h / 2);
       if (input.pressed.has('Space') || input.pressed.has('Enter') || input.pressed.has('NumpadEnter') || (pad && pad.fire && this.time - (this._lr || 0) > 300)) { this._lr = this.time; this.net.send({ k: 'rk' }); }
+      if (input.pressed.has('KeyE') || input.pressed.has('KeyQ') || (pad && pad.fire2)) this.tryLaser();
       this.handleTouch();
       // client-side power-up grab: I see the overlap locally, tell the host
       if (this.snap && this.time - (this._grabT || 0) > 300) {
@@ -419,6 +441,16 @@ export class CoopGuest extends BaseWorld {
 
       if (s.slow) { g.fillStyle = 'rgba(80,150,255,0.08)'; g.fillRect(0, 0, W, H); }
 
+      // red edge pulse when this guest loses a life
+      if (this.dmgFlash > 0) {
+        this.dmgFlash = Math.max(0, this.dmgFlash - 0.03 * this.k);
+        const grad = g.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, H * 0.7);
+        grad.addColorStop(0, 'rgba(255,0,0,0)');
+        grad.addColorStop(1, `rgba(255,30,30,${0.35 * this.dmgFlash})`);
+        g.fillStyle = grad;
+        g.fillRect(0, 0, W, H);
+      }
+
       // HUD — all players, colour-coded, own marked
       drawText(g, `Score: ${s.sc}`, 10, 24, 26, '#fff', 'left');
       drawText(g, `Level: ${s.lv}`, W - 10, 24, 26, '#fff', 'right');
@@ -434,9 +466,19 @@ export class CoopGuest extends BaseWorld {
     }
 
     if (input.isTouch && !this.disconnected) {
-      const rb = this.rocketBtn(), lb = this.leaveBtn();
+      const rb = this.rocketBtn(), lb = this.leaveBtn(), zb = this.laserBtn();
       g.globalAlpha = 0.35; g.fillStyle = '#fff'; g.beginPath(); g.arc(rb.x, rb.y, rb.r, 0, Math.PI * 2); g.fill();
       g.globalAlpha = 0.9; g.drawImage(images.rocket, rb.x - 20, rb.y - 18, 40, 20); drawText(g, `${this.meRockets}`, rb.x, rb.y + 16, 22, '#000');
+      // laser button with cooldown arc
+      const cd = Math.max(0, this._lzCd - this.time) / 1200;
+      const ready = this.meLasers > 0 && cd <= 0;
+      g.globalAlpha = ready ? 0.4 : 0.22;
+      g.fillStyle = ready ? 'rgb(120,220,255)' : '#888';
+      g.beginPath(); g.arc(zb.x, zb.y, zb.r, 0, Math.PI * 2); g.fill();
+      if (cd > 0) { g.globalAlpha = 0.5; g.strokeStyle = '#fff'; g.lineWidth = 4; g.beginPath(); g.arc(zb.x, zb.y, zb.r - 3, -Math.PI / 2, -Math.PI / 2 + (1 - cd) * Math.PI * 2); g.stroke(); }
+      g.globalAlpha = 0.95;
+      drawText(g, '⚡', zb.x, zb.y - 4, 26, '#000');
+      drawText(g, `${this.meLasers}`, zb.x, zb.y + 18, 20, '#000');
       g.globalAlpha = 0.3; g.fillStyle = '#fff'; g.beginPath(); g.arc(lb.x, lb.y, lb.r, 0, Math.PI * 2); g.fill();
       g.globalAlpha = 0.85; g.strokeStyle = '#000'; g.lineWidth = 3;
       g.beginPath(); g.moveTo(lb.x - 6, lb.y - 6); g.lineTo(lb.x + 6, lb.y + 6); g.moveTo(lb.x + 6, lb.y - 6); g.lineTo(lb.x - 6, lb.y + 6); g.stroke();

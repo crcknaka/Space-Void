@@ -76,6 +76,11 @@ export function playSynth(name) {
     // falling-wreck wail
     note(880, t, 1.3, 'sawtooth', 0.07, -640);
     note(860, t + 0.06, 1.2, 'triangle', 0.05, -600);
+  } else if (name === 'plaser') {
+    // player laser: bright zap + power hum
+    note(1800, t, 0.16, 'sawtooth', 0.16, -1200);
+    note(220, t, 0.3, 'square', 0.1, -60);
+    note(3200, t + 0.01, 0.1, 'triangle', 0.07, -2400);
   } else if (name === 'warp') {
     note(240, t, 0.28, 'sine', 0.16, 620);
     note(900, t + 0.06, 0.16, 'triangle', 0.1);

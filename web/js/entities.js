@@ -272,6 +272,9 @@ export class Player {
     this.rockets = 3;
     this.rocketDelay = 700;
     this.lastRocket = 0;
+    this.lasers = 2;         // piercing beam charges (finite, like rockets)
+    this.laserDelay = 1200;
+    this.lastLaser = -9999;  // usable from the very first frame
     this.thrFrame = 0;
     this.thrLast = 0;
     this.tilt = 0;           // visual tilt when moving vertically
@@ -321,6 +324,7 @@ export class Player {
 
     if (this.autoShoot) this.shoot(world);
     if (this.useRockets && (k.has(c.rocket) || (c.rocketAlt && k.has(c.rocketAlt)) || (pad && pad.fire))) this.fireRocket(world);
+    if (this.useRockets && (k.has(c.laser) || (c.laserAlt && k.has(c.laserAlt)) || (pad && pad.fire2))) this.fireLaser(world);
 
     if (world.time - this.thrLast > 50) {
       this.thrLast = world.time;
@@ -341,6 +345,7 @@ export class Player {
     for (let i = 0; i < this.spread; i++) {
       world.bullets.push(new Bullet(edgeX, this.y, this.bulletImg, vx, start + i * spreadAngle));
     }
+    if (world.effects) world.effects.push(new MuzzleFlash(edgeX, this.y, world.time));
     this.lastShot = world.time;
     world._shots = (world._shots || 0) + 1; // for online sfx streaming
     audio.play('gun', 0.22);
@@ -352,6 +357,14 @@ export class Player {
     this.lastRocket = world.time;
     this.rockets--;
     audio.play('rocket', 0.5);
+  }
+
+  fireLaser(world) {
+    if (!world.laserBlast) return;
+    if (this.lasers <= 0 || world.time - this.lastLaser <= this.laserDelay) return;
+    this.lastLaser = world.time;
+    this.lasers--;
+    world.laserBlast(this); // world resolves the hitscan + visuals + sfx
   }
 
   powerUp(world) {
@@ -373,8 +386,8 @@ export class Player {
     g.translate(this.x, this.y);
     g.rotate(this.tilt);
 
-    // engine glow + thruster behind the ship
-    drawGlow(g, glowEngine, side * (this.w / 2 + 10), 0);
+    // engine glow + thruster behind the ship (flares up while boosting)
+    drawGlow(g, glowEngine, side * (this.w / 2 + 10), 0, this.boosting ? 1.7 : 1);
     g.save();
     g.translate(side * (this.w / 2 + 12), 0);
     if (this.facingLeft) g.scale(-1, 1);
@@ -567,7 +580,18 @@ export class Enemy {
     this.spinAngle = 0;
     this.lastSmoke = 0;
     this.flash = 1;
+    this.wreckHp = 2; // wrecks are shootable: 2 bullet hits (or 1 rocket) finish them
     audio.playSynth('siren'); // dying wail
+  }
+
+  // A hit on a falling wreck: sparks + knockback kick; returns true when it blows up.
+  wreckHit(dmg, kickX) {
+    this.flash = 1;
+    this.wreckHp -= dmg;
+    this.vx += kickX;                       // shove along the shot direction
+    this.vyFall = Math.min(this.vyFall, 0) - rand(0.6, 1.4); // bounce upward
+    if (this.spinMode === 'spin') this.spin *= rand(1.2, 1.8);
+    return this.wreckHp <= 0;
   }
 
   update(world) {
@@ -960,7 +984,7 @@ export class Asteroid {
 
 /* -------------------------------- power-ups -------------------------------- */
 
-export const POWERUP_TYPES = ['shooting', 'slow_motion', 'kill_all', 'rocket', 'spread', 'shield'];
+export const POWERUP_TYPES = ['shooting', 'slow_motion', 'kill_all', 'rocket', 'spread', 'shield', 'laser'];
 export const POWERUP_IMG = {
   shooting: 'powerup',
   slow_motion: 'slow_motion_powerup',
@@ -968,6 +992,7 @@ export const POWERUP_IMG = {
   rocket: 'rocket_powerup',
   spread: 'spread_powerup',
   shield: 'powerup', // base image, tinted cyan at load
+  laser: 'powerup',  // base image, tinted blue at load
 };
 
 export class PowerUp {
@@ -991,6 +1016,80 @@ export class PowerUp {
     const pulse = 0.85 + 0.15 * Math.sin(world.time / 200 + this.phase);
     drawGlow(g, glowPowerup, this.x, this.y, pulse);
     g.drawImage(this.img, this.x - this.w / 2, this.y - this.h / 2, this.w, this.h);
+  }
+}
+
+/* ------------------------------ player laser beam ---------------------------- */
+// Visual for the instantaneous piercing beam (damage is resolved on fire).
+export class LaserBeam {
+  constructor(x0, y, time, color = 'rgb(120,220,255)') {
+    this.x0 = x0; this.y = y;
+    this.spawn = time;
+    this.life = 260;
+    this.color = color;
+    this.dead = false;
+  }
+  update(world) {
+    if (world.time - this.spawn > this.life) this.dead = true;
+  }
+  draw(g, world) {
+    const t = (world.time - this.spawn) / this.life;
+    const a = 1 - t;
+    const prev = g.globalCompositeOperation;
+    g.globalCompositeOperation = 'lighter';
+    g.globalAlpha = 0.75 * a;
+    const grad = g.createLinearGradient(0, this.y - 12, 0, this.y + 12);
+    grad.addColorStop(0, 'rgba(120,220,255,0)');
+    grad.addColorStop(0.5, this.color);
+    grad.addColorStop(1, 'rgba(120,220,255,0)');
+    g.fillStyle = grad;
+    g.fillRect(this.x0, this.y - 12 * a, W - this.x0, 24 * a);
+    g.globalAlpha = 0.95 * a;
+    g.fillStyle = '#fff';
+    g.fillRect(this.x0, this.y - 2.5 * a, W - this.x0, 5 * a);
+    g.globalAlpha = 1;
+    g.globalCompositeOperation = prev;
+  }
+}
+
+/* ------------------------------- score popups -------------------------------- */
+export class ScorePopup {
+  constructor(x, y, text, time, color = 'rgb(255,215,90)') {
+    this.x = x; this.y = y;
+    this.text = text;
+    this.spawn = time;
+    this.life = 800;
+    this.color = color;
+    this.dead = false;
+  }
+  update(world) {
+    if (world.time - this.spawn > this.life) this.dead = true;
+  }
+  draw(g, world) {
+    const t = (world.time - this.spawn) / this.life;
+    g.globalAlpha = t < 0.7 ? 1 : 1 - (t - 0.7) / 0.3;
+    g.font = `bold 16px "Orbitron", sans-serif`;
+    g.fillStyle = this.color;
+    g.textAlign = 'center';
+    g.fillText(this.text, this.x, this.y - t * 34); // floats upward
+    g.globalAlpha = 1;
+  }
+}
+
+/* ------------------------------- muzzle flash -------------------------------- */
+export class MuzzleFlash {
+  constructor(x, y, time) {
+    this.x = x; this.y = y;
+    this.spawn = time;
+    this.life = 70;
+    this.dead = false;
+  }
+  update(world) {
+    if (world.time - this.spawn > this.life) this.dead = true;
+  }
+  draw(g, world) {
+    const a = 1 - (world.time - this.spawn) / this.life;
+    drawGlow(g, glowBullet, this.x, this.y, 1.6 * a);
   }
 }
 

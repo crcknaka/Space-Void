@@ -141,7 +141,8 @@ export class MenuState {
         ? 'Two players share this screen · gamepads recommended (P1=pad1, P2=pad2)'
         : 'P1: WASD + Shift · Space   ·   P2: Arrows + RShift · Enter', W / 2, H - 48, 13, 'rgb(150,150,150)');
     } else {
-      drawText(g, 'ONLINE = play with friends over the internet · up to 4 in co-op', W / 2, H - 48, 13, 'rgb(120,220,255)');
+      drawText(g, 'Space = rocket · E = laser · Shift = boost · Esc = pause', W / 2, H - 64, 13, 'rgb(150,150,150)');
+      drawText(g, 'ONLINE = play with friends over the internet · up to 4 in co-op', W / 2, H - 44, 13, 'rgb(120,220,255)');
     }
     drawText(g, 'Made by cRc^', W - 10, H - 14, 14, 'rgb(200,200,200)', 'right');
   }

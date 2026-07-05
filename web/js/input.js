@@ -85,7 +85,8 @@ export function pollGamepads() {
 
     pads[slot] = {
       x, y,
-      fire: btn(0) || btn(7),            // A / RT
+      fire: btn(0) || btn(7),            // A / RT  -> rocket
+      fire2: btn(2) || btn(3),           // X / Y   -> laser
       boost: btn(1) || btn(5) || btn(6), // B / RB / LT
     };
 
