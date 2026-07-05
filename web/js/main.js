@@ -167,14 +167,23 @@ async function boot() {
   }
 
   let last = performance.now();
+  let errCount = 0;
   function frame(now) {
     const dt = Math.min(Math.max(now - last, 0.1), 40); // clamp tab-switch spikes
     last = now;
     g.setTransform(scale, 0, 0, scale, 0, 0);
     input.pollGamepads();
-    app.state.update(dt);
-    input.endStep();
-    app.state.draw(g);
+    // A thrown update/draw must NEVER kill the loop or blank the screen —
+    // skip the bad frame and keep going (this used to leave only the backdrop).
+    try {
+      app.state.update(dt);
+      input.endStep();
+      app.state.draw(g);
+    } catch (e) {
+      input.endStep();
+      if (errCount++ < 5) console.error('frame error:', e);
+      window.__svlog?.push?.(`ERR ${e.message}`);
+    }
     g.drawImage(vignette, 0, 0, W, H);
     requestAnimationFrame(frame);
   }

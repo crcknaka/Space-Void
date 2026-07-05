@@ -162,7 +162,7 @@ export class CoopHost {
   snapshot() {
     const g = this.g;
     const m = g.speedMul;
-    const enc = (p) => [Math.round(p.x), Math.round(p.y), p.alive ? 1 : 0, p.lives, p.rockets, g.time < (p.invulnUntil || 0) ? 1 : 0, p.lasers];
+    const enc = (p) => [Math.round(p.x), Math.round(p.y), p.alive ? 1 : 0, p.lives, p.rockets, g.time < (p.invulnUntil || 0) ? 1 : 0, p.lasers, p.shield ? 1 : 0];
     return {
       k: 'w',
       sc: g.score, lv: g.level, warn: g.bossWarnStart ? 1 : 0,
@@ -223,8 +223,14 @@ export class CoopGuest extends BaseWorld {
     // pre-tint ship sprites for every player index
     this.shipImg = [];
     for (let i = 0; i < 4; i++) this.shipImg[i] = playerShip(images, i, true);
+    // Robust: any type without a dedicated image falls back to the base sprite
+    // so a new powerup type can never crash the guest with drawImage(undefined).
     this.puImg = {};
-    for (const t of PU_TYPES) this.puImg[t] = t === 'shield' ? tinted(images.powerup, 'rgba(0,210,255,0.55)', 'powerup_shield') : images[PU_IMG[t]];
+    for (const t of PU_TYPES) {
+      this.puImg[t] = t === 'shield' ? tinted(images.powerup, 'rgba(0,210,255,0.55)', 'powerup_shield')
+        : t === 'laser' ? tinted(images.powerup, 'rgba(90,140,255,0.6)', 'powerup_laser')
+        : (images[PU_IMG[t]] || images.powerup);
+    }
     this.enemyTint = {};
 
     this.net.onMessage = (m) => this.onMessage(m);
@@ -300,6 +306,7 @@ export class CoopGuest extends BaseWorld {
         const wasAlive = this.meAlive;
         this.meAlive = mine[2] === 1; this.meLives = mine[3]; this.meRockets = mine[4]; this.meInv = mine[5];
         this.meLasers = mine[6] ?? this.meLasers;
+        this.meShield = mine[7] === 1;
         if (wasAlive && !this.meAlive) { this.dmgFlash = 1; } // I just died: red pulse
         if (!this.meAlive) { this.me.x = mine[0]; this.me.y = mine[1]; }
       }
@@ -391,6 +398,18 @@ export class CoopGuest extends BaseWorld {
     g.globalAlpha = 1; g.globalCompositeOperation = prev; g.restore();
   }
 
+  drawShieldRing(g, x, y) {
+    const prev = g.globalCompositeOperation;
+    g.save();
+    g.globalCompositeOperation = 'lighter';
+    const r = 36 + 2 * Math.sin(this.time / 140);
+    g.globalAlpha = 0.55; g.lineWidth = 2.5; g.strokeStyle = 'rgb(80,220,255)';
+    g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.stroke();
+    g.globalAlpha = 0.12; g.fillStyle = 'rgb(80,220,255)'; g.fill();
+    g.restore();
+    g.globalCompositeOperation = prev;
+  }
+
   drawShip(g, img, thrusters, x, y, inv) {
     const thr = thrusters[this.frame >> 2 & 3];
     if (inv) g.globalAlpha = 0.5 + 0.25 * Math.sin(this.time / 55);
@@ -406,7 +425,7 @@ export class CoopGuest extends BaseWorld {
 
     if (s) {
       const ex = Math.min(this.time - (this.snapAt || this.time), 90) / STEP;
-      for (const p of s.pu) { const t = PU_TYPES[p[2]] || 'shooting'; g.drawImage(this.puImg[t], p[0] - 30, p[1] - 15, 60, 30); }
+      for (const p of s.pu) { const img = this.puImg[PU_TYPES[p[2]]] || images.powerup; g.drawImage(img, p[0] - 30, p[1] - 15, 60, 30); }
       for (const a of s.as) { const ax = a[0] + (a[4] || 0) * ex, ay = a[1] + (a[5] || 0) * ex; g.save(); g.translate(ax, ay); g.rotate(a[3] * Math.PI / 180); g.drawImage(images.asteroid, -a[2], -a[2], a[2] * 2, a[2] * 2); g.restore(); }
       const thr = images.thrusters.enemy[this.frame >> 2 & 3];
       for (const e of s.en) {
@@ -431,13 +450,13 @@ export class CoopGuest extends BaseWorld {
       for (const r of s.ro) { const rad = r[2] * Math.PI / 180, x = r[0] + 8 * Math.cos(rad) * ex, y = r[1] + 8 * Math.sin(rad) * ex; drawGlow(g, glowEngine, x, y, 0.8); g.save(); g.translate(x, y); g.rotate(rad); g.drawImage(images.rocket, -10, -5, 20, 10); g.restore(); }
       for (const fx of this.effects) fx.draw(g, this);
 
-      // players: others from snapshot, self predicted
+      // players: others from snapshot, self predicted (+ shield bubbles)
       const thrOf = (i) => images.thrusters[i === 1 ? 'player2' : 'player1'];
       s.ps.forEach((p, i) => {
         if (i === this.meIndex) return;
-        if (p[2]) this.drawShip(g, this.shipImg[i], thrOf(i), p[0], p[1], p[5]);
+        if (p[2]) { this.drawShip(g, this.shipImg[i], thrOf(i), p[0], p[1], p[5]); if (p[7]) this.drawShieldRing(g, p[0], p[1]); }
       });
-      if (this.meAlive) this.drawShip(g, this.shipImg[this.meIndex], this.me.thrusters, this.me.x, this.me.y, this.meInv);
+      if (this.meAlive) { this.drawShip(g, this.shipImg[this.meIndex], this.me.thrusters, this.me.x, this.me.y, this.meInv); if (this.meShield) this.drawShieldRing(g, this.me.x, this.me.y); }
 
       if (s.slow) { g.fillStyle = 'rgba(80,150,255,0.08)'; g.fillRect(0, 0, W, H); }
 

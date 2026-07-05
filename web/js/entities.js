@@ -1025,7 +1025,7 @@ export class LaserBeam {
   constructor(x0, y, time, color = 'rgb(120,220,255)') {
     this.x0 = x0; this.y = y;
     this.spawn = time;
-    this.life = 260;
+    this.life = 520; // lingering beam so it reads clearly
     this.color = color;
     this.dead = false;
   }
