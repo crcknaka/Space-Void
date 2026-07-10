@@ -39,6 +39,31 @@ export function play(name, volume = 0.6) {
 /* ------------------------------ synth jingles ------------------------------ */
 // Event sounds generated with oscillators — no audio files needed.
 
+// Filtered white-noise burst — adds "air" that plain oscillators lack.
+let noiseBuf = null;
+function noiseHit(when, dur, vol = 0.2, freq = 1500, freqEnd = 0, q = 1.2) {
+  if (!noiseBuf) {
+    noiseBuf = actx.createBuffer(1, actx.sampleRate / 2, actx.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  }
+  const src = actx.createBufferSource();
+  src.buffer = noiseBuf;
+  src.loop = true;
+  const bp = actx.createBiquadFilter();
+  bp.type = 'bandpass';
+  bp.Q.value = q;
+  bp.frequency.setValueAtTime(freq, when);
+  if (freqEnd) bp.frequency.exponentialRampToValueAtTime(Math.max(60, freqEnd), when + dur);
+  const gain = actx.createGain();
+  gain.gain.setValueAtTime(0.0001, when);
+  gain.gain.linearRampToValueAtTime(vol * settings.sfx, when + 0.015);
+  gain.gain.exponentialRampToValueAtTime(0.001, when + dur);
+  src.connect(bp).connect(gain).connect(actx.destination);
+  src.start(when);
+  src.stop(when + dur + 0.05);
+}
+
 function note(freq, when, dur, type = 'triangle', vol = 0.2, slide = 0) {
   const osc = actx.createOscillator();
   const gain = actx.createGain();
@@ -65,7 +90,16 @@ export function playSynth(name) {
     note(700, t, 0.08, 'square', 0.14);
     note(1050, t + 0.07, 0.1, 'square', 0.14);
   } else if (name === 'shield_pop') {
-    note(900, t, 0.28, 'sine', 0.26, -700);
+    // player shield shatters: descending wail + low thump + glassy noise burst
+    note(950, t, 0.32, 'sine', 0.26, -760);
+    note(1900, t, 0.16, 'triangle', 0.12, -1300);
+    note(140, t + 0.02, 0.24, 'square', 0.13, -70);
+    noiseHit(t, 0.3, 0.2, 2400, 500, 1);
+  } else if (name === 'shield_hit') {
+    // a bolt splashing on an energy shield: quick zappy wobble-ping
+    note(1500, t, 0.08, 'sine', 0.13, -520);
+    note(2300, t + 0.01, 0.06, 'triangle', 0.08, -800);
+    noiseHit(t, 0.07, 0.06, 3200, 1600, 2.5);
   } else if (name === 'respawn') {
     note(300, t, 0.35, 'sine', 0.2, 550);
   } else if (name === 'achieve') {
@@ -77,13 +111,19 @@ export function playSynth(name) {
     note(880, t, 1.3, 'sawtooth', 0.07, -640);
     note(860, t + 0.06, 1.2, 'triangle', 0.05, -600);
   } else if (name === 'plaser') {
-    // player laser: bright zap + power hum
-    note(1800, t, 0.16, 'sawtooth', 0.16, -1200);
-    note(220, t, 0.3, 'square', 0.1, -60);
-    note(3200, t + 0.01, 0.1, 'triangle', 0.07, -2400);
+    // player beam: charge blip → thick descending zap over a sub-hum,
+    // with a sizzling noise sweep and a shimmering top harmonic
+    note(500, t, 0.06, 'sine', 0.1, 1700);
+    note(2300, t + 0.05, 0.38, 'sawtooth', 0.17, -2050);
+    note(1150, t + 0.05, 0.3, 'square', 0.09, -950);
+    note(150, t + 0.05, 0.42, 'square', 0.12, -95);
+    note(4400, t + 0.06, 0.2, 'triangle', 0.06, -3400);
+    noiseHit(t + 0.05, 0.34, 0.16, 3400, 500, 1.4);
   } else if (name === 'warp') {
-    note(240, t, 0.28, 'sine', 0.16, 620);
-    note(900, t + 0.06, 0.16, 'triangle', 0.1);
+    // hyperspace spool-up: rising sweep + accelerating whoosh
+    note(240, t, 0.3, 'sine', 0.15, 620);
+    note(150, t, 1.15, 'sawtooth', 0.07, 850);
+    noiseHit(t, 1.5, 0.13, 350, 3600, 0.8);
   } else if (name === 'laser_charge') {
     note(180, t, 0.85, 'sawtooth', 0.12, 500);
   } else if (name === 'laser_fire') {

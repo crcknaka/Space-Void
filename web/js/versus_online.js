@@ -2,6 +2,7 @@
 // Authority model: each client fully owns its own ship and its own death.
 // You render remote bullets from spawn events and check them against YOURSELF;
 // when you're hit you die locally and tell the opponent (who scored).
+import { makeSpaceBackdrop } from './bggen.js';
 import { W, H, STEP, clamp, overlap, rand } from './const.js';
 import * as input from './input.js';
 import * as audio from './audio.js';
@@ -25,6 +26,7 @@ export class VersusOnline extends BaseWorld {
     const { images } = this.app;
     audio.playMusic('versus_music');
     this.initBackdrop();
+    this.bgOverride = makeSpaceBackdrop(777); // same procedural arena for both peers
 
     this.localId = this.net.isHost ? 1 : 2;
     this.remoteId = this.localId === 1 ? 2 : 1;

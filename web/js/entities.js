@@ -4,7 +4,55 @@
 import { W, H, rand, randInt, clamp } from './const.js';
 import * as input from './input.js';
 import * as audio from './audio.js';
-import { glowBullet, glowEnemyBullet, glowPowerup, glowEngine, glowExplosion, drawGlow, tinted } from './fx.js';
+import { glowBullet, glowEnemyBullet, glowPowerup, glowEngine, glowExplosion, glowElite, drawGlow, tinted, drawShieldBubble } from './fx.js';
+import { renderMesh, fitTransform, projectPoint, VIEW } from './mesh3d.js';
+import { genBoss, BOSS_VIEW, aimYaw } from './bossgen.js';
+import { genFreighter } from './shipgen.js';
+
+// Ships draw ~25% larger than their (unchanged) hitboxes — reads better on
+// small screens, and the forgiving 0.8-shrink collision keeps feeling fair.
+export const VIS = 1.25;
+
+// Draws engine flames at a sprite's baked nozzle points (img.nozzles, sprite
+// px — see procassets.js). Call inside a context translated to ship center.
+// opts.flip mirrors the plume (left-facing sprites exhaust to the right).
+export function drawFlames(g, img, thr, w, h, opts = {}) {
+  // NOTE: no drawGlow here — the flame frames carry their own baked halo, and
+  // a composite-mode toggle per nozzle per ship flushes the GPU batch (slow).
+  const boost = opts.boost ? 1.45 : 1;
+  const list = img.nozzles;
+  if (!list || !list.length) { // legacy fallback: one centered flame at the tail
+    const s = 40 * boost;
+    g.save();
+    g.translate((opts.flip ? 1 : -1) * (w / 2 + 2), 0);
+    if (opts.flip) g.scale(-1, 1);
+    g.drawImage(thr, -s * 0.75, -s / 2, s, s);
+    g.restore();
+    return;
+  }
+  // afterburner: the plume stretches lengthwise, not just scales — reads as speed
+  const stretch = opts.boost ? 1.55 : 1;
+  for (const n of list) {
+    const ox = (n.x / img.width) * w - w / 2;
+    const oy = (n.y / img.height) * h - h / 2;
+    const rw = (n.r / img.width) * w; // engine radius in world px
+    const s = clamp(rw * 9, 20, 60) * boost;
+    const sw = s * stretch;
+    g.save();
+    g.translate(ox, oy);
+    if (opts.flip) g.scale(-1, 1);
+    g.drawImage(thr, -sw * (48 / 64), -s / 2, sw, s); // nozzle anchor at canvas x=48
+    if (opts.boost) { // second additive pass — hotter, longer tongue
+      const prev = g.globalCompositeOperation;
+      g.globalCompositeOperation = 'lighter';
+      g.globalAlpha = 0.6;
+      g.drawImage(thr, -sw * (48 / 64) * 1.25, -s * 0.35, sw * 1.25, s * 0.7);
+      g.globalAlpha = 1;
+      g.globalCompositeOperation = prev;
+    }
+    g.restore();
+  }
+}
 
 /* ---------------------------------- stars ---------------------------------- */
 // Stars render from small pre-baked sprites (drawImage) instead of per-frame
@@ -168,11 +216,12 @@ export class RocketTrailParticle {
   }
 }
 
-// Cyan streak behind a boosting player ship
+// Streak behind a boosting ship (cyan for players; enemies pass their own color)
 export class BoostParticle {
-  constructor(x, y, time) {
+  constructor(x, y, time, color = 'rgb(120,220,255)', dir = -1) {
+    this.color = color;
     this.x = x; this.y = y + rand(-7, 7);
-    this.vx = rand(-1.6, -0.8);
+    this.vx = rand(0.8, 1.6) * dir;
     this.vy = rand(-0.3, 0.3);
     this.size = rand(1.5, 3);
     this.life = 320;
@@ -191,7 +240,7 @@ export class BoostParticle {
     const prev = g.globalCompositeOperation;
     g.globalCompositeOperation = 'lighter';
     g.globalAlpha = this.alpha;
-    g.fillStyle = 'rgb(120,220,255)';
+    g.fillStyle = this.color;
     g.beginPath();
     g.arc(this.x, this.y, this.size, 0, Math.PI * 2);
     g.fill();
@@ -213,9 +262,9 @@ export class Rocket {
     this.dead = false;
   }
   update(world) {
-    // steer toward a forced target (versus) or the nearest world target
+    // steer toward a forced target (versus / enemy fire) or the nearest world target
     let target = this.forcedTarget && this.forcedTarget.alive !== false ? this.forcedTarget : null;
-    if (!target) {
+    if (!target && !this.enemyFire) { // enemy rockets never retarget onto enemies
       let minD = Infinity;
       for (const t of world.rocketTargets ? world.rocketTargets() : []) {
         const d = Math.hypot(this.x - t.x, this.y - t.y);
@@ -382,44 +431,323 @@ export class Player {
     const t = world?.time ?? 0;
     const invuln = this.invulnUntil && t < this.invulnUntil;
     const thr = this.thrusters[this.thrFrame];
-    const side = this.facingLeft ? 1 : -1;
 
     if (invuln) g.globalAlpha = 0.45 + 0.25 * Math.sin(t / 55); // blink during grace period
 
+    // 3D bank: generated ships carry pre-baked roll frames (img.bankFrames);
+    // pick one from the tilt and keep only a soft residual 2D rotation.
+    const bank = this.img.bankFrames;
+    let img = this.img;
+    if (bank) {
+      const f = (this.tilt * (this.facingLeft ? -1 : 1)) / 0.14; // -1..1
+      img = bank[Math.max(0, Math.min(bank.length - 1, Math.round((f + 1) * (bank.length - 1) / 2)))];
+    }
+
+    const vw = this.w * VIS, vh = this.h * VIS;
     g.save();
     g.translate(this.x, this.y);
-    g.rotate(this.tilt);
-
-    // engine glow + thruster behind the ship (flares up while boosting)
-    drawGlow(g, glowEngine, side * (this.w / 2 + 10), 0, this.boosting ? 1.7 : 1);
-    g.save();
-    g.translate(side * (this.w / 2 + 12), 0);
-    if (this.facingLeft) g.scale(-1, 1);
-    g.drawImage(thr, -32, -32, 64, 64);
-    g.restore();
-
+    g.rotate(this.tilt * (bank ? 0.35 : 1));
     if (this.shipFlipped) g.scale(-1, 1);
-    g.drawImage(this.img, -this.w / 2, -this.h / 2, this.w, this.h);
+    // engine flames at the sprite's real nozzles (afterburner while boosting
+    // or riding a hyperspace jump)
+    drawFlames(g, this.img, thr, vw, vh, { boost: this.boosting || (world?.warpMul || 1) > 4 });
+    g.drawImage(img, -vw / 2, -vh / 2, vw, vh);
     g.restore();
     g.globalAlpha = 1;
 
-    // shield bubble
-    if (this.shield) {
-      const prev = g.globalCompositeOperation;
-      g.globalCompositeOperation = 'lighter';
+    // hexagonal shield bubble (+ impact ripple set by killPlayer)
+    if (this.shield || (this.shieldRipple && t - this.shieldRipple.start < 450)) {
       const r = 36 + 2 * Math.sin(t / 140);
-      g.globalAlpha = 0.55;
-      g.lineWidth = 2.5;
-      g.strokeStyle = 'rgb(80,220,255)';
-      g.beginPath();
-      g.arc(this.x, this.y, r, 0, Math.PI * 2);
-      g.stroke();
-      g.globalAlpha = 0.12;
-      g.fillStyle = 'rgb(80,220,255)';
-      g.fill();
-      g.globalAlpha = 1;
-      g.globalCompositeOperation = prev;
+      const rip = this.shieldRipple ? { a: this.shieldRipple.a, p: (t - this.shieldRipple.start) / 450 } : null;
+      drawShieldBubble(g, this.x, this.y, r, t, 'rgb(80,220,255)', rip && rip.p < 1 ? rip : null);
     }
+  }
+}
+
+/* ------------------------------- mesh debris -------------------------------- */
+// Real 3D wreckage: a destroyed ship's source mesh is split into face
+// clusters that tumble apart, inheriting the ship's motion. Sprites baked by
+// procassets carry their mesh (img.mesh) + px-per-unit scale (img.fitScale).
+
+export class MeshDebris {
+  constructor(sub, x, y, scale, time, opts = {}) {
+    this.sub = sub;
+    this.x = x; this.y = y;
+    this.scale = scale;
+    this.spawn = time;
+    this.life = 900 + Math.random() * 600;
+    this.vx = (opts.vx || 0) + (Math.random() - 0.5) * 2.4;
+    this.vy = (opts.vy || 0) + (Math.random() - 0.5) * 2.4;
+    this.srx = (Math.random() - 0.5) * 0.16;
+    this.sry = (Math.random() - 0.5) * 0.16;
+    this.ry0 = opts.ry ?? Math.PI;
+    this.burning = Math.random() < 0.35;
+    this.lastSmoke = 0;
+    this.dead = false;
+  }
+  update(world) {
+    const age = world.time - this.spawn;
+    if (age > this.life) { this.dead = true; return; }
+    this.x += this.vx * world.k;
+    this.y += this.vy * world.k;
+    if (this.burning && world.time - this.lastSmoke > 90) {
+      this.lastSmoke = world.time;
+      world.effects.push(new SmokeParticle(this.x, this.y, world.time));
+    }
+  }
+  draw(g, world) {
+    const age = world.time - this.spawn;
+    const t = age / this.life;
+    g.globalAlpha = t < 0.6 ? 1 : 1 - (t - 0.6) / 0.4;
+    renderMesh(g, this.sub, {
+      x: this.x, y: this.y, scale: this.scale,
+      rx: VIEW.rx + this.srx * age / 16,
+      ry: this.ry0 + this.sry * age / 16,
+    });
+    g.globalAlpha = 1;
+  }
+}
+
+// Splits img.mesh into `chunks` clusters and spawns tumbling debris at (x,y).
+// drawW is the entity hitbox width (visual VIS scaling applied here).
+export function shatterSprite(world, img, x, y, drawW, opts = {}) {
+  const mesh = img.mesh;
+  if (!mesh || !img.fitScale) return;
+  let live = 0; // debris budget: chain kills must not melt weak devices
+  for (const f of world.effects) if (f instanceof MeshDebris) live++;
+  if (live > 28) return;
+  const scale = img.fitScale * (drawW * (opts.vis ?? VIS) / img.width);
+  const n = opts.chunks || 4 + ((Math.random() * 3) | 0);
+  const cents = mesh.faces.map((f) => {
+    let cx = 0, cy = 0, cz = 0;
+    for (const vi of f.v) { cx += mesh.verts[vi][0]; cy += mesh.verts[vi][1]; cz += mesh.verts[vi][2]; }
+    return [cx / f.v.length, cy / f.v.length, cz / f.v.length];
+  });
+  const seeds = [];
+  for (let i = 0; i < n; i++) seeds.push(cents[(Math.random() * cents.length) | 0]);
+  const groups = Array.from({ length: n }, () => []);
+  cents.forEach((c, fi) => {
+    let bi = 0, bd = Infinity;
+    seeds.forEach((s, si) => {
+      const d = (c[0] - s[0]) ** 2 + (c[1] - s[1]) ** 2 + (c[2] - s[2]) ** 2;
+      if (d < bd) { bd = d; bi = si; }
+    });
+    groups[bi].push(fi);
+  });
+  const facing = opts.ry ?? Math.PI; // ships face left by default in game
+  for (const grp of groups) {
+    if (!grp.length) continue;
+    // compact sub-mesh: remap only the verts this chunk uses
+    const map = new Map();
+    const verts = [];
+    const faces = grp.map((fi) => {
+      const f = mesh.faces[fi];
+      return {
+        ...f,
+        v: f.v.map((vi) => {
+          if (!map.has(vi)) { map.set(vi, verts.length); verts.push(mesh.verts[vi]); }
+          return map.get(vi);
+        }),
+      };
+    });
+    // chunk centroid → spawn offset + outward kick (mirror x for left-facing)
+    let gx = 0, gz = 0;
+    for (const fi of grp) { gx += cents[fi][0]; gz += cents[fi][2]; }
+    gx /= grp.length; gz /= grp.length;
+    const sx = (facing === Math.PI ? -gx : gx) * scale;
+    const sy = gz * Math.sin(VIEW.rx) * scale;
+    world.effects.push(new MeshDebris({ verts, faces }, x + sx, y + sy, scale, world.time, {
+      ...opts, ry: facing,
+      vx: (opts.vx || 0) + sx * 0.04,
+      vy: (opts.vy || 0) + sy * 0.04,
+    }));
+  }
+}
+
+/* ---------------------------------- mines ----------------------------------- */
+// Proximity mines laid by high-level tanks. Shot down for points, lethal on contact.
+
+export function drawMine(g, x, y, t, phase = 0) {
+  const blink = Math.max(0, Math.sin(t / 160 + phase));
+  drawGlow(g, glowEnemyBullet, x, y, 0.7 + blink * 0.8);
+  const grad = g.createRadialGradient(x - 3, y - 3, 1, x, y, 11);
+  grad.addColorStop(0, 'rgb(96,102,116)');
+  grad.addColorStop(0.7, 'rgb(46,50,60)');
+  grad.addColorStop(1, 'rgb(24,26,34)');
+  g.fillStyle = grad;
+  g.beginPath(); g.arc(x, y, 10, 0, Math.PI * 2); g.fill();
+  const rot = t / 1300 + phase;
+  g.fillStyle = 'rgb(70,74,86)';
+  for (let i = 0; i < 6; i++) {
+    const a = rot + (i / 6) * Math.PI * 2;
+    g.beginPath();
+    g.arc(x + Math.cos(a) * 10.5, y + Math.sin(a) * 10.5, 2.2, 0, Math.PI * 2);
+    g.fill();
+  }
+  g.fillStyle = `rgba(255,64,52,${0.3 + 0.7 * blink})`;
+  g.beginPath(); g.arc(x, y, 3.4, 0, Math.PI * 2); g.fill();
+}
+
+export class Mine {
+  constructor(x, y, time) {
+    this.x = x; this.y = y;
+    this.w = 24; this.h = 24;
+    this.spawn = time;
+    this.expireAt = time + 20000;
+    this.phase = rand(0, Math.PI * 2);
+    this.dead = false;
+  }
+  update(world) {
+    this.x -= 0.5 * world.speedMul * world.k;
+    this.y += Math.sin(world.time / 700 + this.phase) * 0.15 * world.k;
+    if (this.x < -30) this.dead = true;
+  }
+  draw(g, world) {
+    drawMine(g, this.x, this.y, world.time, this.phase);
+  }
+}
+
+/* ------------------------------ ambient events ------------------------------- */
+// Rare background flourishes: a comet streaking by, a distant convoy passing.
+// Pure eye-candy — Math.random by design (never touches the seeded game RNG).
+
+export class Comet {
+  constructor(time) {
+    this.x = W * (0.3 + Math.random() * 0.7);
+    this.y = -30;
+    const a = Math.PI * (0.62 + Math.random() * 0.2); // down-left diagonal
+    const sp = 2.6 + Math.random() * 2;
+    this.vx = Math.cos(a) * sp;
+    this.vy = Math.abs(Math.sin(a)) * sp;
+    this.spawn = time;
+    this.hue = Math.random() < 0.5 ? '200,230,255' : '255,225,180';
+    this.dead = false;
+  }
+  update(world) {
+    this.x += this.vx * world.k;
+    this.y += this.vy * world.k;
+    if (this.y > H + 60 || this.x < -160) this.dead = true;
+  }
+  draw(g) {
+    const prev = g.globalCompositeOperation;
+    g.globalCompositeOperation = 'lighter';
+    const tx = -this.vx * 34, ty = -this.vy * 34; // tail opposite of travel
+    const grad = g.createLinearGradient(this.x, this.y, this.x + tx, this.y + ty);
+    grad.addColorStop(0, `rgba(${this.hue},0.8)`);
+    grad.addColorStop(1, `rgba(${this.hue},0)`);
+    g.strokeStyle = grad;
+    g.lineWidth = 2.4;
+    g.beginPath();
+    g.moveTo(this.x, this.y);
+    g.lineTo(this.x + tx, this.y + ty);
+    g.stroke();
+    g.fillStyle = '#fff';
+    g.beginPath(); g.arc(this.x, this.y, 2, 0, Math.PI * 2); g.fill();
+    g.globalCompositeOperation = prev;
+  }
+}
+
+export class DistantConvoy {
+  constructor(images, time) {
+    this.img = tinted(images.enemy_basic, 'rgba(22,28,40,0.96)', 'convoy_silhouette');
+    this.n = 3 + ((Math.random() * 3) | 0);
+    this.x = W + 40;
+    this.y = 60 + Math.random() * (H * 0.5);
+    this.v = 0.35 + Math.random() * 0.3;
+    this.s = 16 + Math.random() * 8; // tiny: far away
+    this.dead = false;
+  }
+  update(world) {
+    this.x -= this.v * world.k;
+    if (this.x + this.n * this.s * 1.6 < -40) this.dead = true;
+  }
+  draw(g) {
+    g.globalAlpha = 0.85;
+    for (let i = 0; i < this.n; i++) {
+      const x = this.x + i * this.s * 1.6;
+      const y = this.y + Math.sin(i * 1.7) * this.s * 0.5;
+      g.drawImage(this.img, x, y, this.s, this.s * 0.6);
+      // faint engine dot
+      g.fillStyle = 'rgba(255,170,90,0.5)';
+      g.fillRect(x + this.s - 1, y + this.s * 0.28, 1.5, 1.5);
+    }
+    g.globalAlpha = 1;
+  }
+}
+
+// Huge cargo hauler crossing far behind the action — baked once per sighting
+// from a fresh seed, rendered dim so it reads as a distant silhouette.
+export class Freighter {
+  constructor(time) {
+    const mesh = genFreighter((Math.random() * 1e9) | 0);
+    const wpx = Math.ceil(300 + Math.random() * 220);
+    const c = document.createElement('canvas');
+    c.width = wpx;
+    c.height = Math.ceil(wpx * 0.3);
+    const fit = fitTransform(mesh, c.width, c.height, BOSS_VIEW, 0.95);
+    renderMesh(c.getContext('2d'), mesh, { ...BOSS_VIEW, ...fit, gain: 0.5, ambient: 0.3 });
+    this.img = c;
+    this.x = W + 60;
+    this.y = 30 + Math.random() * (H * 0.65);
+    this.v = 0.22 + Math.random() * 0.25;
+    this.phase = Math.random() * 1000;
+    this.dead = false;
+  }
+  update(world) {
+    this.x -= this.v * (world.warpMul || 1) * world.k;
+    if (this.x + this.img.width < -60) this.dead = true;
+  }
+  draw(g, world) {
+    g.globalAlpha = 0.92;
+    g.drawImage(this.img, this.x, this.y);
+    g.globalAlpha = 1;
+    const t = world?.time ?? 0;
+    // blinking nav strobe + steady engine embers
+    if (Math.sin((t + this.phase) / 260) > 0.75) {
+      g.fillStyle = 'rgba(255,110,90,0.9)';
+      g.fillRect(this.x + this.img.width * 0.68, this.y + this.img.height * 0.28, 2.5, 2.5);
+    }
+    g.fillStyle = 'rgba(255,180,100,0.55)';
+    g.fillRect(this.x + this.img.width * 0.03, this.y + this.img.height * 0.46, 3, 2);
+    // dim cabin windows breathing slowly along the hull
+    for (let i = 0; i < 5; i++) {
+      const a = 0.1 + 0.13 * (0.5 + 0.5 * Math.sin(t / 430 + this.phase + i * 1.7));
+      g.fillStyle = `rgba(190,215,255,${a})`;
+      g.fillRect(this.x + this.img.width * (0.22 + i * 0.13), this.y + this.img.height * 0.5, 2, 1.5);
+    }
+  }
+}
+
+/* ------------------------------- warp streaks ------------------------------- */
+// Star-line streaks during the hyperspace hop between levels.
+
+export class WarpStreak {
+  constructor(time) {
+    this.x = W + 60;
+    this.y = Math.random() * H;
+    this.v = 30 + Math.random() * 22;
+    this.len = 70 + Math.random() * 160;
+    this.a = 0.2 + Math.random() * 0.35;
+    this.spawn = time;
+    this.dead = false;
+  }
+  update(world) {
+    this.x -= this.v * world.k;
+    if (this.x + this.len < 0) this.dead = true;
+  }
+  draw(g) {
+    const prev = g.globalCompositeOperation;
+    g.globalCompositeOperation = 'lighter';
+    const grad = g.createLinearGradient(this.x, 0, this.x + this.len, 0);
+    grad.addColorStop(0, `rgba(200,225,255,${this.a})`);
+    grad.addColorStop(1, 'rgba(200,225,255,0)');
+    g.strokeStyle = grad;
+    g.lineWidth = 1.5;
+    g.beginPath();
+    g.moveTo(this.x, this.y);
+    g.lineTo(this.x + this.len, this.y);
+    g.stroke();
+    g.globalCompositeOperation = prev;
   }
 }
 
@@ -508,11 +836,12 @@ const ENEMY_POINTS = { basic: 10, weaver: 15, hunter: 20, tank: 30 };
 export class Enemy {
   constructor(images, level, type, time, moveRandomly = false) {
     this.type = type;
-    this.img = type === 'basic'
-      ? images.enemy_ship
-      : tinted(images.enemy_ship, ENEMY_TINT[type], `enemy_${type}`);
+    // each type has its own generated ship; tint fallback covers a missing key
+    this.img = images[`enemy_${type}`]
+      || (type === 'basic' ? images.enemy_ship : tinted(images.enemy_ship, ENEMY_TINT[type], `enemy_${type}`));
     this.thrusters = images.thrusters.enemy;
     this.bulletImg = images.enemy_bullet;
+    this.rocketImg = images.enemy_rocket || images.rocket;
     this.w = type === 'tank' ? 66 : 50;
     this.h = type === 'tank' ? 40 : 30;
     this.x = W + randInt(50, 100);
@@ -552,6 +881,20 @@ export class Enemy {
       this.shootDelay = Math.max(300, randInt(1500, 3000) - (level - 1) * 100);
     }
     this.lastShot = time;
+
+    // level scaling: veterans fire twin bolts, tanks launch homing rockets
+    this.twinShot = (type === 'basic' || type === 'weaver')
+      && level >= 3 && randInt(1, 100) <= Math.min(60, 10 + level * 8);
+    this.level = level;
+    this.nextMineAt = time + randInt(4000, 7000); // tank minelaying (level 6+)
+    // afterburner dashes (hunters always lunge; light ships sometimes; tanks never)
+    this.canDash = level >= 2 && (type === 'hunter' || (type !== 'tank' && randInt(1, 100) <= 45));
+    this.boosting = false;
+    this.dashUntil = 0;
+    this.nextDashAt = time + randInt(2000, 5000);
+    this.rocketLauncher = type === 'tank' && level >= 4;
+    this.rocketDelay = Math.max(4500, 9500 - level * 400);
+    this.lastRocketAt = time + randInt(1500, 3500); // no volley right at spawn
   }
 
   takeDamage(dmg) {
@@ -620,7 +963,20 @@ export class Enemy {
       return;
     }
 
-    const m = world.speedMul * world.k;
+    // afterburner dash — mirrors the player's boost (flame stretches in draw)
+    this.boosting = world.time < this.dashUntil;
+    if (this.canDash && !this.boosting && world.time > this.nextDashAt
+        && !(this.warpUntil && world.time < this.warpUntil)) {
+      this.boosting = true;
+      this.dashUntil = world.time + randInt(500, 900);
+      this.nextDashAt = world.time + randInt(3500, 7500);
+    }
+    if (this.boosting && world.effects && world.time - (this.lastTrail || 0) > 30) {
+      this.lastTrail = world.time;
+      world.effects.push(new BoostParticle(this.x + this.w / 2 + 6, this.y, world.time, 'rgb(255,180,90)', 1));
+    }
+
+    const m = world.speedMul * world.k * (this.boosting ? 1.9 : 1);
     this.x += this.vx * m;
 
     if (this.type === 'weaver') {
@@ -643,8 +999,39 @@ export class Enemy {
 
     const warping = this.warpUntil && world.time < this.warpUntil;
     if (!warping && world.time - this.lastShot > this.shootDelay) {
-      world.enemyBullets.push(new EnemyBullet(this.x - this.w / 2, this.y, this.bulletImg));
+      const bx = this.x - this.w / 2;
+      if (this.twinShot) {
+        world.enemyBullets.push(new EnemyBullet(bx, this.y - 5, this.bulletImg));
+        world.enemyBullets.push(new EnemyBullet(bx, this.y + 5, this.bulletImg));
+      } else {
+        world.enemyBullets.push(new EnemyBullet(bx, this.y, this.bulletImg));
+      }
       this.lastShot = world.time;
+    }
+    // heavy tanks lob a slow homing rocket at the nearest player (shootable)
+    if (this.rocketLauncher && world.enemyRockets && !warping
+        && world.time - this.lastRocketAt > this.rocketDelay) {
+      this.lastRocketAt = world.time;
+      let target = null, minD = Infinity;
+      for (const p of world.players()) {
+        if (!p.alive) continue;
+        const d = Math.hypot(p.x - this.x, p.y - this.y);
+        if (d < minD) { minD = d; target = p; }
+      }
+      if (target) {
+        const rk = new Rocket(this.x - this.w / 2, this.y, this.rocketImg, target, 180);
+        rk.speed = 5.5;    // slower than the player's — dodgeable
+        rk.rotSpeed = 1.4;
+        rk.enemyFire = true;
+        world.enemyRockets.push(rk);
+        audio.play('rocket', 0.35);
+      }
+    }
+    // veteran tanks are minelayers too
+    if (this.type === 'tank' && this.level >= 6 && world.mines && !warping
+        && world.time > this.nextMineAt) {
+      this.nextMineAt = world.time + randInt(6000, 9000);
+      if (world.mines.length < 5) world.mines.push(new Mine(this.x + this.w / 2 + 10, this.y, world.time));
     }
     if (world.time - this.thrLast > 50) {
       this.thrLast = world.time;
@@ -654,21 +1041,22 @@ export class Enemy {
   }
 
   draw(g, world) {
+    const vw = this.w * VIS, vh = this.h * VIS;
     if (this.dying) {
       // falling wreck: no engine flame, darkened hull
       if (this.burning) drawGlow(g, glowEngine, this.x, this.y, 1.6 + 0.4 * Math.sin((world?.time ?? 0) / 90));
       g.save();
       g.translate(this.x, this.y);
       g.rotate((this.spinAngle * Math.PI) / 180);
-      g.drawImage(this.img, -this.w / 2, -this.h / 2, this.w, this.h);
+      g.drawImage(this.img, -vw / 2, -vh / 2, vw, vh);
       g.globalAlpha = 0.45;
       g.drawImage(tinted(this.img, 'rgba(0,0,0,1)', `black_enemy_${this.type}`),
-        -this.w / 2, -this.h / 2, this.w, this.h);
+        -vw / 2, -vh / 2, vw, vh);
       g.globalAlpha = 1;
       if (this.flash > 0.05) {
         g.globalAlpha = this.flash * 0.85;
         g.drawImage(tinted(this.img, 'rgba(255,255,255,1)', `white_enemy_${this.type}`),
-          -this.w / 2, -this.h / 2, this.w, this.h);
+          -vw / 2, -vh / 2, vw, vh);
         g.globalAlpha = 1;
       }
       g.restore();
@@ -687,24 +1075,32 @@ export class Enemy {
       g.globalAlpha = 0.3 + 0.7 * f;
     }
 
-    // flipped thruster on the right side (exhaust), like Enemy.update_thruster
+    // elite: pulsing golden aura + oversized gold copy peeking out as an outline
+    if (this.elite) {
+      const pulse = 0.85 + 0.25 * Math.sin(t / 130);
+      drawGlow(g, glowElite, this.x, this.y, 2.1 * pulse);
+      g.globalAlpha = 0.9;
+      g.drawImage(tinted(this.img, 'rgba(255,205,80,1)', `gold_enemy_${this.type}`),
+        this.x - (vw * 1.12) / 2, this.y - (vh * 1.12) / 2, vw * 1.12, vh * 1.12);
+      g.globalAlpha = 1;
+    }
+
+    // engine flames on the tail (right side of the left-facing sprite)
     const thr = this.thrusters[this.thrFrame];
-    drawGlow(g, glowEngine, this.x + this.w / 2 + 10, this.y);
     if (this.type === 'hunter') {
       // menacing pulsing red glow
       const pulse = 0.7 + 0.3 * Math.sin(t / 120);
       drawGlow(g, glowEnemyBullet, this.x, this.y, 2.6 * pulse);
     }
     g.save();
-    g.translate(this.x + this.w / 2 + 12, this.y);
-    g.scale(-1, 1);
-    g.drawImage(thr, -32, -32, 64, 64);
+    g.translate(this.x, this.y);
+    drawFlames(g, this.img, thr, vw, vh, { flip: true, boost: this.boosting });
     g.restore();
-    g.drawImage(this.img, this.x - this.w / 2, this.y - this.h / 2, this.w, this.h);
+    g.drawImage(this.img, this.x - vw / 2, this.y - vh / 2, vw, vh);
     if (this.flash > 0.05) {
       g.globalAlpha = warp ? 0.6 : this.flash * 0.85;
       g.drawImage(tinted(this.img, 'rgba(255,255,255,1)', `white_enemy_${this.type}`),
-        this.x - this.w / 2, this.y - this.h / 2, this.w, this.h);
+        this.x - vw / 2, this.y - vh / 2, vw, vh);
       g.globalAlpha = 1;
     }
     if (warp) {
@@ -749,12 +1145,55 @@ export class Boss {
     this.dead = false;
     this.isBoss = true;
     this.parked = false;
+
+    // modular live-rendered boss: generated hull + tracking turrets
+    this.gen = genBoss(level);
+    this.fit = fitTransform(this.gen.core, this.w, this.h, BOSS_VIEW, 0.9);
+    // pseudo-sprite so drawFlames() can anchor plumes on the live render
+    this.flameImg = {
+      width: this.w, height: this.h,
+      nozzles: this.gen.core.nozzles.map((n) => {
+        const p = projectPoint(BOSS_VIEW, this.fit, [n.x, n.y, n.z]);
+        return { x: p.x, y: p.y, r: n.r * p.s };
+      }),
+    };
+    this.thrusters = images.thrusters.enemy;
   }
 
   takeDamage(dmg) {
     this.health -= dmg;
     this.flash = 1;
     return this.health <= 0;
+  }
+
+  // Cinematic death: ~1.7s of chained hull explosions and shudder, then the
+  // final blast + 3D debris + levelUp. Started via world.killBoss().
+  startDeathSeq(world) {
+    if (this.deathSeq) return;
+    this.deathSeq = { start: world.time, last: 0 };
+    this.laser = null;
+    this.queue = [];
+    audio.playSynth('siren');
+  }
+
+  updateDeathSeq(world) {
+    const t = world.time - this.deathSeq.start;
+    this.x += 0.25 * world.k; // listing hull drifts back
+    if (world.time - this.deathSeq.last > 150) {
+      this.deathSeq.last = world.time;
+      const ex = this.x + (Math.random() - 0.5) * this.w * 0.7;
+      const ey = this.y + (Math.random() - 0.5) * this.h * 0.55;
+      world.explode(ex, ey, true, 0.6 + Math.random() * 0.5);
+      for (let i = 0; i < 4; i++) world.effects.push(new Spark(ex, ey, world.time, Math.PI));
+    }
+    if (t > 1700) {
+      this.dead = true;
+      world.explode(this.x, this.y, true, 2.6);
+      world.effects.push(new Shockwave(this.x, this.y, world.time, 380));
+      shatterSprite(world, { mesh: this.gen.core, fitScale: this.fit.scale, width: this.w },
+        this.x, this.y, this.w, { vis: 1, chunks: 8, vx: 0.4 });
+      world.levelUp(this.x, this.y);
+    }
   }
 
   nearestPlayer(world) {
@@ -813,6 +1252,7 @@ export class Boss {
   }
 
   update(world) {
+    if (this.deathSeq) { this.updateDeathSeq(world); return; }
     this.x += this.vx * world.speedMul * world.k;
     if (!this.parked && this.x + this.w / 2 <= W - 150) {
       this.vx = 0;
@@ -841,7 +1281,7 @@ export class Boss {
         // beam kills players crossing it
         for (const p of world.players()) {
           if (p.alive && p.x < this.x && Math.abs(p.y - this.laser.y) < 22) {
-            world.killPlayer(p);
+            world.killPlayer(p, this.x, p.y);
           }
         }
         if (world.time >= this.laser.until) {
@@ -861,6 +1301,32 @@ export class Boss {
       this.fire(this.queue.shift(), world);
     }
     if (this.flash > 0) this.flash = Math.max(0, this.flash - 0.07 * world.k);
+
+    // turrets swivel toward the nearest player
+    const tgt = this.nearestPlayer(world);
+    if (tgt) {
+      const want = aimYaw(Math.atan2(tgt.y - this.y, tgt.x - this.x));
+      for (const tr of this.gen.turrets) {
+        if (tr.dead) continue;
+        let d = (want - tr.yaw) % (Math.PI * 2);
+        if (d > Math.PI) d -= Math.PI * 2;
+        if (d < -Math.PI) d += Math.PI * 2;
+        tr.yaw += clamp(d, -tr.speed * world.k, tr.speed * world.k);
+      }
+    }
+    // modules blow off as health drops (one per step → cascading booms)
+    const alive = this.gen.turrets.filter((t2) => !t2.dead);
+    const keep = Math.max(0, Math.ceil(this.gen.turrets.length * Math.max(0, this.health) / this.maxHealth));
+    if (alive.length > keep) {
+      const tr = alive[alive.length - 1];
+      tr.dead = true;
+      const p = projectPoint(BOSS_VIEW, this.fit, tr.pivot);
+      const px = this.x - this.w / 2 + p.x, py = this.y - this.h / 2 + p.y;
+      world.effects.push(new Shockwave(px, py, world.time, 110));
+      for (let i = 0; i < 10; i++) world.effects.push(new Spark(px, py, world.time, Math.PI));
+      for (let i = 0; i < 4; i++) world.effects.push(new SmokeParticle(px, py, world.time));
+      audio.play('explosion', 0.5);
+    }
   }
 
   draw(g, world) {
@@ -899,28 +1365,33 @@ export class Boss {
       g.globalCompositeOperation = prev;
     }
 
-    g.drawImage(this.img, this.x - this.w / 2, this.y - this.h / 2, this.w, this.h);
+    // live modular render: engine flames → hull → turrets → hit-flash pass
+    // (a dying hull shudders)
+    const jx = this.deathSeq ? (Math.random() - 0.5) * 5 : 0;
+    const jy = this.deathSeq ? (Math.random() - 0.5) * 5 : 0;
+    const bx = this.x - this.w / 2 + jx, by = this.y - this.h / 2 + jy;
+    const thr = this.thrusters[(t / 55 | 0) % this.thrusters.length];
+    g.save();
+    g.translate(this.x, this.y);
+    drawFlames(g, this.flameImg, thr, this.w, this.h, { flip: true });
+    g.restore();
+    const base = { ...BOSS_VIEW, scale: this.fit.scale, x: bx + this.fit.x, y: by + this.fit.y };
+    renderMesh(g, this.gen.core, base);
+    for (const tr of this.gen.turrets) {
+      if (tr.dead) continue;
+      const p = projectPoint(BOSS_VIEW, this.fit, tr.pivot);
+      renderMesh(g, tr.mesh, { rx: BOSS_VIEW.rx, ry: tr.yaw, scale: this.fit.scale, x: bx + p.x, y: by + p.y });
+    }
     if (this.flash > 0.05) {
-      g.globalAlpha = this.flash * 0.75;
-      g.drawImage(this.whiteImg, this.x - this.w / 2, this.y - this.h / 2, this.w, this.h);
+      g.globalAlpha = this.flash * 0.6;
+      renderMesh(g, this.gen.core, { ...base, flat: [255, 255, 255] });
       g.globalAlpha = 1;
     }
 
-    // shield bubble while invulnerable
+    // hex shield bubble while invulnerable (ripples where bullets splash)
     if (this.shieldUntil > t) {
-      const prev = g.globalCompositeOperation;
-      g.globalCompositeOperation = 'lighter';
-      g.globalAlpha = 0.5 + 0.2 * Math.sin(t / 90);
-      g.lineWidth = 3;
-      g.strokeStyle = 'rgb(90,220,255)';
-      g.beginPath();
-      g.arc(this.x, this.y, this.w / 2 + 14, 0, Math.PI * 2);
-      g.stroke();
-      g.globalAlpha = 0.1;
-      g.fillStyle = 'rgb(90,220,255)';
-      g.fill();
-      g.globalAlpha = 1;
-      g.globalCompositeOperation = prev;
+      const rip = this.shieldRipple ? { a: this.shieldRipple.a, p: (t - this.shieldRipple.start) / 450 } : null;
+      drawShieldBubble(g, this.x, this.y, this.w / 2 + 14, t, 'rgb(90,220,255)', rip && rip.p < 1 ? rip : null);
     }
 
     // health bar
@@ -1103,10 +1574,11 @@ export class MuzzleFlash {
 /* -------------------------------- shockwave --------------------------------- */
 
 export class Shockwave {
-  constructor(x, y, time, maxR = 320) {
+  constructor(x, y, time, maxR = 320, color = 'rgb(255,200,110)') {
     this.x = x; this.y = y;
     this.spawn = time;
     this.maxR = maxR;
+    this.color = color;
     this.life = 700;
     this.dead = false;
   }
@@ -1120,7 +1592,7 @@ export class Shockwave {
     g.globalCompositeOperation = 'lighter';
     g.globalAlpha = 1 - t;
     g.lineWidth = 10 * (1 - t) + 1;
-    g.strokeStyle = 'rgb(255,200,110)';
+    g.strokeStyle = this.color;
     g.beginPath();
     g.arc(this.x, this.y, ease * this.maxR, 0, Math.PI * 2);
     g.stroke();

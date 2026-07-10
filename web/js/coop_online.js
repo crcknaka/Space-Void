@@ -8,9 +8,12 @@ import * as audio from './audio.js';
 import { Button, ButtonGroup, drawText } from './ui.js';
 import { BaseWorld } from './world.js';
 import { GameState, PLAYER_COLORS, playerShip, spawnY } from './game.js';
-import { Player, Explosion, RocketTrailParticle, SmokeParticle, Spark, LaserBeam, ScorePopup } from './entities.js';
-import { tinted, glowBullet, glowEnemyBullet, glowEngine, drawGlow } from './fx.js';
+import { Player, Explosion, RocketTrailParticle, SmokeParticle, Spark, LaserBeam, ScorePopup, WarpStreak, Comet, DistantConvoy, Freighter, drawFlames, drawMine, VIS } from './entities.js';
+import { tinted, glowBullet, glowEnemyBullet, glowEngine, glowElite, drawGlow, drawShieldBubble } from './fx.js';
+import { renderMesh, fitTransform, projectPoint } from './mesh3d.js';
+import { genBoss, BOSS_VIEW, aimYaw } from './bossgen.js';
 import { savedName } from './lb.js';
+import { makeSpaceBackdrop } from './bggen.js';
 
 const ETYPE = { basic: 0, weaver: 1, hunter: 2, tank: 3 };
 const ETINT = ['', 'rgba(0,230,190,0.35)', 'rgba(255,60,60,0.4)', 'rgba(190,110,255,0.42)'];
@@ -188,11 +191,16 @@ export class CoopHost {
           e.isBoss ? Math.round(Math.max(0, e.health) / Math.max(1, e.maxHealth) * 100) / 100 : 1, Math.round(e.w),
           Math.round((e.vx || 0) * m), Math.round((e.dying ? (e.vyFall || 0) : (e.vy || 0)) * m)];
         if (e.isBoss) row.push(e.laser ? (e.laser.phase === 'fire' ? 2 : 1) : 0, Math.round(e.laser ? e.laser.y : 0), e.shieldUntil > g.time ? 1 : 0);
+        else row.push(e.boosting ? 1 : 0, e.elite ? 1 : 0); // afterburner + elite aura on guests
         return row;
       }),
+      mi: g.mines.map((mn) => [Math.round(mn.x), Math.round(mn.y)]),
       eb: g.enemyBullets.map((b) => [Math.round(b.x), Math.round(b.y), Math.round(b.vx * m), Math.round(b.vy * m)]),
       pb: g.bullets.map((b) => [Math.round(b.x), Math.round(b.y), Math.round(b.vx), Math.round(b.vy)]),
-      ro: g.rockets.map((r) => [Math.round(r.x), Math.round(r.y), Math.round(r.angle)]),
+      ro: [
+        ...g.rockets.map((r) => [Math.round(r.x), Math.round(r.y), Math.round(r.angle)]),
+        ...g.enemyRockets.map((r) => [Math.round(r.x), Math.round(r.y), Math.round(r.angle), 1]),
+      ],
       as: g.asteroids.map((a) => [Math.round(a.x), Math.round(a.y), Math.round(a.w / 2), Math.round(a.angle),
         Math.round(-a.vx * m), Math.round(a.vy * m)]),
       pu: g.powerups.map((p) => [Math.round(p.x), Math.round(p.y), PU_TYPES.indexOf(p.type)]),
@@ -229,6 +237,10 @@ export class CoopGuest extends BaseWorld {
     const { images } = this.app;
     audio.playMusic('background_music');
     this.initBackdrop();
+    this._bgLv = 1;
+    this.bgOverride = makeSpaceBackdrop(1);
+    this.ambient = [];
+    this.nextAmbientAt = 15000 + Math.random() * 20000;
     this.disconnected = false;
     this.reconnecting = false;
     this.frame = 0;
@@ -244,9 +256,7 @@ export class CoopGuest extends BaseWorld {
     // so a new powerup type can never crash the guest with drawImage(undefined).
     this.puImg = {};
     for (const t of PU_TYPES) {
-      this.puImg[t] = t === 'shield' ? tinted(images.powerup, 'rgba(0,210,255,0.55)', 'powerup_shield')
-        : t === 'laser' ? tinted(images.powerup, 'rgba(90,140,255,0.6)', 'powerup_laser')
-        : (images[PU_IMG[t]] || images.powerup);
+      this.puImg[t] = images[PU_IMG[t]] || images[`${t}_powerup`] || images.powerup;
     }
     this.enemyTint = {};
 
@@ -336,8 +346,51 @@ export class CoopGuest extends BaseWorld {
     }
   }
 
+  // Live modular boss on the guest, cached per level: same generator as the
+  // host, turrets track this guest's own ship (visual approximation).
+  liveBoss(lv, w) {
+    if (!this._bv || this._bv.lv !== lv || this._bv.w !== w) {
+      const gen = genBoss(lv);
+      const fit = fitTransform(gen.core, w, w, BOSS_VIEW, 0.9);
+      this._bv = {
+        lv, w, gen, fit, yaw: Math.PI,
+        flameImg: {
+          width: w, height: w,
+          nozzles: gen.core.nozzles.map((n) => {
+            const p = projectPoint(BOSS_VIEW, fit, [n.x, n.y, n.z]);
+            return { x: p.x, y: p.y, r: n.r * p.s };
+          }),
+        },
+      };
+    }
+    return this._bv;
+  }
+
+  drawLiveBoss(g, cx, cy, w, hpFrac) {
+    const bv = this.liveBoss(this.snap?.lv || 1, w);
+    const want = aimYaw(Math.atan2(this.me.y - cy, this.me.x - cx));
+    let d = (want - bv.yaw) % (Math.PI * 2);
+    if (d > Math.PI) d -= Math.PI * 2;
+    if (d < -Math.PI) d += Math.PI * 2;
+    bv.yaw += clamp(d, -0.04 * this.k, 0.04 * this.k);
+    const bx = cx - w / 2, by = cy - w / 2;
+    const thr = this.app.images.thrusters.enemy[this.frame >> 2 & 3];
+    g.save(); g.translate(cx, cy); drawFlames(g, bv.flameImg, thr, w, w, { flip: true }); g.restore();
+    renderMesh(g, bv.gen.core, { ...BOSS_VIEW, scale: bv.fit.scale, x: bx + bv.fit.x, y: by + bv.fit.y });
+    const keep = Math.max(0, Math.ceil(bv.gen.turrets.length * hpFrac));
+    bv.gen.turrets.forEach((tr, i) => {
+      if (i >= keep) return;
+      const p = projectPoint(BOSS_VIEW, bv.fit, tr.pivot);
+      renderMesh(g, tr.mesh, { rx: BOSS_VIEW.rx, ry: bv.yaw, scale: bv.fit.scale, x: bx + p.x, y: by + p.y });
+    });
+  }
+
   tint(type, img) {
-    if (type === 0 || type === 4) return img;
+    if (type === 4) return img; // boss
+    // per-family generated sprites (same indices the host encodes)
+    const gen = this.app.images[`enemy_${['basic', 'weaver', 'hunter', 'tank'][type]}`];
+    if (gen) return gen;
+    if (type === 0) return img;
     const key = `enemy_${type}`;
     if (!this.enemyTint[key]) this.enemyTint[key] = tinted(this.app.images.enemy_ship, ETINT[type], key);
     return this.enemyTint[key];
@@ -395,6 +448,42 @@ export class CoopGuest extends BaseWorld {
         if (Math.random() < 0.25) this.effects.push(new Spark(e[0], e[1], this.time, -Math.PI / 2));
       }
     }
+    // ambient background flourishes (local visual only)
+    if (this.time > this.nextAmbientAt) {
+      this.nextAmbientAt = this.time + 18000 + Math.random() * 26000;
+      const roll = Math.random();
+      this.ambient.push(roll < 0.4 ? new Comet(this.time)
+        : roll < 0.7 ? new DistantConvoy(this.app.images, this.time)
+        : new Freighter(this.time));
+    }
+    for (const a of this.ambient) a.update(this);
+    this.ambient = this.ambient.filter((a) => !a.dead);
+
+    // follow the host's level: hyperspace hop into the new scene
+    const lv = this.snap?.lv || 1;
+    if (lv !== this._bgLv) {
+      this._bgLv = lv;
+      this.warp = { t: 0, swapped: false, dur: 2600 };
+      audio.playSynth('warp');
+    }
+    if (this.warp) {
+      this.warp.t += dt;
+      const p = this.warp.t / this.warp.dur;
+      if (p >= 1) {
+        this.warp = null;
+        this.warpMul = 1;
+      } else {
+        const env = p < 0.35 ? p / 0.35 : p > 0.65 ? (1 - p) / 0.35 : 1;
+        this.warpMul = 1 + 27 * env * env * (3 - 2 * env);
+        if (!this.warp.swapped && p >= 0.45) {
+          this.warp.swapped = true;
+          this.bgOverride = makeSpaceBackdrop(this._bgLv);
+        }
+        if (this.warpMul > 4) {
+          for (let i = 0; i < 2; i++) this.effects.push(new WarpStreak(this.time));
+        }
+      }
+    }
     for (const fx of this.effects) fx.update(this);
     this.effects = this.effects.filter((fx) => !fx.dead);
   }
@@ -422,33 +511,28 @@ export class CoopGuest extends BaseWorld {
   }
 
   drawShieldRing(g, x, y) {
-    const prev = g.globalCompositeOperation;
-    g.save();
-    g.globalCompositeOperation = 'lighter';
-    const r = 36 + 2 * Math.sin(this.time / 140);
-    g.globalAlpha = 0.55; g.lineWidth = 2.5; g.strokeStyle = 'rgb(80,220,255)';
-    g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.stroke();
-    g.globalAlpha = 0.12; g.fillStyle = 'rgb(80,220,255)'; g.fill();
-    g.restore();
-    g.globalCompositeOperation = prev;
+    drawShieldBubble(g, x, y, 36 + 2 * Math.sin(this.time / 140), this.time);
   }
 
   drawShip(g, img, thrusters, x, y, inv) {
     const thr = thrusters[this.frame >> 2 & 3];
+    const vw = 50 * VIS, vh = 30 * VIS;
     if (inv) g.globalAlpha = 0.5 + 0.25 * Math.sin(this.time / 55);
-    g.save(); g.translate(x - 25 - 12, y); g.drawImage(thr, -32, -32, 64, 64); g.restore();
-    g.drawImage(img, x - 25, y - 15, 50, 30);
+    g.save(); g.translate(x, y); drawFlames(g, img, thr, vw, vh); g.restore();
+    g.drawImage(img, x - vw / 2, y - vh / 2, vw, vh);
     g.globalAlpha = 1;
   }
 
   draw(g) {
     const { images } = this.app;
     this.drawBackdrop(g);
+    for (const a of this.ambient) a.draw(g, this);
     const s = this.snap;
 
     if (s) {
       const ex = Math.min(this.time - (this.snapAt || this.time), 90) / STEP;
       for (const p of s.pu) { const img = this.puImg[PU_TYPES[p[2]]] || images.powerup; g.drawImage(img, p[0] - 30, p[1] - 15, 60, 30); }
+      for (const mn of s.mi || []) drawMine(g, mn[0], mn[1], this.time);
       for (const a of s.as) { const ax = a[0] + (a[4] || 0) * ex, ay = a[1] + (a[5] || 0) * ex; g.save(); g.translate(ax, ay); g.rotate(a[3] * Math.PI / 180); g.drawImage(images.asteroid, -a[2], -a[2], a[2] * 2, a[2] * 2); g.restore(); }
       const thr = images.thrusters.enemy[this.frame >> 2 & 3];
       for (const e of s.en) {
@@ -456,21 +540,25 @@ export class CoopGuest extends BaseWorld {
         const cx = e[0] + (e[6] || 0) * ex, cy = e[1] + (e[7] || 0) * ex;
         if (e[2] === 4) this.drawBossLaser(g, cx, w, e[8] || 0, e[9] || 0); // laser behind the boss
         if (e[3]) g.globalAlpha = 0.6;
-        if (e[2] !== 4) { g.save(); g.translate(cx + w / 2 + 12, cy); g.scale(-1, 1); g.drawImage(thr, -32, -32, 64, 64); g.restore(); }
-        g.drawImage(this.tint(e[2], e[2] === 4 ? images.boss : images.enemy_ship), cx - w / 2, cy - h / 2, w, h);
+        if (e[2] === 4) {
+          this.drawLiveBoss(g, cx, cy, w, e[4]);
+        } else {
+          const img = this.tint(e[2], images.enemy_ship);
+          const vw = w * VIS, vh = h * VIS;
+          if (e[9]) drawGlow(g, glowElite, cx, cy, 2 + 0.4 * Math.sin(this.time / 130)); // elite aura
+          g.save(); g.translate(cx, cy); drawFlames(g, img, thr, vw, vh, { flip: true, boost: !!e[8] }); g.restore();
+          g.drawImage(img, cx - vw / 2, cy - vh / 2, vw, vh);
+        }
         g.globalAlpha = 1;
         if (e[2] === 4) {
-          if (e[10]) { // shield ring
-            g.save(); g.globalCompositeOperation = 'lighter'; g.globalAlpha = 0.5 + 0.2 * Math.sin(this.time / 90);
-            g.strokeStyle = 'rgb(90,220,255)'; g.lineWidth = 3; g.beginPath(); g.arc(cx, cy, w / 2 + 14, 0, Math.PI * 2); g.stroke(); g.restore();
-          }
+          if (e[10]) drawShieldBubble(g, cx, cy, w / 2 + 14, this.time, 'rgb(90,220,255)');
           const bw = 120; g.fillStyle = 'rgba(255,255,255,0.25)'; g.fillRect(cx - bw / 2, cy - h / 2 - 14, bw, 8);
           g.fillStyle = e[10] ? 'rgb(90,220,255)' : '#f33'; g.fillRect(cx - bw / 2, cy - h / 2 - 14, bw * e[4], 8);
         }
       }
       for (const b of s.pb) { const x = b[0] + (b[2] || 0) * ex, y = b[1] + (b[3] || 0) * ex; drawGlow(g, glowBullet, x, y); g.drawImage(images.bullet, x - 5, y - 2.5, 10, 5); }
       for (const b of s.eb) { const x = b[0] + (b[2] || 0) * ex, y = b[1] + (b[3] || 0) * ex; drawGlow(g, glowEnemyBullet, x, y); g.drawImage(images.enemy_bullet, x - 5, y - 2.5, 10, 5); }
-      for (const r of s.ro) { const rad = r[2] * Math.PI / 180, x = r[0] + 8 * Math.cos(rad) * ex, y = r[1] + 8 * Math.sin(rad) * ex; drawGlow(g, glowEngine, x, y, 0.8); g.save(); g.translate(x, y); g.rotate(rad); g.drawImage(images.rocket, -10, -5, 20, 10); g.restore(); }
+      for (const r of s.ro) { const rad = r[2] * Math.PI / 180, sp = r[3] ? 5.5 : 8, x = r[0] + sp * Math.cos(rad) * ex, y = r[1] + sp * Math.sin(rad) * ex; drawGlow(g, glowEngine, x, y, 0.8); g.save(); g.translate(x, y); g.rotate(rad); g.drawImage(r[3] ? images.enemy_rocket : images.rocket, -10, -5, 20, 10); g.restore(); }
       for (const fx of this.effects) fx.draw(g, this);
 
       // players: others from snapshot, self predicted (+ shield bubbles + names)

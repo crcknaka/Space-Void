@@ -1,15 +1,11 @@
-// Image preloader (mirrors game_assets.py)
+// Image preloader. Only the big background paintings still load from PNG —
+// every sprite (ships, bullets, power-ups, explosion, thruster flames) is
+// generated procedurally at boot by procassets.js.
 const LIST = [
-  ['player1_ship', 'png'], ['player2_ship', 'png'], ['enemy_ship', 'png'], ['boss', 'png'],
-  ['bullet', 'png'], ['enemy_bullet', 'png'], ['rocket', 'png'], ['asteroid', 'png'],
-  ['powerup', 'png'], ['slow_motion_powerup', 'png'], ['kill_all_powerup', 'png'],
-  ['spread_powerup', 'png'], ['rocket_powerup', 'png'],
-  ['explosion_spritesheet', 'png'],
-  ['menu_background', 'png'], ['game_background', 'png'], ['versus_background', 'png'],
-  ['player1_thruster_1', 'png'], ['player1_thruster_2', 'png'], ['player1_thruster_3', 'png'], ['player1_thruster_4', 'png'],
-  ['player2_thruster_1', 'png'], ['player2_thruster_2', 'png'], ['player2_thruster_3', 'png'], ['player2_thruster_4', 'png'],
-  ['enemy_thruster_1', 'png'], ['enemy_thruster_2', 'png'], ['enemy_thruster_3', 'png'], ['enemy_thruster_4', 'png'],
+  ['menu_background', 'png'],
 ];
+
+export const IMG_COUNT = LIST.length;
 
 export async function loadImages(onProgress) {
   const images = {};
@@ -25,10 +21,5 @@ export async function loadImages(onProgress) {
       })
     )
   );
-  images.thrusters = {
-    player1: [1, 2, 3, 4].map((i) => images[`player1_thruster_${i}`]),
-    player2: [1, 2, 3, 4].map((i) => images[`player2_thruster_${i}`]),
-    enemy: [1, 2, 3, 4].map((i) => images[`enemy_thruster_${i}`]),
-  };
   return images;
 }

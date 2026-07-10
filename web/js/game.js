@@ -6,6 +6,7 @@ import { Button, ButtonGroup, drawText } from './ui.js';
 import { BaseWorld } from './world.js';
 import {
   Player, Enemy, Boss, Asteroid, PowerUp, Explosion, Spark, Shockwave,
+  Mine, MeshDebris, shatterSprite, Comet, DistantConvoy, Freighter, WarpStreak,
   LaserBeam, ScorePopup,
   POWERUP_TYPES, POWERUP_IMG,
 } from './entities.js';
@@ -13,6 +14,7 @@ import { makeNebulaField, tinted } from './fx.js';
 import { askName, submitScore, savedName } from './lb.js';
 import { bumpStats, vibrate } from './settings.js';
 import { dailySeed, todayMod, useDailyAttempt, dailyAttemptsLeft } from './daily.js';
+import { makeSpaceBackdrop } from './bggen.js';
 
 const P1_CONTROLS = {
   up: 'KeyW', down: 'KeyS', left: 'KeyA', right: 'KeyD',
@@ -63,6 +65,7 @@ export class GameState extends BaseWorld {
     this.initBackdrop();
     this.score = 0;
     this.level = 1;
+    if (!this.app.debugNoBg) this.bgOverride = makeSpaceBackdrop(this.app.debugBg || this.level); // per-level procedural scene
     this.nextBossScore = 100;
     this.bossSpawned = false;
     this.slowMoEnd = 0;
@@ -70,6 +73,10 @@ export class GameState extends BaseWorld {
     this.bullets = [];
     this.rockets = [];
     this.enemyBullets = [];
+    this.enemyRockets = []; // homing rockets fired by high-level tanks
+    this.mines = [];         // proximity mines laid by veteran tanks (level 6+)
+    this.ambient = [];       // background flourishes: comets, distant convoys
+    this.nextAmbientAt = 12000 + Math.random() * 20000;
     this.enemies = [];       // includes boss
     this.asteroids = [];
     this.powerups = [];
@@ -83,9 +90,9 @@ export class GameState extends BaseWorld {
     this.bossReadyAt = 30000; // min wave time before the first boss
     this.runPowerups = 0;
     this.toasts = this.toasts || [];
-    // tinted powerup sprites (shield = cyan, laser = electric blue)
-    this.shieldImg = tinted(images.powerup, 'rgba(0,210,255,0.55)', 'powerup_shield');
-    this.laserImg = tinted(images.powerup, 'rgba(90,140,255,0.6)', 'powerup_laser');
+    // dedicated generated pods; tint fallback if the generator didn't run
+    this.shieldImg = images.shield_powerup || tinted(images.powerup, 'rgba(0,210,255,0.55)', 'powerup_shield');
+    this.laserImg = images.laser_powerup || tinted(images.powerup, 'rgba(90,140,255,0.6)', 'powerup_laser');
 
     this.enemyInterval = 2000;
     this.asteroidInterval = 5000;
@@ -99,6 +106,15 @@ export class GameState extends BaseWorld {
     this.overAlpha = 0;
     this.overMenu = null;
     this.levelBanner = null;
+
+    // debug (?boss=N): instant beefed-up boss of level N for visual tuning
+    if (this.app.debugBoss) {
+      this.level = this.app.debugBoss;
+      const b = new Boss(images, this.level, 0);
+      b.health = b.maxHealth = b.maxHealth * 6;
+      this.enemies.push(b);
+      this.bossSpawned = true;
+    }
 
     // Build the player list. Local: 1 (single) or 2 (co-op) with keyboard
     // controls. Online co-op host: 1 local host + N guest-controlled ships
@@ -190,6 +206,45 @@ export class GameState extends BaseWorld {
     audio.playSynth('achieve');
   }
 
+  // Elite: golden aura, triple hp/points, guaranteed power-up drop on death.
+  makeElite(e) {
+    e.elite = true;
+    e.health = Math.max(2, e.health * 3);
+    e.points *= 3;
+  }
+
+  // Materialise an enemy just inside the right edge with a warp-in ring
+  // (enemies used to drift in from off-screen — invisible spawns).
+  introEnemy(e, opts = {}) {
+    if (this.mod?.enemySpeed) e.vx *= this.mod.enemySpeed;
+    if (this.mod?.shootRate) e.shootDelay = Math.max(250, e.shootDelay * this.mod.shootRate);
+    e.x = opts.x ?? W - randInt(40, 90);
+    if (opts.dy) e.y = clamp(e.y + opts.dy, e.h / 2, H - e.h / 2);
+    e.warpUntil = this.time + 550;
+    this.effects.push(new Shockwave(e.x, e.y, this.time, e.elite ? 95 : 60,
+      e.elite ? 'rgb(255,210,90)' : 'rgb(255,150,80)'));
+    for (let i = 0; i < 4; i++) this.effects.push(new Spark(e.x, e.y, this.time, Math.PI));
+    this.enemies.push(e);
+  }
+
+  // Wedge formation: a leader and two wingmen, dashes synchronized.
+  spawnWedge() {
+    const mk = () => new Enemy(this.app.images, this.level, 'basic', this.time, false);
+    const bx = W - randInt(70, 100);
+    const lead = mk();
+    lead.y = clamp(lead.y, 100, H - 100);
+    if (this.level >= 3 && randInt(1, 100) <= 12) this.makeElite(lead);
+    this.introEnemy(lead, { x: bx });
+    for (const s of [1, -1]) {
+      const wing = mk();
+      wing.y = lead.y;
+      wing.vx = lead.vx;
+      wing.canDash = lead.canDash;
+      wing.nextDashAt = lead.nextDashAt;
+      this.introEnemy(wing, { x: bx + 48, dy: s * 44 });
+    }
+  }
+
   pickEnemyType() {
     const r = rand(0, 100);
     if (this.mod?.tankBias && r < 35) return 'tank';               // HEAVY ARMOR day
@@ -235,14 +290,17 @@ export class GameState extends BaseWorld {
         this.explode(e.x, e.y, true, 1.1);
         continue;
       }
-      if (e.isBoss && e.shieldUntil > this.time) continue; // shield eats it
+      if (e.isBoss && e.deathSeq) continue; // already going down
+      if (e.isBoss && e.shieldUntil > this.time) { // shield eats the beam
+        e.shieldRipple = { a: Math.PI, start: this.time };
+        audio.playSynth('shield_hit');
+        continue;
+      }
       if (e.takeDamage(2)) {
         this.addKill(e.points, e.x, e.y);
         this.pushToasts(bumpStats({ kills: 1 }));
         if (e.isBoss) {
-          e.dead = true;
-          this.explode(e.x, e.y, true, 2.5);
-          this.levelUp(e.x, e.y);
+          this.killBoss(e);
         } else {
           e.dead = true;
           this.explode(e.x, e.y, true, e.type === 'tank' ? 1.5 : 1);
@@ -281,13 +339,14 @@ export class GameState extends BaseWorld {
     if (sound) audio.play('explosion', 0.5);
   }
 
-  killPlayer(p) {
+  killPlayer(p, hx, hy) {
     if (this.app.debugGod) return;
     if (this.time < (p.invulnUntil || 0)) return;
     this.resetCombo();
     if (p.shield) {
-      // shield absorbs the hit
+      // shield absorbs the hit — hex bubble ripples out from the impact point
       p.shield = false;
+      p.shieldRipple = { a: hx !== undefined ? Math.atan2(hy - p.y, hx - p.x) : Math.PI, start: this.time };
       p.invulnUntil = this.time + 1200;
       this.spawnSparks(p.x, p.y, 16);
       audio.playSynth('shield_pop');
@@ -296,11 +355,18 @@ export class GameState extends BaseWorld {
       return;
     }
     this.explode(p.x, p.y, true, 1.6);
+    shatterSprite(this, p.img, p.x, p.y, p.w, { ry: 0, vx: -0.5 });
     vibrate(140);
     this.dmgFlash = 1; // red screen-edge pulse
     p.alive = false;
     p.lives -= 1;
     if (p.lives > 0) p.respawnAt = this.time + 1500;
+  }
+
+  // Boss defeat → cinematic death sequence (entities.Boss.updateDeathSeq
+  // spawns the chained explosions and calls levelUp at the final blast).
+  killBoss(boss) {
+    if (!boss.deathSeq) boss.startDeathSeq(this);
   }
 
   // combo: consecutive kills raise the score multiplier (up to x5); resets on hit or 4s idle
@@ -336,13 +402,16 @@ export class GameState extends BaseWorld {
     for (const p of this.players()) { p.rockets += 3; p.lasers += 1; }
     // breather: no new spawns for a few seconds
     this.spawnHoldUntil = this.time + 4000;
-    // fresh nebula palette + planet zoom step for the new level
+    // fresh scene for the new level arrives via a hyperspace hop (after the
+    // slow-mo): accelerate → swap the backdrop at peak speed → brake. The
+    // heavy canvas generation lands mid-streak where a hitch can't be seen.
     this.nebulaHue = (170 + (this.level - 1) * 47) % 360;
-    this.nebulae = makeNebulaField(3, this.nebulaHue);
+    this.warpAt = this.time + 1500;
     this.bgZoomTarget = 1 + ((this.level - 1) % 4) * 0.05;
-    // celebration: shockwave + hit-stop (a juicy ~90ms world freeze) + banner
+    // celebration: shockwave + smooth slow-mo dip + soft flash + banner
     this.effects.push(new Shockwave(x ?? W / 2, y ?? H / 2, this.time));
-    this.freezeLeft = 90;
+    this.slowmo = { t: 0, dur: 1400 };
+    this.killFlash = 1;
     this.levelBanner = { level: this.level, start: this.time };
     this.logEvent('LEVELUP (boss killed)');
     audio.playSynth('fanfare');
@@ -351,6 +420,14 @@ export class GameState extends BaseWorld {
   }
 
   update(dt) {
+    // boss-kill celebration: the world eases into ~15% speed and back out
+    // over 1.4s (sin dip) — reads as drama, not as a frame hitch
+    if (this.slowmo && !this.over) {
+      this.slowmo.t += dt;
+      const p = this.slowmo.t / this.slowmo.dur;
+      if (p >= 1) this.slowmo = null;
+      else dt *= 1 - (this.slowmo.depth ?? 0.85) * Math.pow(Math.sin(p * Math.PI), 0.6);
+    }
     this.k = dt / STEP;
 
     if (!this.over && this.handlePause()) return;
@@ -360,26 +437,55 @@ export class GameState extends BaseWorld {
       return;
     }
 
-    // hit-stop: brief dramatic world freeze (boss kill); HUD/banners keep drawing
-    if (this.freezeLeft > 0) {
-      this.freezeLeft -= dt;
-      return;
-    }
-
     this.time += dt;
     if (this.daily) this.maybeConsumeDaily(); // charge once the run is committed, any exit path
+
+    // hyperspace hop between levels: accelerate → swap the scene at peak
+    // speed (the canvas-generation hitch hides in the streaks) → brake
+    if (this.warpAt && this.time >= this.warpAt) {
+      this.warpAt = 0;
+      this.warp = { t: 0, swapped: false, dur: 2600 };
+      audio.playSynth('warp');
+      this._zoomAfterWarp = this.bgZoomTarget;
+      this.bgZoomTarget += 0.1;        // subtle camera push while streaking
+      this.spawnPlanet(W + 60);        // a star system sweeps past mid-jump
+    }
+    if (this.warp) {
+      this.warp.t += dt;
+      const p = this.warp.t / this.warp.dur;
+      if (p >= 1) {
+        this.warp = null;
+        this.warpMul = 1;
+        if (this._zoomAfterWarp != null) { this.bgZoomTarget = this._zoomAfterWarp; this._zoomAfterWarp = null; }
+      } else {
+        const env = p < 0.35 ? p / 0.35 : p > 0.65 ? (1 - p) / 0.35 : 1; // trapezoid
+        this.warpMul = 1 + 27 * env * env * (3 - 2 * env);               // smoothstep edges
+        if (!this.warp.swapped && p >= 0.45) {
+          this.warp.swapped = true;
+          if (!this.app.debugNoBg) this.bgOverride = makeSpaceBackdrop(this.app.debugBg || this.level);
+          this.nebulae = makeNebulaField(3, this.nebulaHue);
+          this.killFlash = Math.max(this.killFlash || 0, 0.45); // soft blink at the jump
+        }
+        // streak density scales with speed
+        const nS = this.warpMul > 4 ? Math.min(4, Math.round(this.warpMul / 7)) : 0;
+        for (let i = 0; i < nS; i++) this.effects.push(new WarpStreak(this.time));
+      }
+    }
 
     // --- spawn timers (pygame USEREVENT timers); paused during the post-boss breather ---
     const spawningAllowed = this.time >= this.spawnHoldUntil;
     this.enemyAcc += dt;
     if (this.enemyAcc >= this.enemyInterval * (this.mod?.enemyRate || 1) && spawningAllowed) {
       this.enemyAcc = 0;
-      const chance = Math.min(10 + (this.level - 1) * 5, 100);
-      const moveRandomly = randInt(1, 100) <= chance;
-      const e = new Enemy(this.app.images, this.level, this.pickEnemyType(), this.time, moveRandomly);
-      if (this.mod?.enemySpeed) e.vx *= this.mod.enemySpeed;
-      if (this.mod?.shootRate) e.shootDelay = Math.max(250, e.shootDelay * this.mod.shootRate);
-      this.enemies.push(e);
+      if (this.level >= 2 && rand(0, 100) < 14 && !this.mod?.lightOnly) {
+        this.spawnWedge(); // a wedge of three warps in as one formation
+      } else {
+        const chance = Math.min(10 + (this.level - 1) * 5, 100);
+        const moveRandomly = randInt(1, 100) <= chance;
+        const e = new Enemy(this.app.images, this.level, this.pickEnemyType(), this.time, moveRandomly);
+        if (this.level >= 2 && randInt(1, 100) <= 6) this.makeElite(e);
+        this.introEnemy(e);
+      }
     }
     this.powerupAcc += dt;
     if (this.powerupAcc >= this.powerupInterval && spawningAllowed) {
@@ -411,6 +517,9 @@ export class GameState extends BaseWorld {
         this.enemies.push(boss);
         this.bossSpawned = true;
         for (const p of this.players()) p.rockets += 3;
+        // dramatic entrance: red warp ring + screen shake
+        this.effects.push(new Shockwave(W - 60, boss.y, this.time, 300, 'rgb(255,90,90)'));
+        this.shake = Math.min(12, this.shake + 8);
       }
     }
 
@@ -423,8 +532,21 @@ export class GameState extends BaseWorld {
         p.y = spawnY(p.slot || 0, this.playerList.length);
         p.invulnUntil = this.time + 2500;
         audio.playSynth('respawn');
+        // warp-in flourish: cyan ring + sparks at the spawn point
+        this.effects.push(new Shockwave(p.x, p.y, this.time, 90, 'rgb(90,220,255)'));
+        for (let i = 0; i < 8; i++) this.effects.push(new Spark(p.x, p.y, this.time, Math.PI));
       }
     }
+
+    // --- ambient background flourishes (visual only, Math.random by design) ---
+    if (this.time > this.nextAmbientAt) {
+      this.nextAmbientAt = this.time + 18000 + Math.random() * 26000;
+      const roll = Math.random();
+      this.ambient.push(roll < 0.4 ? new Comet(this.time)
+        : roll < 0.7 ? new DistantConvoy(this.app.images, this.time)
+        : new Freighter(this.time));
+    }
+    for (const a of this.ambient) a.update(this);
 
     // --- backdrop + shake + combo/banner timers ---
     this.updateBackdrop(dt);
@@ -438,6 +560,11 @@ export class GameState extends BaseWorld {
     this.handleTouch();
     for (const b of this.bullets) b.update(this);
     for (const r of this.rockets) r.update(this);
+    for (const r of this.enemyRockets) r.update(this);
+    for (const m of this.mines) {
+      m.update(this);
+      if (!m.dead && this.time > m.expireAt) { m.dead = true; this.explode(m.x, m.y, false, 0.7); }
+    }
     for (const b of this.enemyBullets) b.update(this);
     for (const e of this.enemies) e.update(this);
     for (const a of this.asteroids) a.update(this);
@@ -453,9 +580,21 @@ export class GameState extends BaseWorld {
       this.slowMoEnd = 0;
     }
 
+    // 3D wreckage + guaranteed elite drops for ships destroyed on-screen
+    for (const e of this.enemies) {
+      if (e.dead && !e.isBoss && !e._shattered && e.x > -e.w && e.x < W + e.w * 1.5) {
+        e._shattered = true;
+        shatterSprite(this, e.img, e.x, e.y, e.w, { vx: e.vx * 0.5 });
+        if (e.elite) this.dropPowerup(e.x, e.y);
+      }
+    }
+
     // --- cleanup ---
     this.bullets = this.bullets.filter((s) => !s.dead);
     this.rockets = this.rockets.filter((s) => !s.dead);
+    this.enemyRockets = this.enemyRockets.filter((s) => !s.dead);
+    this.mines = this.mines.filter((s) => !s.dead);
+    this.ambient = this.ambient.filter((s) => !s.dead);
     this.enemyBullets = this.enemyBullets.filter((s) => !s.dead);
     this.enemies = this.enemies.filter((s) => !s.dead);
     this.asteroids = this.asteroids.filter((s) => !s.dead);
@@ -546,7 +685,16 @@ export class GameState extends BaseWorld {
           if (b.dead || !overlap(enemy, b, enemy.isBoss ? 0.78 : 0.9)) continue;
           b.dead = true;
           this.spawnSparks(b.x, b.y, isRocket ? 16 : 8);
-          if (enemy.isBoss && enemy.shieldUntil > this.time) continue; // shield phase absorbs the hit
+          if (enemy.isBoss && enemy.deathSeq) { b.dead = true; continue; } // going down — hull soaks shots
+          if (enemy.isBoss && enemy.shieldUntil > this.time) {
+            // splash ripple + zap where the shot hit (pinged at most every 90ms)
+            enemy.shieldRipple = { a: Math.atan2(b.y - enemy.y, b.x - enemy.x), start: this.time };
+            if (this.time > (this._shieldPingAt || 0)) {
+              this._shieldPingAt = this.time + 90;
+              audio.playSynth('shield_hit');
+            }
+            continue;
+          }
           const killed = enemy.takeDamage(dmg);
           if (!killed) {
             // survived the hit: flash + tiny kick, no explosion
@@ -557,9 +705,7 @@ export class GameState extends BaseWorld {
           this.addKill(enemy.points + (isRocket ? 10 : 0), enemy.x, enemy.y);
           this.pushToasts(bumpStats({ kills: 1 }));
           if (enemy.isBoss) {
-            enemy.dead = true;
-            this.explode(enemy.x, enemy.y, true, 2.5);
-            this.levelUp(enemy.x, enemy.y);
+            this.killBoss(enemy);
           } else {
             if (enemy.type === 'tank' && rand(0, 1) < 0.4) this.dropPowerup(enemy.x, enemy.y);
             if (rand(0, 1) < 0.45) {
@@ -576,6 +722,33 @@ export class GameState extends BaseWorld {
           break;
         }
         if (enemy.dead || enemy.dying) break;
+      }
+    }
+
+    // player bullets shoot down incoming enemy rockets (+5 pts)
+    for (const r of this.enemyRockets) {
+      if (r.dead) continue;
+      for (const b of this.bullets) {
+        if (b.dead || !overlap(r, b, 1.1)) continue;
+        b.dead = true;
+        r.dead = true;
+        this.explode(r.x, r.y, true, 0.8);
+        this.addKill(5, r.x, r.y);
+        this.spawnSparks(r.x, r.y, 8);
+        break;
+      }
+    }
+
+    // bullets vs mines: pop them from a distance (+5 pts)
+    for (const m of this.mines) {
+      if (m.dead) continue;
+      for (const b of this.bullets) {
+        if (b.dead || !overlap(m, b, 1)) continue;
+        b.dead = true;
+        m.dead = true;
+        this.explode(m.x, m.y, true, 0.9);
+        this.addKill(5, m.x, m.y);
+        break;
       }
     }
 
@@ -641,9 +814,7 @@ export class GameState extends BaseWorld {
           this.spawnSparks(w.x, w.y, 12);
           this.explode(w.x, w.y, true, 1.1);
           if (e.shieldUntil <= this.time && e.takeDamage(1)) {
-            e.dead = true;
-            this.explode(e.x, e.y, true, 2.5);
-            this.levelUp(e.x, e.y);
+            this.killBoss(e);
           }
         } else {
           // chain kill — the wreck takes a live fighter with it (score counts!)
@@ -669,19 +840,45 @@ export class GameState extends BaseWorld {
     for (const p of this.players()) {
       if (!p.alive) continue;
       for (const b of this.enemyBullets) {
-        if (!b.dead && overlap(p, b, 0.8)) { b.dead = true; this.killPlayer(p); break; }
+        if (!b.dead && overlap(p, b, 0.8)) { b.dead = true; this.killPlayer(p, b.x, b.y); break; }
+        // near miss — a bolt whisks right past the hull: brief soft slow-mo
+        if (!b.dead && !b._nm && !this.slowmo && this.time > (this._nmCooldown || 0)
+            && this.time > (p.invulnUntil || 0)
+            && Math.abs(b.x - p.x) < 34 && Math.abs(b.y - p.y) < 28) {
+          b._nm = true;
+          this._nmCooldown = this.time + 2600;
+          this.slowmo = { t: 0, dur: 520, depth: 0.55 };
+        }
+      }
+      if (!p.alive) continue;
+      for (const r of this.enemyRockets) {
+        if (!r.dead && overlap(p, r, 0.85)) {
+          r.dead = true;
+          this.explode(r.x, r.y, true, 0.8);
+          this.killPlayer(p, r.x, r.y);
+          break;
+        }
+      }
+      if (!p.alive) continue;
+      for (const m of this.mines) {
+        if (!m.dead && overlap(p, m, 0.9)) {
+          m.dead = true;
+          this.explode(m.x, m.y, true, 1.2);
+          this.killPlayer(p, m.x, m.y);
+          break;
+        }
       }
       if (!p.alive) continue;
       for (const e of this.enemies) {
         if (e.dead || (e.warpUntil && this.time < e.warpUntil) || !overlap(p, e, 0.8)) continue;
         // falling wrecks are deadly too; the boss survives ramming (only the player dies)
         if (!e.isBoss) { e.dead = true; this.explode(e.x, e.y, false); }
-        this.killPlayer(p);
+        this.killPlayer(p, e.x, e.y);
         break;
       }
       if (!p.alive) continue;
       for (const a of this.asteroids) {
-        if (!a.dead && overlap(p, a, 0.75)) { a.dead = true; this.killPlayer(p); break; }
+        if (!a.dead && overlap(p, a, 0.75)) { a.dead = true; this.killPlayer(p, a.x, a.y); break; }
       }
       if (!p.alive) continue;
 
@@ -710,12 +907,19 @@ export class GameState extends BaseWorld {
     this.runPowerups += 1;
     this.pushToasts(bumpStats({ maxRunPowerups: this.runPowerups }));
     const NAME = { shooting: 'RAPID FIRE', slow_motion: 'SLOW-MO', kill_all: 'NUKE', rocket: '+ROCKET', spread: 'SPREAD+', shield: 'SHIELD', laser: '+LASER' };
-    this.popup(p.x, p.y - 28, NAME[type] || type.toUpperCase(), 'rgb(120,255,180)');
+    const RING = {
+      shooting: 'rgb(110,255,120)', slow_motion: 'rgb(255,180,60)', kill_all: 'rgb(255,80,200)',
+      rocket: 'rgb(255,95,80)', spread: 'rgb(255,220,80)', shield: 'rgb(0,210,255)', laser: 'rgb(90,160,255)',
+    };
+    this.popup(p.x, p.y - 28, NAME[type] || type.toUpperCase(), RING[type] || 'rgb(120,255,180)');
+    this.effects.push(new Shockwave(p.x, p.y, this.time, 70, RING[type] || 'rgb(120,255,180)'));
     if (type === 'shooting') { p.powerUp(this); audio.play('powerup', 0.6); }
     else if (type === 'slow_motion') { this.speedMul = 0.5; this.slowMoEnd = this.time + 10000; audio.play('powerup', 0.6); }
     else if (type === 'kill_all') {
       for (const e of this.enemies) if (!e.isBoss && !e.dead && !e.dying) { e.dead = true; this.explode(e.x, e.y, false); }
       for (const a of this.asteroids) if (!a.dead) { a.dead = true; this.explode(a.x, a.y, false); }
+      for (const r of this.enemyRockets) if (!r.dead) { r.dead = true; this.explode(r.x, r.y, false, 0.8); }
+      for (const m of this.mines) if (!m.dead) { m.dead = true; this.explode(m.x, m.y, false, 0.8); }
       audio.play('explosion', 0.6);
     }
     else if (type === 'rocket') { p.rockets += 1; audio.play('powerup', 0.6); }
@@ -780,14 +984,17 @@ export class GameState extends BaseWorld {
     }
 
     this.drawBackdrop(g);
+    for (const a of this.ambient) a.draw(g, this);
 
     for (const pu of this.powerups) pu.draw(g, this);
     for (const a of this.asteroids) a.draw(g);
+    for (const m of this.mines) m.draw(g, this);
     for (const e of this.enemies) e.draw(g, this);
     for (const b of this.bullets) b.draw(g);
     for (const b of this.enemyBullets) b.draw(g);
     for (const fx of this.effects) fx.draw(g, this);
     for (const r of this.rockets) r.draw(g);
+    for (const r of this.enemyRockets) r.draw(g);
     for (const p of this.players()) p.draw(g, this);
     g.restore();
 
@@ -795,6 +1002,26 @@ export class GameState extends BaseWorld {
     if (this.speedMul < 1) {
       g.fillStyle = 'rgba(80,150,255,0.08)';
       g.fillRect(0, 0, W, H);
+    }
+
+    // hyperspace: tunnel overlay — bright rushing core, edges falling dark
+    if (this.warp && this.warpMul > 3) {
+      const a = Math.min(1, (this.warpMul - 3) / 24);
+      const grad = g.createLinearGradient(0, 0, 0, H);
+      grad.addColorStop(0, `rgba(8,14,30,${0.5 * a})`);
+      grad.addColorStop(0.32, 'rgba(160,200,255,0)');
+      grad.addColorStop(0.5, `rgba(170,210,255,${0.1 * a})`);
+      grad.addColorStop(0.68, 'rgba(160,200,255,0)');
+      grad.addColorStop(1, `rgba(8,14,30,${0.5 * a})`);
+      g.fillStyle = grad;
+      g.fillRect(0, 0, W, H);
+    }
+
+    // boss-kill soft white flash, fading through the slow-mo
+    if (this.killFlash > 0) {
+      g.fillStyle = `rgba(255,240,205,${0.28 * this.killFlash})`;
+      g.fillRect(0, 0, W, H);
+      this.killFlash = Math.max(0, this.killFlash - 0.022 * this.k);
     }
 
     // damage flash: red edge pulse when a life is lost

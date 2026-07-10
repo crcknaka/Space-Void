@@ -1,4 +1,5 @@
 // Versus mode — port of versus.py (first to 10 kills), on top of BaseWorld
+import { makeSpaceBackdrop } from './bggen.js';
 import { W, H, STEP, randInt, overlap, setRngSeed } from './const.js';
 import * as input from './input.js';
 import * as audio from './audio.js';
@@ -32,6 +33,7 @@ export class VersusState extends BaseWorld {
     setRngSeed(null);
 
     this.initBackdrop();
+    this.bgOverride = makeSpaceBackdrop(777); // same procedural arena for both peers
     this.score1 = 0;
     this.score2 = 0;
     this.winner = null;

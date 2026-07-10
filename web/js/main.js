@@ -2,7 +2,8 @@
 import { W, H, BASE_W, BASE_H, MAX_W, MAX_H, setSize, clamp } from './const.js';
 import * as input from './input.js';
 import * as audio from './audio.js';
-import { loadImages } from './assets.js';
+import { loadImages, IMG_COUNT } from './assets.js';
+import { generateSprites } from './procassets.js';
 import { makeVignette } from './fx.js';
 import { drawText } from './ui.js';
 import { MenuState } from './menu.js';
@@ -123,7 +124,7 @@ function drawLoading() {
 
 async function boot() {
   let imgDone = 0, sndDone = 0;
-  const IMG_TOTAL = 29, SND_TOTAL = 8;
+  const IMG_TOTAL = IMG_COUNT, SND_TOTAL = 8;
   const tick = () => {
     progress = (imgDone + sndDone) / (IMG_TOTAL + SND_TOTAL);
     drawLoading();
@@ -135,12 +136,20 @@ async function boot() {
     audio.loadSounds((d) => { sndDone = d; tick(); }),
     document.fonts?.load('700 30px Orbitron').catch(() => {}),
   ]);
-  app.images = images;
+  app.images = generateSprites(images); // procedural sprites replace the old PNG set
 
   const params = new URLSearchParams(location.search);
   app.debugGod = params.has('god'); // debug: invincible player for testing
+  app.debugBoss = Number(params.get('boss')) || 0; // debug: instant boss of level N
+  app.debugNoBg = params.has('nobg'); // debug: keep the old static-canvas backdrop off
+  app.debugBg = Number(params.get('bg')) || 0; // debug: force a backdrop seed (?bg=N)
+  if (params.has('prof')) window.__prof = { u: 0, d: 0, n: 0 }; // debug: frame-time probe
   const mode = params.get('mode');
-  if (mode === 'single') app.setState(new GameState(app, false));
+  if (params.has('shipgen')) {
+    // dev gallery for the procedural ship generator (loaded on demand)
+    const { ShipGenState } = await import('./shipgen_page.js');
+    app.setState(new ShipGenState(app));
+  } else if (mode === 'single') app.setState(new GameState(app, false));
   else if (mode === 'coop') app.setState(new GameState(app, true));
   else if (mode === 'daily') app.setState(new GameState(app, false, { daily: true }));
   else if (mode === 'versus') app.setState(new VersusState(app));
@@ -176,9 +185,22 @@ async function boot() {
     // A thrown update/draw must NEVER kill the loop or blank the screen —
     // skip the bad frame and keep going (this used to leave only the backdrop).
     try {
+      const p = window.__prof;
+      const t0 = p && performance.now();
       app.state.update(dt);
       input.endStep();
+      const t1 = p && performance.now();
       app.state.draw(g);
+      if (p) {
+        p.u += t1 - t0;
+        p.d += performance.now() - t1;
+        if (++p.n === 120) {
+          p.last = `upd ${(p.u / 120).toFixed(2)}ms  draw ${(p.d / 120).toFixed(2)}ms`;
+          console.info(`PROF ${p.last}`);
+          p.u = p.d = p.n = 0;
+        }
+        if (p.last) drawText(g, p.last, W / 2, H - 14, 14, 'rgb(0,255,120)');
+      }
     } catch (e) {
       input.endStep();
       if (errCount++ < 5) console.error('frame error:', e);
