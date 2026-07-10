@@ -390,6 +390,7 @@ export class Player {
   }
 
   shoot(world) {
+    if (world.ionStorm?.phase === 'active') return; // ion storm: guns are dead
     if (world.time - this.lastShot <= this.shootDelay) return;
     const vx = this.facingLeft ? -10 : 10;
     const edgeX = this.facingLeft ? this.x - this.w / 2 : this.x + this.w / 2;
@@ -686,6 +687,8 @@ export class Freighter {
     c.height = Math.ceil(wpx * 0.3);
     const fit = fitTransform(mesh, c.width, c.height, BOSS_VIEW, 0.95);
     renderMesh(c.getContext('2d'), mesh, { ...BOSS_VIEW, ...fit, gain: 0.5, ambient: 0.3 });
+    c.mesh = mesh;          // convoy-raid mode shatters these
+    c.fitScale = fit.scale;
     this.img = c;
     this.x = W + 60;
     this.y = 30 + Math.random() * (H * 0.65);
@@ -715,6 +718,41 @@ export class Freighter {
       g.fillStyle = `rgba(190,215,255,${a})`;
       g.fillRect(this.x + this.img.width * (0.22 + i * 0.13), this.y + this.img.height * 0.5, 2, 1.5);
     }
+  }
+}
+
+/* -------------------------------- lightning --------------------------------- */
+// Ion-storm bolt: a jagged polyline flashing across the sky.
+
+export class Lightning {
+  constructor(time) {
+    this.spawn = time;
+    this.life = 170;
+    this.dead = false;
+    this.pts = [];
+    let x = Math.random() * W;
+    for (let y = -10; y < H + 30; y += 45 + Math.random() * 55) {
+      this.pts.push([x, y]);
+      x += (Math.random() - 0.5) * 95;
+    }
+  }
+  update(world) {
+    if (world.time - this.spawn > this.life) this.dead = true;
+  }
+  draw(g, world) {
+    const a = Math.max(0, 1 - (world.time - this.spawn) / this.life);
+    const prev = g.globalCompositeOperation;
+    g.globalCompositeOperation = 'lighter';
+    for (const [lw, aa] of [[5, 0.22], [1.9, 0.85]]) {
+      g.globalAlpha = a * aa;
+      g.strokeStyle = 'rgb(190,220,255)';
+      g.lineWidth = lw;
+      g.beginPath();
+      this.pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
+      g.stroke();
+    }
+    g.globalAlpha = 1;
+    g.globalCompositeOperation = prev;
   }
 }
 
@@ -830,8 +868,12 @@ const ENEMY_TINT = {
   weaver: 'rgba(0,230,190,0.35)',
   hunter: 'rgba(255,60,60,0.4)',
   tank: 'rgba(190,110,255,0.42)',
+  sniper: 'rgba(90,110,255,0.4)',
+  carrier: 'rgba(255,170,60,0.4)',
+  shieldbearer: 'rgba(90,230,255,0.4)',
 };
-const ENEMY_POINTS = { basic: 10, weaver: 15, hunter: 20, tank: 30 };
+const ENEMY_POINTS = { basic: 10, weaver: 15, hunter: 20, tank: 30, sniper: 25, carrier: 35, shieldbearer: 30 };
+const ENEMY_SIZE = { tank: [66, 40], sniper: [54, 24], carrier: [72, 44], shieldbearer: [52, 32] };
 
 export class Enemy {
   constructor(images, level, type, time, moveRandomly = false) {
@@ -842,15 +884,19 @@ export class Enemy {
     this.thrusters = images.thrusters.enemy;
     this.bulletImg = images.enemy_bullet;
     this.rocketImg = images.enemy_rocket || images.rocket;
-    this.w = type === 'tank' ? 66 : 50;
-    this.h = type === 'tank' ? 40 : 30;
+    [this.w, this.h] = ENEMY_SIZE[type] || [50, 30];
+    this.images = images; // carriers spawn drones later
     this.x = W + randInt(50, 100);
     this.y = randInt(this.h / 2, H - this.h / 2);
     // armored enemies need multiple hits; armor grows with level
     if (type === 'tank') this.health = 3 + Math.floor(Math.max(0, level - 4) / 3);
     else if (type === 'hunter') this.health = level >= 5 ? 2 : 1;
     else if (type === 'weaver') this.health = level >= 6 ? 2 : 1;
+    else if (type === 'sniper') this.health = 2;
+    else if (type === 'carrier') this.health = 4 + Math.floor(level / 3);
+    else if (type === 'shieldbearer') this.health = 2;
     else this.health = 1;
+    if (type === 'shieldbearer') this.shieldHp = 2; // own hex bubble, absorbs hits first
     this.points = ENEMY_POINTS[type];
     this.flash = 0;
     this.dead = false;
@@ -875,6 +921,22 @@ export class Enemy {
       this.vx = -(1 + (level - 1) * 0.3);
       this.vy = 0;
       this.shootDelay = Math.max(500, randInt(2000, 3500) - (level - 1) * 100);
+    } else if (type === 'sniper') {
+      this.vx = -(2.4 + level * 0.15);
+      this.vy = 0;
+      this.holdX = W - randInt(70, 150); // parks near the right edge
+      this.shootDelay = Infinity;        // fires via the telegraph cycle
+      this.aim = null;                   // { y, until }
+      this.nextAimAt = time + randInt(1400, 2600);
+    } else if (type === 'carrier') {
+      this.vx = -(0.8 + level * 0.12);
+      this.vy = 0;
+      this.shootDelay = Math.max(900, randInt(2600, 3800) - level * 100);
+      this.nextDroneAt = time + randInt(2500, 4200);
+    } else if (type === 'shieldbearer') {
+      this.vx = -(1.7 + level * 0.18);
+      this.vy = moveRandomly ? randInt(-1, 1) : 0;
+      this.shootDelay = Math.max(600, randInt(1900, 3200) - level * 100);
     } else {
       this.vx = randInt(-3, -1) - (level - 1);      // faster with level
       this.vy = moveRandomly ? randInt(-2, 2) : 0;
@@ -898,6 +960,13 @@ export class Enemy {
   }
 
   takeDamage(dmg) {
+    if (this.shieldHp > 0) {
+      this.shieldHp -= dmg;
+      this.flash = 0.5;
+      this.shieldRipple = { a: Math.PI, start: this._t || 0 };
+      audio.playSynth('shield_hit');
+      return false;
+    }
     this.health -= dmg;
     this.flash = 1;
     return this.health <= 0;
@@ -977,7 +1046,20 @@ export class Enemy {
     }
 
     const m = world.speedMul * world.k * (this.boosting ? 1.9 : 1);
-    this.x += this.vx * m;
+    this._t = world.time;
+    // snipers stop at their perch instead of flying across
+    if (this.type === 'sniper' && this.x <= this.holdX) {
+      // hold position; drift toward the nearest player's y
+      let tgt = null, md = Infinity;
+      for (const p of world.players()) {
+        if (!p.alive) continue;
+        const d = Math.abs(p.y - this.y);
+        if (d < md) { md = d; tgt = p; }
+      }
+      if (tgt && !this.aim) this.y += clamp(tgt.y - this.y, -1.1, 1.1) * m;
+    } else {
+      this.x += this.vx * m;
+    }
 
     if (this.type === 'weaver') {
       this.y = this.baseY + Math.sin(world.time * this.freq + this.phase) * this.amp;
@@ -998,7 +1080,42 @@ export class Enemy {
     if (this.x + this.w / 2 < 0) { this.dead = true; return; }
 
     const warping = this.warpUntil && world.time < this.warpUntil;
-    if (!warping && world.time - this.lastShot > this.shootDelay) {
+    const stormOut = world.ionStorm?.phase === 'active'; // ion storm: all guns down
+
+    // sniper telegraph → high-velocity bolt
+    if (this.type === 'sniper' && !warping && !stormOut && this.x <= this.holdX + 4) {
+      if (!this.aim && world.time > this.nextAimAt) {
+        this.aim = { y: this.y, until: world.time + 800 };
+      } else if (this.aim && world.time >= this.aim.until) {
+        world.enemyBullets.push(new EnemyBullet(this.x - this.w / 2, this.aim.y, this.bulletImg, -13, 0));
+        audio.play('gun', 0.3);
+        this.aim = null;
+        this.nextAimAt = world.time + Math.max(1800, randInt(2800, 4400) - this.level * 100);
+      }
+    }
+    if (stormOut) this.aim = null;
+
+    // carriers launch a pair of drones once on-screen
+    if (this.type === 'carrier' && !warping && this.x < W - 80 && world.time > this.nextDroneAt) {
+      this.nextDroneAt = world.time + randInt(5000, 8000);
+      audio.playSynth('warp');
+      for (const dy of [-30, 30]) {
+        const d = new Enemy(this.images, Math.max(1, this.level - 1), 'basic', world.time);
+        d.w = 34; d.h = 20;
+        d.health = 1;
+        d.points = 5;
+        d.x = this.x - this.w / 2 - 12;
+        d.y = clamp(this.y + dy, 20, H - 20);
+        d.vx = -(2.6 + this.level * 0.2);
+        d.canDash = true;
+        d.nextDashAt = world.time + randInt(500, 1500);
+        d.warpUntil = world.time + 350;
+        world.enemies.push(d);
+        world.effects.push(new Shockwave(d.x, d.y, world.time, 42));
+      }
+    }
+
+    if (!warping && !stormOut && world.time - this.lastShot > this.shootDelay) {
       const bx = this.x - this.w / 2;
       if (this.twinShot) {
         world.enemyBullets.push(new EnemyBullet(bx, this.y - 5, this.bulletImg));
@@ -1009,7 +1126,7 @@ export class Enemy {
       this.lastShot = world.time;
     }
     // heavy tanks lob a slow homing rocket at the nearest player (shootable)
-    if (this.rocketLauncher && world.enemyRockets && !warping
+    if (this.rocketLauncher && world.enemyRockets && !warping && !stormOut
         && world.time - this.lastRocketAt > this.rocketDelay) {
       this.lastRocketAt = world.time;
       let target = null, minD = Infinity;
@@ -1028,7 +1145,7 @@ export class Enemy {
       }
     }
     // veteran tanks are minelayers too
-    if (this.type === 'tank' && this.level >= 6 && world.mines && !warping
+    if (this.type === 'tank' && (this.level >= 6 || this.minelayer) && world.mines && !warping
         && world.time > this.nextMineAt) {
       this.nextMineAt = world.time + randInt(6000, 9000);
       if (world.mines.length < 5) world.mines.push(new Mine(this.x + this.w / 2 + 10, this.y, world.time));
@@ -1075,6 +1192,23 @@ export class Enemy {
       g.globalAlpha = 0.3 + 0.7 * f;
     }
 
+    // sniper: thin blinking aim line while telegraphing
+    if (this.aim) {
+      const prev = g.globalCompositeOperation;
+      g.globalCompositeOperation = 'lighter';
+      g.globalAlpha = 0.3 + 0.35 * Math.sin(t / 45);
+      g.strokeStyle = 'rgb(255,80,80)';
+      g.lineWidth = 1.5;
+      g.setLineDash([7, 6]);
+      g.beginPath();
+      g.moveTo(this.x - this.w / 2, this.aim.y);
+      g.lineTo(0, this.aim.y);
+      g.stroke();
+      g.setLineDash([]);
+      g.globalAlpha = 1;
+      g.globalCompositeOperation = prev;
+    }
+
     // elite: pulsing golden aura + oversized gold copy peeking out as an outline
     if (this.elite) {
       const pulse = 0.85 + 0.25 * Math.sin(t / 130);
@@ -1107,6 +1241,12 @@ export class Enemy {
       g.globalAlpha = 1;
       g.restore();
     }
+
+    // shieldbearer's own hex bubble (with impact ripples)
+    if (this.shieldHp > 0) {
+      const rip = this.shieldRipple ? { a: this.shieldRipple.a, p: (t - this.shieldRipple.start) / 450 } : null;
+      drawShieldBubble(g, this.x, this.y, Math.max(vw, vh) * 0.62, t, 'rgb(120,235,255)', rip && rip.p < 1 ? rip : null);
+    }
   }
 }
 
@@ -1133,8 +1273,15 @@ export class Boss {
     this.patIdx = 0;
     this.patterns = ['fan'];
     if (level >= 2) this.patterns.push('aimed', 'minions');
-    if (level >= 3) this.patterns.push('spiral', 'laser');
+    if (level >= 3) this.patterns.push('spiral', 'laser', 'rockets');
     if (level >= 4) this.patterns.push('ring');
+    if (level >= 5) this.patterns.push('wall');
+    if (level >= 6) this.patterns.push('sweep');
+    // level flavor: every 3rd boss is a carrier (constant escorts), every 4th a rammer
+    if (level % 3 === 0) this.patterns.push('minions', 'minions');
+    if (level % 4 === 0) this.patterns.push('ram', 'ram');
+    this.laser2 = null; // sweeping beam {phase, until, ang, dir}
+    this.ram = null;    // charge attack {phase, until, retX}
     this.health = 5 + (level - 1) * 5;
     this.maxHealth = this.health;
     this.shieldUntil = 0;                                  // invulnerable phase
@@ -1236,6 +1383,34 @@ export class Boss {
       // telegraph first, then the beam fires along the frozen line
       this.laser = { phase: 'telegraph', until: t0 + 900, y: this.y };
       audio.playSynth('laser_charge');
+    } else if (pat === 'rockets') {
+      // volley of shootable homing rockets
+      const target = this.nearestPlayer(world);
+      if (target && world.enemyRockets) {
+        audio.play('rocket', 0.5);
+        for (let i = -1; i <= 1; i++) {
+          const rk = new Rocket(this.x - this.w / 2, clamp(this.y + i * 44, 30, H - 30),
+            this.images.enemy_rocket || this.images.rocket, target, 180);
+          rk.speed = 5;
+          rk.rotSpeed = 1.25;
+          rk.enemyFire = true;
+          world.enemyRockets.push(rk);
+        }
+      }
+    } else if (pat === 'wall') {
+      // curtain of bolts across the whole height with one safe gap
+      const gap = randInt(90, H - 90);
+      for (let y = 30; y < H - 20; y += 46) {
+        if (Math.abs(y - gap) < 75) continue;
+        shots.push({ t: t0 + 250, angle: 180, y });
+      }
+      audio.playSynth('warning');
+    } else if (pat === 'sweep') {
+      // slowly rotating beam from the bow
+      this.laser2 = { phase: 'telegraph', until: t0 + 1000, ang: this.y > H / 2 ? -0.42 : 0.42, dir: this.y > H / 2 ? 1 : -1 };
+      audio.playSynth('laser_charge');
+    } else if (pat === 'ram') {
+      this.ram = { phase: 'windup', until: t0 + 700, retX: this.x };
     }
     return shots;
   }
@@ -1248,7 +1423,9 @@ export class Boss {
       deg = (Math.atan2(target.y - this.y, target.x - this.x) * 180) / Math.PI;
     }
     const rad = (deg * Math.PI) / 180;
-    world.enemyBullets.push(new EnemyBullet(this.x, this.y, this.bulletImg, 8 * Math.cos(rad), 8 * Math.sin(rad)));
+    // wall shots carry their own spawn height (a curtain, not a fan)
+    world.enemyBullets.push(new EnemyBullet(this.x - (shot.y !== undefined ? this.w / 2 : 0), shot.y ?? this.y,
+      this.bulletImg, (shot.y !== undefined ? 6 : 8) * Math.cos(rad), (shot.y !== undefined ? 0 : 8 * Math.sin(rad))));
   }
 
   update(world) {
@@ -1260,7 +1437,7 @@ export class Boss {
       this.floatStart = world.time; // sine starts at phase 0 → no teleport on park
       this.floatBase = 0;
     }
-    if (this.parked && !this.laser) {
+    if (this.parked && !this.laser && !this.laser2 && !this.ram) {
       // gentle vertical float so patterns sweep the field
       const amp = Math.min(180, H / 2 - this.h / 2 - 30);
       this.y = H / 2 + Math.sin((world.time - this.floatStart - this.floatBase) / 1400) * amp;
@@ -1293,9 +1470,58 @@ export class Boss {
       }
     }
 
-    if (!this.laser && !this.queue.length && world.time - this.lastShot > this.shootDelay) {
+    if (!this.laser && !this.laser2 && !this.ram
+        && !(world.ionStorm?.phase === 'active')
+        && !this.queue.length && world.time - this.lastShot > this.shootDelay) {
       this.lastShot = world.time;
       this.queue = this.buildVolley(world);
+    }
+
+    // sweeping beam: rotates slowly, kills players caught along the ray
+    if (this.laser2) {
+      const L = this.laser2;
+      if (L.phase === 'telegraph' && world.time >= L.until) {
+        L.phase = 'fire';
+        L.until = world.time + 2600;
+        audio.playSynth('laser_fire');
+      } else if (L.phase === 'fire') {
+        L.ang += L.dir * 0.0058 * world.k;
+        for (const p of world.players()) {
+          if (!p.alive || p.x >= this.x) continue;
+          const dx = p.x - this.x, dy = p.y - this.y;
+          const along = -dx * Math.cos(L.ang) + dy * Math.sin(L.ang);
+          const perp = Math.abs(dx * Math.sin(L.ang) + dy * Math.cos(L.ang));
+          if (along > 0 && perp < 20) world.killPlayer(p, this.x, p.y);
+        }
+        if (world.time >= L.until) {
+          this.floatStart = world.time;
+          this.floatBase = -Math.asin(clamp((this.y - H / 2) / Math.max(1, Math.min(180, H / 2 - this.h / 2 - 30)), -1, 1)) * 1400;
+          this.laser2 = null;
+        }
+      }
+    }
+
+    // ram charge: windup shudder → lunge across → crawl back
+    if (this.ram) {
+      const Rm = this.ram;
+      if (Rm.phase === 'windup') {
+        if (world.time >= Rm.until) {
+          Rm.phase = 'charge';
+          Rm.until = world.time + 1000;
+          audio.playSynth('warp');
+        }
+      } else if (Rm.phase === 'charge') {
+        this.x -= 9.5 * world.k;
+        if (this.x < W * 0.32 || world.time >= Rm.until) Rm.phase = 'return';
+      } else {
+        this.x += 3 * world.k;
+        if (this.x >= Rm.retX) {
+          this.x = Rm.retX;
+          this.floatStart = world.time;
+          this.floatBase = -Math.asin(clamp((this.y - H / 2) / Math.max(1, Math.min(180, H / 2 - this.h / 2 - 30)), -1, 1)) * 1400;
+          this.ram = null;
+        }
+      }
     }
     while (this.queue.length && this.queue[0].t <= world.time) {
       this.fire(this.queue.shift(), world);
@@ -1365,10 +1591,47 @@ export class Boss {
       g.globalCompositeOperation = prev;
     }
 
+    // sweeping beam: dashed aim line, then a rotating gradient blade
+    if (this.laser2) {
+      const L = this.laser2;
+      const prev = g.globalCompositeOperation;
+      g.globalCompositeOperation = 'lighter';
+      g.save();
+      g.translate(this.x, this.y);
+      g.rotate(Math.PI - L.ang);
+      if (L.phase === 'telegraph') {
+        g.globalAlpha = 0.35 + 0.3 * Math.sin(t / 60);
+        g.strokeStyle = 'rgb(255,60,60)';
+        g.lineWidth = 2;
+        g.setLineDash([10, 8]);
+        g.beginPath();
+        g.moveTo(this.w * 0.35, 0);
+        g.lineTo(W + H, 0);
+        g.stroke();
+        g.setLineDash([]);
+      } else {
+        const flick = 0.8 + 0.2 * Math.sin(t / 25);
+        g.globalAlpha = 0.9 * flick;
+        const grad = g.createLinearGradient(0, -16, 0, 16);
+        grad.addColorStop(0, 'rgba(255,60,60,0)');
+        grad.addColorStop(0.5, 'rgba(255,180,160,0.95)');
+        grad.addColorStop(1, 'rgba(255,60,60,0)');
+        g.fillStyle = grad;
+        g.fillRect(this.w * 0.3, -16, W + H, 32);
+        g.globalAlpha = 0.9;
+        g.fillStyle = '#fff';
+        g.fillRect(this.w * 0.3, -3, W + H, 6);
+      }
+      g.restore();
+      g.globalAlpha = 1;
+      g.globalCompositeOperation = prev;
+    }
+
     // live modular render: engine flames → hull → turrets → hit-flash pass
     // (a dying hull shudders)
-    const jx = this.deathSeq ? (Math.random() - 0.5) * 5 : 0;
-    const jy = this.deathSeq ? (Math.random() - 0.5) * 5 : 0;
+    const shudder = this.deathSeq || this.ram?.phase === 'windup';
+    const jx = shudder ? (Math.random() - 0.5) * 5 : 0;
+    const jy = shudder ? (Math.random() - 0.5) * 5 : 0;
     const bx = this.x - this.w / 2 + jx, by = this.y - this.h / 2 + jy;
     const thr = this.thrusters[(t / 55 | 0) % this.thrusters.length];
     g.save();

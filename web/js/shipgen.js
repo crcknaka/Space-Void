@@ -43,6 +43,21 @@ export const FAMILIES = {
     hullR: [14, 18], flat: [0.55, 0.68], span: [16, 24], sweep: [4, 12],
     engines: [2, 4], finTwin: 0.5, wings2: 0, twinHull: 0.45, greeble: 1,
   },
+  sniper: { // long thin indigo dart — parks at the edge and snipes
+    hue: [215, 240], accHue: [185, 205], sat: [18, 30], lit: [40, 52],
+    hullR: [5.5, 7.5], flat: [0.6, 0.75], span: [14, 20], sweep: [16, 26],
+    engines: [1, 1], finTwin: 0.2, wings2: 0, twinHull: 0, greeble: 0,
+  },
+  carrier: { // wide amber barge that launches drones
+    hue: [25, 45], accHue: [35, 55], sat: [14, 24], lit: [46, 58],
+    hullR: [13, 16], flat: [0.5, 0.6], span: [26, 34], sweep: [2, 8],
+    engines: [2, 3], finTwin: 0.6, wings2: 0, twinHull: 0.7, greeble: 1,
+  },
+  shieldbearer: { // rounded cyan hull wrapped in its own hex bubble
+    hue: [180, 200], accHue: [175, 195], sat: [20, 32], lit: [52, 64],
+    hullR: [10, 13], flat: [0.68, 0.8], span: [16, 22], sweep: [4, 10],
+    engines: [2, 2], finTwin: 0.3, wings2: 0, twinHull: 0, greeble: 0.5,
+  },
   boss: { // hulking dreadnought base — per-level tinting happens in-game
     hue: [340, 20], accHue: [350, 10], sat: [12, 20], lit: [46, 56],
     hullR: [16, 20], flat: [0.6, 0.72], span: [20, 30], sweep: [6, 16],
@@ -50,7 +65,7 @@ export const FAMILIES = {
   },
 };
 
-const FAM_SALT = { player: 0x50, basic: 0xB0, weaver: 0x77, hunter: 0x44, tank: 0x7A, boss: 0xB055 };
+const FAM_SALT = { player: 0x50, basic: 0xB0, weaver: 0x77, hunter: 0x44, tank: 0x7A, boss: 0xB055, sniper: 0x51, carrier: 0xCA, shieldbearer: 0x5B };
 
 // `over` merges over the family ranges (e.g. a different palette for player 2)
 export function genShip(seed, family = 'basic', over = null) {

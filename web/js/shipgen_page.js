@@ -9,7 +9,7 @@ import { renderMesh, fitTransform, bakeAuto, VIEW } from './mesh3d.js';
 import { genShip } from './shipgen.js';
 import { bossStaticMesh } from './bossgen.js';
 
-const FAMS = ['player', 'basic', 'weaver', 'hunter', 'tank', 'boss'];
+const FAMS = ['player', 'basic', 'weaver', 'hunter', 'tank', 'sniper', 'carrier', 'shieldbearer', 'boss'];
 // boss row shows the real in-game bosses: seed = level
 const buildMesh = (fam, seed) => (fam === 'boss' ? bossStaticMesh(seed) : genShip(seed, fam));
 

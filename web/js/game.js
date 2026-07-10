@@ -6,14 +6,14 @@ import { Button, ButtonGroup, drawText } from './ui.js';
 import { BaseWorld } from './world.js';
 import {
   Player, Enemy, Boss, Asteroid, PowerUp, Explosion, Spark, Shockwave,
-  Mine, MeshDebris, shatterSprite, Comet, DistantConvoy, Freighter, WarpStreak,
+  Mine, MeshDebris, shatterSprite, Comet, DistantConvoy, Freighter, WarpStreak, Lightning,
   LaserBeam, ScorePopup,
   POWERUP_TYPES, POWERUP_IMG,
 } from './entities.js';
 import { makeNebulaField, tinted } from './fx.js';
 import { askName, submitScore, savedName } from './lb.js';
 import { bumpStats, vibrate } from './settings.js';
-import { dailySeed, todayMod, useDailyAttempt, dailyAttemptsLeft } from './daily.js';
+import { dailySeed, todayMod, useDailyAttempt, dailyAttemptsLeft, MODS } from './daily.js';
 import { makeSpaceBackdrop } from './bggen.js';
 
 const P1_CONTROLS = {
@@ -58,7 +58,7 @@ export class GameState extends BaseWorld {
     audio.playMusic('background_music');
     // daily challenge: everyone plays the same seeded spawn stream today
     setRngSeed(this.daily ? dailySeed() : null);
-    this.mod = this.daily ? todayMod() : null;
+    this.mod = this.daily ? todayMod() : (MODS.find((m) => m.id === this.app.debugMod) || null);
     this._dailyCharged = false; // an attempt is spent only once the run is committed
     if (this.daily) this.pushToasts(bumpStats({ dailyRuns: 1 }));
 
@@ -76,7 +76,7 @@ export class GameState extends BaseWorld {
     this.enemyRockets = []; // homing rockets fired by high-level tanks
     this.mines = [];         // proximity mines laid by veteran tanks (level 6+)
     this.ambient = [];       // background flourishes: comets, distant convoys
-    this.nextAmbientAt = 12000 + Math.random() * 20000;
+    this.nextAmbientAt = this.mod?.convoy ? 4000 : 12000 + Math.random() * 20000; // raids start early
     this.enemies = [];       // includes boss
     this.asteroids = [];
     this.powerups = [];
@@ -218,6 +218,11 @@ export class GameState extends BaseWorld {
   introEnemy(e, opts = {}) {
     if (this.mod?.enemySpeed) e.vx *= this.mod.enemySpeed;
     if (this.mod?.shootRate) e.shootDelay = Math.max(250, e.shootDelay * this.mod.shootRate);
+    if (this.mod?.rocketDay && e.type === 'tank') {
+      e.rocketLauncher = true;
+      e.rocketDelay = Math.max(3200, e.rocketDelay * 0.6);
+    }
+    if (this.mod?.minefield && e.type === 'tank') e.minelayer = true;
     e.x = opts.x ?? W - randInt(40, 90);
     if (opts.dy) e.y = clamp(e.y + opts.dy, e.h / 2, H - e.h / 2);
     e.warpUntil = this.time + 550;
@@ -249,9 +254,12 @@ export class GameState extends BaseWorld {
     const r = rand(0, 100);
     if (this.mod?.tankBias && r < 35) return 'tank';               // HEAVY ARMOR day
     if (this.mod?.lightOnly) return r < 45 ? 'weaver' : 'basic';   // THE SWARM day
-    if (this.level >= 4 && r < 12) return 'tank';
-    if (this.level >= 3 && r >= 12 && r < 32) return 'hunter';
-    if (this.level >= 2 && r >= 32 && r < 57) return 'weaver';
+    if (this.level >= 5 && r < 6) return 'carrier';
+    if (this.level >= 4 && r < 14) return 'sniper';
+    if (this.level >= 3 && r < 24) return 'shieldbearer';
+    if (this.level >= 4 && r < 36) return 'tank';
+    if (this.level >= 3 && r < 56) return 'hunter';
+    if (this.level >= 2 && r < 78) return 'weaver';
     return 'basic';
   }
 
@@ -343,7 +351,7 @@ export class GameState extends BaseWorld {
     if (this.app.debugGod) return;
     if (this.time < (p.invulnUntil || 0)) return;
     this.resetCombo();
-    if (p.shield) {
+    if (p.shield && this.ionStorm?.phase !== 'active') {
       // shield absorbs the hit — hex bubble ripples out from the impact point
       p.shield = false;
       p.shieldRipple = { a: hx !== undefined ? Math.atan2(hy - p.y, hx - p.x) : Math.PI, start: this.time };
@@ -538,13 +546,42 @@ export class GameState extends BaseWorld {
       }
     }
 
+    // --- ion storm: rare weather that silences every gun for a few seconds ---
+    if (!this.ionStorm && this.time > (this.nextIonAt ??= this.app.debugIon ? 5000 : 80000 + randInt(0, 40000))) {
+      this.ionStorm = { phase: 'warn', until: this.time + 2200 };
+      audio.playSynth('warning');
+    }
+    if (this.ionStorm) {
+      const st = this.ionStorm;
+      if (st.phase === 'warn' && this.time >= st.until) {
+        st.phase = 'active';
+        st.until = this.time + randInt(6000, 9000);
+        audio.playSynth('storm');
+      } else if (st.phase === 'active') {
+        if (this.time - (st.lastBolt || 0) > 380) {
+          st.lastBolt = this.time;
+          this.effects.push(new Lightning(this.time));
+          if (Math.random() < 0.5) audio.playSynth('zap');
+        }
+        if (this.time >= st.until) {
+          this.ionStorm = null;
+          this.nextIonAt = this.time + 70000 + randInt(0, 50000);
+        }
+      }
+    }
+
     // --- ambient background flourishes (visual only, Math.random by design) ---
     if (this.time > this.nextAmbientAt) {
-      this.nextAmbientAt = this.time + 18000 + Math.random() * 26000;
-      const roll = Math.random();
-      this.ambient.push(roll < 0.4 ? new Comet(this.time)
-        : roll < 0.7 ? new DistantConvoy(this.app.images, this.time)
-        : new Freighter(this.time));
+      if (this.mod?.convoy) { // CONVOY RAID: a steady stream of targets
+        this.nextAmbientAt = this.time + 7000 + Math.random() * 6000;
+        this.ambient.push(new Freighter(this.time));
+      } else {
+        this.nextAmbientAt = this.time + 18000 + Math.random() * 26000;
+        const roll = Math.random();
+        this.ambient.push(roll < 0.4 ? new Comet(this.time)
+          : roll < 0.7 ? new DistantConvoy(this.app.images, this.time)
+          : new Freighter(this.time));
+      }
     }
     for (const a of this.ambient) a.update(this);
 
@@ -736,6 +773,29 @@ export class GameState extends BaseWorld {
         this.addKill(5, r.x, r.y);
         this.spawnSparks(r.x, r.y, 8);
         break;
+      }
+    }
+
+    // CONVOY RAID: freighters take fire and pay out big
+    if (this.mod?.convoy) {
+      for (const a of this.ambient) {
+        if (!(a instanceof Freighter) || a.dead) continue;
+        const cx = a.x + a.img.width / 2, cy = a.y + a.img.height / 2;
+        for (const b of this.bullets) {
+          if (b.dead) continue;
+          if (Math.abs(b.x - cx) > a.img.width * 0.45 || Math.abs(b.y - cy) > a.img.height * 0.42) continue;
+          b.dead = true;
+          a.hp = (a.hp ?? 6) - 1;
+          this.spawnSparks(b.x, b.y, 4);
+          if (a.hp <= 0) {
+            a.dead = true;
+            this.explode(cx, cy, true, 1.7);
+            shatterSprite(this, a.img, cx, cy, a.img.width, { vis: 1, chunks: 7 });
+            this.addKill(50, cx, cy);
+            this.dropPowerup(cx, cy);
+          }
+          break;
+        }
       }
     }
 
@@ -1002,6 +1062,24 @@ export class GameState extends BaseWorld {
     if (this.speedMul < 1) {
       g.fillStyle = 'rgba(80,150,255,0.08)';
       g.fillRect(0, 0, W, H);
+    }
+
+    // ion storm: blue static tint, glitch slices, banner
+    if (this.ionStorm) {
+      const active = this.ionStorm.phase === 'active';
+      if (active) {
+        g.fillStyle = `rgba(140,190,255,${0.045 + 0.03 * Math.sin(this.time / 55)})`;
+        g.fillRect(0, 0, W, H);
+        if (Math.random() < 0.3) {
+          g.fillStyle = 'rgba(170,215,255,0.08)';
+          g.fillRect(0, Math.random() * H, W, 2 + Math.random() * 9);
+        }
+      }
+      const blink = 0.55 + 0.45 * Math.sin(this.time / 110);
+      g.globalAlpha = active ? blink : Math.min(1, blink + 0.2);
+      drawText(g, active ? '⚡ ION STORM — WEAPONS OFFLINE ⚡' : '⚡ ION STORM INCOMING ⚡',
+        W / 2, 120, 20, 'rgb(150,205,255)');
+      g.globalAlpha = 1;
     }
 
     // hyperspace: tunnel overlay — bright rushing core, edges falling dark

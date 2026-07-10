@@ -124,6 +124,15 @@ export function playSynth(name) {
     note(240, t, 0.3, 'sine', 0.15, 620);
     note(150, t, 1.15, 'sawtooth', 0.07, 850);
     noiseHit(t, 1.5, 0.13, 350, 3600, 0.8);
+  } else if (name === 'storm') {
+    // ion storm rolling in: low rumble + crackling sizzle
+    note(70, t, 2, 'sawtooth', 0.08, -25);
+    noiseHit(t, 2.2, 0.16, 420, 160, 0.7);
+    noiseHit(t + 0.2, 1.6, 0.08, 2600, 900, 2);
+  } else if (name === 'zap') {
+    // one lightning bolt
+    note(1500, t, 0.1, 'sawtooth', 0.07, -1100);
+    noiseHit(t, 0.14, 0.1, 3200, 700, 1.6);
   } else if (name === 'laser_charge') {
     note(180, t, 0.85, 'sawtooth', 0.12, 500);
   } else if (name === 'laser_fire') {

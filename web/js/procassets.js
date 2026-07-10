@@ -11,7 +11,7 @@ import {
   newMesh, addVert, addFace, addLathe, addPlateY, addPlateZ,
 } from './mesh3d.js';
 
-const SEEDS = { player1: 4, player2: 2, basic: 3, weaver: 2, hunter: 1, tank: 5, boss: 7 };
+const SEEDS = { player1: 4, player2: 2, basic: 3, weaver: 2, hunter: 1, tank: 5, boss: 7, sniper: 6, carrier: 2, shieldbearer: 4 };
 const LEFT = { ...VIEW, ry: Math.PI }; // enemies fly (and are drawn) facing left
 
 function cv(w, h) {
@@ -357,6 +357,9 @@ export function generateSprites(images) {
   images.enemy_weaver = bakeInto(genShip(SEEDS.weaver, 'weaver'), 100, 60, LEFT);
   images.enemy_hunter = bakeInto(genShip(SEEDS.hunter, 'hunter'), 100, 60, LEFT);
   images.enemy_tank = bakeInto(genShip(SEEDS.tank, 'tank'), 132, 80, LEFT);
+  images.enemy_sniper = bakeInto(genShip(SEEDS.sniper, 'sniper'), 108, 48, LEFT);
+  images.enemy_carrier = bakeInto(genShip(SEEDS.carrier, 'carrier'), 144, 88, LEFT);
+  images.enemy_shieldbearer = bakeInto(genShip(SEEDS.shieldbearer, 'shieldbearer'), 104, 64, LEFT);
   images.enemy_ship = images.enemy_basic; // wreck tints & fallbacks
   // static level-1 boss (coop guests see this; the host renders bosses live)
   images.boss = bakeInto(bossStaticMesh(1), 300, 300, BOSS_VIEW, 0.94);

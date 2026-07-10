@@ -8,14 +8,14 @@ import * as audio from './audio.js';
 import { Button, ButtonGroup, drawText } from './ui.js';
 import { BaseWorld } from './world.js';
 import { GameState, PLAYER_COLORS, playerShip, spawnY } from './game.js';
-import { Player, Explosion, RocketTrailParticle, SmokeParticle, Spark, LaserBeam, ScorePopup, WarpStreak, Comet, DistantConvoy, Freighter, drawFlames, drawMine, VIS } from './entities.js';
+import { Player, Explosion, RocketTrailParticle, SmokeParticle, Spark, LaserBeam, ScorePopup, WarpStreak, Comet, DistantConvoy, Freighter, Lightning, drawFlames, drawMine, VIS } from './entities.js';
 import { tinted, glowBullet, glowEnemyBullet, glowEngine, glowElite, drawGlow, drawShieldBubble } from './fx.js';
 import { renderMesh, fitTransform, projectPoint } from './mesh3d.js';
 import { genBoss, BOSS_VIEW, aimYaw } from './bossgen.js';
 import { savedName } from './lb.js';
 import { makeSpaceBackdrop } from './bggen.js';
 
-const ETYPE = { basic: 0, weaver: 1, hunter: 2, tank: 3 };
+const ETYPE = { basic: 0, weaver: 1, hunter: 2, tank: 3, sniper: 5, carrier: 6, shieldbearer: 7 };
 const ETINT = ['', 'rgba(0,230,190,0.35)', 'rgba(255,60,60,0.4)', 'rgba(190,110,255,0.42)'];
 const PU_TYPES = ['shooting', 'slow_motion', 'kill_all', 'rocket', 'spread', 'shield', 'laser'];
 const PU_IMG = { shooting: 'powerup', slow_motion: 'slow_motion_powerup', kill_all: 'kill_all_powerup', rocket: 'rocket_powerup', spread: 'spread_powerup' };
@@ -180,7 +180,7 @@ export class CoopHost {
     const enc = (p) => [Math.round(p.x), Math.round(p.y), p.alive ? 1 : 0, p.lives, p.rockets, g.time < (p.invulnUntil || 0) ? 1 : 0, p.lasers, p.shield ? 1 : 0];
     return {
       k: 'w',
-      sc: g.score, lv: g.level, warn: g.bossWarnStart ? 1 : 0,
+      sc: g.score, lv: g.level, warn: g.bossWarnStart ? 1 : 0, ion: g.ionStorm ? (g.ionStorm.phase === 'active' ? 2 : 1) : 0,
       ban: g.levelBanner ? g.levelBanner.level : 0, slow: g.speedMul < 1 ? 1 : 0, over: g.over ? 1 : 0,
       ps: g.playerList.map(enc),
       // integer velocities keep packets small; extrapolation over ~33ms doesn't need decimals.
@@ -191,7 +191,7 @@ export class CoopHost {
           e.isBoss ? Math.round(Math.max(0, e.health) / Math.max(1, e.maxHealth) * 100) / 100 : 1, Math.round(e.w),
           Math.round((e.vx || 0) * m), Math.round((e.dying ? (e.vyFall || 0) : (e.vy || 0)) * m)];
         if (e.isBoss) row.push(e.laser ? (e.laser.phase === 'fire' ? 2 : 1) : 0, Math.round(e.laser ? e.laser.y : 0), e.shieldUntil > g.time ? 1 : 0);
-        else row.push(e.boosting ? 1 : 0, e.elite ? 1 : 0); // afterburner + elite aura on guests
+        else row.push(e.boosting ? 1 : 0, e.elite ? 1 : 0, e.shieldHp > 0 ? 1 : 0); // afterburner/elite/own-shield bits
         return row;
       }),
       mi: g.mines.map((mn) => [Math.round(mn.x), Math.round(mn.y)]),
@@ -388,7 +388,7 @@ export class CoopGuest extends BaseWorld {
   tint(type, img) {
     if (type === 4) return img; // boss
     // per-family generated sprites (same indices the host encodes)
-    const gen = this.app.images[`enemy_${['basic', 'weaver', 'hunter', 'tank'][type]}`];
+    const gen = this.app.images[`enemy_${['basic', 'weaver', 'hunter', 'tank', 'boss', 'sniper', 'carrier', 'shieldbearer'][type]}`];
     if (gen) return gen;
     if (type === 0) return img;
     const key = `enemy_${type}`;
@@ -458,6 +458,13 @@ export class CoopGuest extends BaseWorld {
     }
     for (const a of this.ambient) a.update(this);
     this.ambient = this.ambient.filter((a) => !a.dead);
+
+    // ion storm mirrored locally from the snapshot bit
+    if (this.snap?.ion === 2 && this.time - (this._ionBoltAt || 0) > 380) {
+      this._ionBoltAt = this.time;
+      this.effects.push(new Lightning(this.time));
+      if (Math.random() < 0.5) audio.playSynth('zap');
+    }
 
     // follow the host's level: hyperspace hop into the new scene
     const lv = this.snap?.lv || 1;
@@ -548,6 +555,7 @@ export class CoopGuest extends BaseWorld {
           if (e[9]) drawGlow(g, glowElite, cx, cy, 2 + 0.4 * Math.sin(this.time / 130)); // elite aura
           g.save(); g.translate(cx, cy); drawFlames(g, img, thr, vw, vh, { flip: true, boost: !!e[8] }); g.restore();
           g.drawImage(img, cx - vw / 2, cy - vh / 2, vw, vh);
+          if (e[10]) drawShieldBubble(g, cx, cy, vw * 0.6, this.time, 'rgb(120,235,255)'); // shieldbearer bubble
         }
         g.globalAlpha = 1;
         if (e[2] === 4) {
@@ -579,6 +587,17 @@ export class CoopGuest extends BaseWorld {
       }
 
       if (s.slow) { g.fillStyle = 'rgba(80,150,255,0.08)'; g.fillRect(0, 0, W, H); }
+
+      if (s.ion) {
+        if (s.ion === 2) {
+          g.fillStyle = `rgba(140,190,255,${0.045 + 0.03 * Math.sin(this.time / 55)})`;
+          g.fillRect(0, 0, W, H);
+        }
+        const blink = 0.55 + 0.45 * Math.sin(this.time / 110);
+        g.globalAlpha = blink;
+        drawText(g, s.ion === 2 ? '⚡ ION STORM — WEAPONS OFFLINE ⚡' : '⚡ ION STORM INCOMING ⚡', W / 2, 120, 20, 'rgb(150,205,255)');
+        g.globalAlpha = 1;
+      }
 
       // red edge pulse when this guest loses a life
       if (this.dmgFlash > 0) {

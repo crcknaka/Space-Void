@@ -143,6 +143,8 @@ async function boot() {
   app.debugBoss = Number(params.get('boss')) || 0; // debug: instant boss of level N
   app.debugNoBg = params.has('nobg'); // debug: keep the old static-canvas backdrop off
   app.debugBg = Number(params.get('bg')) || 0; // debug: force a backdrop seed (?bg=N)
+  app.debugIon = params.has('ion'); // debug: ion storm hits at ~5s
+  app.debugMod = params.get('mod'); // debug: force a daily modifier by id (?mod=convoy)
   if (params.has('prof')) window.__prof = { u: 0, d: 0, n: 0 }; // debug: frame-time probe
   const mode = params.get('mode');
   if (params.has('shipgen')) {

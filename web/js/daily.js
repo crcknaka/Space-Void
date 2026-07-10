@@ -18,6 +18,9 @@ export const MODS = [
   { id: 'hyper', name: 'HYPERSPEED', desc: 'Everything moves faster', enemySpeed: 1.4, playerBoost: 2 },
   { id: 'swarm', name: 'THE SWARM', desc: 'Endless light fighters', enemyRate: 0.55, lightOnly: true },
   { id: 'frenzy', name: 'ROCKET FRENZY', desc: 'Start with 12 rockets · fast reload', startRockets: 12, rocketDelay: 0.4 },
+  { id: 'minefield', name: 'MINEFIELD', desc: 'Tanks lay mines from level 1', minefield: true },
+  { id: 'rocketday', name: 'ROCKET DAY', desc: 'Tanks fire homing rockets from level 1 · score x1.5', rocketDay: true, scoreMul: 1.5 },
+  { id: 'convoy', name: 'CONVOY RAID', desc: 'Shoot the cargo ships · big bounty + loot', convoy: true },
 ];
 
 export function todayMod() {
