@@ -152,15 +152,18 @@ export class VersusOnline extends BaseWorld {
       // Bullet auto-flips its sprite from the sign of vx, so left-moving
       // opponent shots render correctly with no extra handling.
       this.remoteBullets.push(new Bullet(m.x, m.y, this.app.images.bullet, m.vx));
+      audio.play('gun', 0.22, m.x, 0.95 + Math.random() * 0.1);
     }
     else if (m.k === 'rf') {
       // incoming rocket homes toward MY ship; I check it against myself
       const angle = this.remoteId === 1 ? 0 : 180;
       this.remoteRockets.push(new Rocket(m.x, m.y, this.app.images.rocket, this.local, angle));
+      audio.play('rocket', 0.5, m.x);
     }
     else if (m.k === 'lf') {
       // incoming laser: show the beam, and if I'm on its path I die
       this.effects.push(new LaserBeam(m.x0, m.y, this.time, 'rgb(255,120,120)', m.dir));
+      audio.playSynth('plaser', m.x0);
       if (this.local.alive && this.time > (this.local.invulnUntil || 0) &&
           Math.abs(this.local.y - m.y) < LZ_BAND && (m.dir > 0 ? this.local.x > m.x0 : this.local.x < m.x0)) {
         this.localDie();
@@ -215,7 +218,7 @@ export class VersusOnline extends BaseWorld {
       this.localBullets.push(new Bullet(edgeX, p.y, this.app.images.bullet, vx));
       this.net.send({ k: 'f', x: edgeX, y: p.y, vx });
       p.lastShot = this.time;
-      audio.play('gun', 0.22, m.x);
+      audio.play('gun', 0.22, edgeX, 0.95 + Math.random() * 0.1);
     }
     // rocket (E / Slash / pad X)
     if ((k.has('KeyE') || k.has('Slash') || (pad && pad.fire2)) && p.rockets > 0 && this.time - p.lastRk > RK_CD) {
@@ -223,14 +226,14 @@ export class VersusOnline extends BaseWorld {
       const rk = new Rocket(edgeX, p.y, this.app.images.rocket, this.remote, p.facingLeft ? 180 : 0);
       this.localRockets.push(rk);
       this.net.send({ k: 'rf', x: Math.round(edgeX), y: Math.round(p.y) });
-      audio.play('rocket', 0.5, m.x);
+      audio.play('rocket', 0.5, edgeX);
     }
     // laser (Q / Period / pad Y)
     if ((k.has('KeyQ') || k.has('Period') || (pad && pad.fire3)) && p.lasers > 0 && this.time - p.lastLz > LZ_CD) {
       p.lastLz = this.time; p.lasers--;
       const dir = p.facingLeft ? -1 : 1;
       this.effects.push(new LaserBeam(edgeX, p.y, this.time, 'rgb(120,220,255)', dir));
-      audio.playSynth('plaser', m.x);
+      audio.playSynth('plaser', edgeX);
       this.net.send({ k: 'lf', x0: Math.round(edgeX), y: Math.round(p.y), dir });
     }
     // thruster anim
@@ -446,7 +449,7 @@ export class VersusOnline extends BaseWorld {
     const r = this.net.rtt || 0;
     if (!r) return;
     const col = r < 80 ? 'rgb(0,220,130)' : r < 160 ? 'rgb(255,210,60)' : 'rgb(255,90,90)';
-    drawText(g, `${r} ms`, W / 2, 46, 13, col);
+    drawText(g, `${r} ms`, W / 2, 74, 13, col); // below the ammo line — no overlap
   }
 
   onResize() { super.onResize(); }

@@ -6,7 +6,7 @@ import { Button, ButtonGroup, drawText } from './ui.js';
 import { BaseWorld } from './world.js';
 import {
   Player, Enemy, Boss, Asteroid, PowerUp, Explosion, Spark, Shockwave,
-  Mine, MeshDebris, shatterSprite, Comet, DistantConvoy, Freighter, Skirmish, WarpStreak, Lightning,
+  Mine, MeshDebris, shatterSprite, RockDust, Comet, DistantConvoy, DistantRocks, Freighter, Skirmish, WarpStreak, Lightning,
   LaserBeam, ScorePopup,
   POWERUP_TYPES, POWERUP_IMG,
 } from './entities.js';
@@ -100,6 +100,8 @@ export class GameState extends BaseWorld {
     this.enemyAcc = 0;
     this.asteroidAcc = 0;
     this.powerupAcc = 0;
+    this.shower = null; // meteor shower event
+    this.nextShowerAt = 45000 + randInt(0, 30000);
 
     this.shake = 0;
     this.over = false;
@@ -272,6 +274,43 @@ export class GameState extends BaseWorld {
     for (let i = 0; i < count; i++) this.effects.push(new Spark(x, y, this.time, dir));
   }
 
+  // dust burst when a rock cracks; amount/spread/loudness scale with the size
+  spawnRockDust(x, y, w) {
+    audio.playSynth('crack', x, Math.min(1.5, 0.6 + w / 160));
+    const s = Math.max(0.7, w / 90);
+    const grit = Math.round(8 + w * 0.16);
+    for (let i = 0; i < grit; i++) this.effects.push(new RockDust(x, y, this.time, s));
+    for (let i = 0; i < 4; i++) this.effects.push(new RockDust(x, y, this.time, s, true));
+  }
+
+  // ~1 in 9 rocks is volcanic — it blows a damaging shockwave when cracked
+  pickRock() {
+    const pool = this.app.images.asteroids;
+    const volcanic = randInt(1, 9) === 1;
+    const sub = pool.filter((r) => !!r.volcanic === volcanic);
+    return sub[randInt(0, sub.length - 1)];
+  }
+
+  // volcanic rock cracked: a blast that torches nearby fighters and burns
+  // enemy fire out of the air — never hurts the player, it's a reward
+  volcanicBlast(a) {
+    const r = a.size === 'large' ? 210 : a.size === 'medium' ? 130 : 70;
+    this.effects.push(new Shockwave(a.x, a.y, this.time, r, 'rgb(255,120,60)'));
+    audio.play('explosion', 0.45, a.x);
+    this.shake = Math.min(12, this.shake + 4);
+    for (const e of this.enemies) {
+      if (e.dead || e.dying || e.isBoss) continue;
+      if ((e.x - a.x) ** 2 + (e.y - a.y) ** 2 < r * r) {
+        e.dead = true;
+        this.explode(e.x, e.y, false);
+        this.addKill(e.points || 10, e.x, e.y);
+      }
+    }
+    for (const b of this.enemyBullets) {
+      if (!b.dead && (b.x - a.x) ** 2 + (b.y - a.y) ** 2 < r * r) b.dead = true;
+    }
+  }
+
   popup(x, y, text, color) {
     this.effects.push(new ScorePopup(x, y, text, this.time, color));
     if (this.online) (this._spQ = this._spQ || []).push([Math.round(x), Math.round(y), text]);
@@ -319,15 +358,26 @@ export class GameState extends BaseWorld {
           this.explode(e.x, e.y, true, e.type === 'tank' ? 1.5 : 1);
           if (e.type === 'tank' && rand(0, 1) < 0.4) this.dropPowerup(e.x, e.y);
         }
+      } else {
+        audio.playSynth('hit', e.x, 1.2); // hull held against the beam
       }
     }
-    // asteroids split like a bullet hit
+    // asteroids split like a bullet hit (the beam gouges a giant for 2)
     for (const a of this.asteroids) {
       if (a.dead || a.x + a.w / 2 < x0 || Math.abs(a.y - y) > HALF + a.h * 0.35) continue;
+      if (a.hp > 2) {
+        a.hp -= 2;
+        this.spawnSparks(a.x - a.w / 2, a.y, 6);
+        for (let i = 0; i < 6; i++) this.effects.push(new RockDust(a.x - a.w / 2, a.y, this.time, 1));
+        audio.playSynth('thock', a.x, 1.2);
+        continue;
+      }
       a.dead = true;
-      this.explode(a.x, a.y);
+      this.explode(a.x, a.y, false);
+      this.spawnRockDust(a.x, a.y, a.w);
+      if (a.volcanic) this.volcanicBlast(a);
       this.addKill(5, a.x, a.y);
-      this.asteroids.push(...a.breakApart());
+      this.asteroids.push(...a.breakApart(this.time));
     }
   }
 
@@ -367,6 +417,7 @@ export class GameState extends BaseWorld {
       this.pushToasts(bumpStats({ shieldSaves: 1 }));
       return;
     }
+    if (this.shower) this.shower.survived = false; // shower bonus lost
     this.explode(p.x, p.y, true, 1.6);
     shatterSprite(this, p.img, p.x, p.y, p.w, { ry: 0, vx: -0.5 });
     vibrate(140);
@@ -513,7 +564,46 @@ export class GameState extends BaseWorld {
     this.asteroidAcc += dt;
     if (this.asteroidAcc >= this.asteroidInterval * (this.mod?.asteroidRate || 1) && spawningAllowed) {
       this.asteroidAcc = 0;
-      this.asteroids.push(new Asteroid(this.app.images.asteroid, 'large'));
+      this.asteroids.push(new Asteroid(this.pickRock(), 'large'));
+    }
+
+    // --- meteor shower: klaxon warning, then a slanted rock storm ---
+    if (!this.shower && this.time > this.nextShowerAt && spawningAllowed &&
+        !this.bossSpawned && !this.bossWarnStart && !this.levelBanner) {
+      this.shower = {
+        warnUntil: this.time + 2200,
+        until: this.time + 14000,
+        acc: 400,
+        dir: rand(0, 1) < 0.5 ? 1 : -1, // one slant per shower
+        survived: true,
+      };
+      this.logEvent('METEOR SHOWER');
+      audio.playSynth('storm');
+      vibrate([50, 80, 50]);
+    }
+    if (this.shower && this.time > this.shower.warnUntil) {
+      if (this.time < this.shower.until) {
+        this.shower.acc += dt;
+        if (this.shower.acc > 520 && spawningAllowed) {
+          this.shower.acc = 0;
+          const a = new Asteroid(this.pickRock(), rand(0, 1) < 0.45 ? 'medium' : 'large');
+          a.vx = rand(3.5, 6.5);
+          a.vy = this.shower.dir * rand(0.8, 2.2);
+          a.rotSpeed *= 1.6;
+          a.y = this.shower.dir > 0
+            ? randInt(a.h / 2, (H * 0.6) | 0)
+            : randInt((H * 0.4) | 0, H - a.h / 2);
+          this.asteroids.push(a);
+        }
+      } else {
+        if (this.shower.survived && this.players().some((p) => p.alive)) {
+          this.score += 150;
+          this.popup(W / 2, H * 0.25, 'SHOWER CLEARED +150', 'rgb(255,190,90)');
+          audio.playSynth('combo');
+        }
+        this.shower = null;
+        this.nextShowerAt = this.time + 65000 + randInt(0, 45000);
+      }
     }
 
     // --- boss spawn: WARNING klaxon first, then the boss flies in.
@@ -588,13 +678,14 @@ export class GameState extends BaseWorld {
       } else {
         this.nextAmbientAt = this.time + 18000 + Math.random() * 26000;
         const roll = Math.random();
-        if (roll < 0.32) {
+        if (roll < 0.28) {
           // a quarter of comets are on a collision course with the planet
           const target = Math.random() < 0.25 ? this.planets?.[0] : null;
           this.ambient.push(new Comet(this.time, target));
-        } else if (roll < 0.55) this.ambient.push(new DistantConvoy(this.app.images, this.time));
-        else if (roll < 0.8) this.ambient.push(new Freighter(this.time));
-        else this.ambient.push(new Skirmish(this.app.images, this.time));
+        } else if (roll < 0.5) this.ambient.push(new DistantConvoy(this.app.images, this.time));
+        else if (roll < 0.72) this.ambient.push(new Freighter(this.time));
+        else if (roll < 0.86) this.ambient.push(new Skirmish(this.app.images, this.time));
+        else this.ambient.push(new DistantRocks(this.app.images, this.time));
       }
     }
     for (const a of this.ambient) a.update(this);
@@ -622,6 +713,39 @@ export class GameState extends BaseWorld {
     for (const b of this.enemyBullets) b.update(this);
     for (const e of this.enemies) e.update(this);
     for (const a of this.asteroids) a.update(this);
+
+    // rocks bounce off each other (impulse along the contact normal, mass ~ area).
+    // Asteroid.vx is "leftward speed" (x -= vx), so convert to screen space first.
+    for (let i = 0; i < this.asteroids.length; i++) {
+      const a = this.asteroids[i];
+      if (a.dead) continue;
+      for (let j = i + 1; j < this.asteroids.length; j++) {
+        const b = this.asteroids[j];
+        if (b.dead) continue;
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const min = (a.w + b.w) * 0.42;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < 1 || d2 >= min * min) continue;
+        const d = Math.sqrt(d2), nx = dx / d, ny = dy / d;
+        const ma = a.w * a.w, mb = b.w * b.w;
+        let avx = -a.vx, bvx = -b.vx;
+        const rvn = (bvx - avx) * nx + (b.vy - a.vy) * ny;
+        if (rvn < 0) { // approaching
+          const imp = (2 * rvn) / (ma + mb);
+          avx += imp * mb * nx; a.vy += imp * mb * ny;
+          bvx -= imp * ma * nx; b.vy -= imp * ma * ny;
+          a.vx = -avx; b.vx = -bvx;
+          if (rvn < -1.6) { // hard knock: dust + tumble kick
+            const mx = a.x + dx / 2, my = a.y + dy / 2;
+            for (let k = 0; k < 4; k++) this.effects.push(new RockDust(mx, my, this.time, 0.8));
+            a.rotSpeed *= -1; b.rotSpeed *= -1;
+          }
+        }
+        const push = (min - d) / 2; // separate so they don't re-collide next frame
+        a.x -= nx * push; a.y -= ny * push;
+        b.x += nx * push; b.y += ny * push;
+      }
+    }
     for (const p of this.powerups) p.update(this);
     for (const fx of this.effects) fx.update(this);
 
@@ -723,7 +847,7 @@ export class GameState extends BaseWorld {
             this.explode(w.x, w.y, true, 1.15);
             this.addKill(isRocket ? 5 : 2, w.x, w.y);
           } else {
-            audio.play('explosion', 0.12);
+            audio.playSynth('hit', w.x, 0.9);
           }
           break;
         }
@@ -751,9 +875,10 @@ export class GameState extends BaseWorld {
           }
           const killed = enemy.takeDamage(dmg);
           if (!killed) {
-            // survived the hit: flash + tiny kick, no explosion
+            // survived the hit: flash + tiny kick + armor clank
             this.shake = Math.min(12, this.shake + (isRocket ? 2 : 0.7));
-            audio.play('explosion', isRocket ? 0.3 : 0.12);
+            if (isRocket) audio.play('explosion', 0.3, enemy.x);
+            audio.playSynth('hit', enemy.x, isRocket ? 1.25 : 1);
             continue;
           }
           this.addKill(enemy.points + (isRocket ? 10 : 0), enemy.x, enemy.y);
@@ -805,6 +930,7 @@ export class GameState extends BaseWorld {
           b.dead = true;
           a.hp = (a.hp ?? (a.golden ? 18 : 6)) - 1;
           this.spawnSparks(b.x, b.y, 4);
+          if (a.hp > 0) audio.playSynth('hit', b.x, 0.7); // hull rings, holds
           if (a.hp <= 0) {
             a.dead = true;
             this.explode(cx, cy, true, 1.7);
@@ -837,31 +963,69 @@ export class GameState extends BaseWorld {
       }
     }
 
-    // bullets vs asteroids (asteroid breaks apart)
+    // bullets vs asteroids (asteroid breaks apart; giants soak several hits)
     for (const a of this.asteroids) {
       if (a.dead) continue;
       for (const b of this.bullets) {
         if (b.dead || !overlap(a, b, 0.8)) continue;
         b.dead = true;
+        if (a.hp > 1) { // chipped, not cracked
+          a.hp--;
+          a.x += 4; // knocked back a touch
+          this.spawnSparks(b.x, b.y, 5);
+          for (let i = 0; i < 5; i++) this.effects.push(new RockDust(b.x, b.y, this.time, 0.8));
+          audio.playSynth('thock', a.x);
+          break;
+        }
         a.dead = true;
-        this.explode(a.x, a.y);
-        shatterSprite(this, a.img, a.x, a.y, a.w, { vis: 1, chunks: 4, ry: 0 });
-        this.addKill(5, a.x, a.y);
-        this.asteroids.push(...a.breakApart());
+        this.explode(a.x, a.y, false); // the crack sfx carries it — no fireball boom
+        this.spawnRockDust(a.x, a.y, a.w);
+        if (a.volcanic) this.volcanicBlast(a);
+        this.addKill(a.huge ? 15 : 5, a.x, a.y);
+        this.asteroids.push(...a.breakApart(this.time));
         break;
       }
     }
 
-    // rockets vs asteroids (no break apart)
+    // rockets vs asteroids (no break apart; a rocket gouges a giant for 2)
     for (const a of this.asteroids) {
       if (a.dead) continue;
       for (const r of this.rockets) {
         if (r.dead || !overlap(a, r, 0.8)) continue;
         r.dead = true;
+        if (a.hp > 2) {
+          a.hp -= 2;
+          a.x += 10;
+          this.explode(r.x, r.y, true, 0.7);
+          for (let i = 0; i < 8; i++) this.effects.push(new RockDust(r.x, r.y, this.time, 1));
+          audio.playSynth('thock', a.x, 1.3);
+          break;
+        }
         a.dead = true;
-        this.explode(a.x, a.y);
-        shatterSprite(this, a.img, a.x, a.y, a.w, { vis: 1, chunks: 5, ry: 0 });
-        this.addKill(10, a.x, a.y);
+        this.explode(a.x, a.y, false);
+        this.spawnRockDust(a.x, a.y, a.w);
+        if (a.volcanic) this.volcanicBlast(a);
+        this.addKill(a.huge ? 20 : 10, a.x, a.y);
+        break;
+      }
+    }
+
+    // enemy fire splashes on rocks — asteroids double as moving cover
+    for (const b of this.enemyBullets) {
+      if (b.dead) continue;
+      for (const a of this.asteroids) {
+        if (a.dead || !overlap(a, b, 0.7)) continue;
+        b.dead = true;
+        this.spawnSparks(b.x, b.y, 3, 0);
+        break;
+      }
+    }
+    for (const r of this.enemyRockets) {
+      if (r.dead) continue;
+      for (const a of this.asteroids) {
+        if (a.dead || !overlap(a, r, 0.7)) continue;
+        r.dead = true;
+        this.explode(r.x, r.y, true, 0.6);
         break;
       }
     }
@@ -875,6 +1039,46 @@ export class GameState extends BaseWorld {
         this.explode(e.x, e.y);
         this.score += 10;
         break;
+      }
+    }
+
+    // asteroids vs the boss: a heavy rock slams in, crumbles and chips the
+    // hull (never below 1 hp — the kill belongs to the player); everything
+    // else the hull just shoves aside
+    for (const e of this.enemies) {
+      if (!e.isBoss || e.dead) continue;
+      for (const a of this.asteroids) {
+        if (a.dead || !overlap(e, a, 0.78)) continue;
+        const shielded = e.shieldUntil > this.time;
+        if (a.size === 'large' && !e.deathSeq && !shielded) {
+          e.health = Math.max(1, e.health - (a.huge ? 2 : 1));
+          e.flash = 1;
+          this.shake = Math.min(12, this.shake + 2);
+          this.spawnSparks(a.x + a.w / 4, a.y, 10);
+          a.dead = true;
+          this.explode(a.x, a.y, false);
+          this.spawnRockDust(a.x, a.y, a.w);
+          if (a.volcanic) this.volcanicBlast(a);
+          continue;
+        }
+        // shove: send the rock away from the hull along the contact normal
+        const dx = a.x - e.x, dy = a.y - e.y;
+        const d = Math.hypot(dx, dy) || 1;
+        const nx = dx / d, ny = dy / d;
+        const sp = Math.max(1.6, Math.hypot(a.vx, a.vy));
+        a.vx = -nx * sp; // stored vx is leftward speed
+        a.vy = ny * sp;
+        a.x += nx * 4; a.y += ny * 4;
+        if (shielded) {
+          e.shieldRipple = { a: Math.atan2(a.y - e.y, a.x - e.x), start: this.time };
+          if (this.time > (this._shieldPingAt || 0)) {
+            this._shieldPingAt = this.time + 90;
+            audio.playSynth('shield_hit', e.x);
+          }
+        } else if (this.time > (a._shoveDustAt || 0)) {
+          a._shoveDustAt = this.time + 250;
+          for (let i = 0; i < 3; i++) this.effects.push(new RockDust(a.x, a.y, this.time, 0.8));
+        }
       }
     }
 
@@ -957,7 +1161,13 @@ export class GameState extends BaseWorld {
       }
       if (!p.alive) continue;
       for (const a of this.asteroids) {
-        if (!a.dead && overlap(p, a, 0.75)) { a.dead = true; this.killPlayer(p, a.x, a.y); break; }
+        if (!a.dead && overlap(p, a, 0.75)) {
+          a.dead = true;
+          this.spawnRockDust(a.x, a.y, a.w);
+          if (a.volcanic) this.volcanicBlast(a);
+          this.killPlayer(p, a.x, a.y);
+          break;
+        }
       }
       if (!p.alive) continue;
 
@@ -996,7 +1206,7 @@ export class GameState extends BaseWorld {
     else if (type === 'slow_motion') { this.speedMul = 0.5; this.slowMoEnd = this.time + 10000; audio.play('powerup', 0.6); }
     else if (type === 'kill_all') {
       for (const e of this.enemies) if (!e.isBoss && !e.dead && !e.dying) { e.dead = true; this.explode(e.x, e.y, false); }
-      for (const a of this.asteroids) if (!a.dead) { a.dead = true; this.explode(a.x, a.y, false); }
+      for (const a of this.asteroids) if (!a.dead) { a.dead = true; this.explode(a.x, a.y, false); this.spawnRockDust(a.x, a.y, a.w); }
       for (const r of this.enemyRockets) if (!r.dead) { r.dead = true; this.explode(r.x, r.y, false, 0.8); }
       for (const m of this.mines) if (!m.dead) { m.dead = true; this.explode(m.x, m.y, false, 0.8); }
       audio.play('explosion', 0.6);
@@ -1149,6 +1359,17 @@ export class GameState extends BaseWorld {
       g.globalAlpha = 0.55 + 0.45 * blink;
       drawText(g, '!! WARNING !!', W / 2, H / 2 - 220, 46, 'rgb(255,60,60)');
       drawText(g, 'BOSS APPROACHING', W / 2, H / 2 - 178, 20, 'rgb(255,150,150)');
+      g.globalAlpha = 1;
+    }
+
+    // meteor shower warning banner
+    if (this.shower && this.time < this.shower.warnUntil) {
+      const blink = 0.5 + 0.5 * Math.sin(this.time / 90);
+      g.fillStyle = `rgba(255,140,40,${0.06 * blink})`;
+      g.fillRect(0, 0, W, H);
+      g.globalAlpha = 0.55 + 0.45 * blink;
+      drawText(g, 'METEOR SHOWER', W / 2, H / 2 - 220, 42, 'rgb(255,170,70)');
+      drawText(g, 'SURVIVE FOR A BONUS', W / 2, H / 2 - 180, 18, 'rgb(255,205,140)');
       g.globalAlpha = 1;
     }
 

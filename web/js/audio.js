@@ -35,18 +35,20 @@ function pannedOut(x) {
   return p;
 }
 
-export function play(name, volume = 0.6, x = null) {
+export function play(name, volume = 0.6, x = null, rate = 1) {
   const buf = buffers[name];
   if (!buf || actx.state !== 'running' || settings.sfx <= 0) return;
   const src = actx.createBufferSource();
   const gain = actx.createGain();
   gain.gain.value = volume * settings.sfx;
   src.buffer = buf;
+  src.playbackRate.value = rate; // pitch variation breaks sample monotony
   src.connect(gain).connect(pannedOut(x));
   src.start();
 }
 
-let OUT = null; // per-playSynth output (panned); null = master
+let OUT = null;  // per-playSynth output (panned); null = master
+let GAIN = 1;    // per-playSynth loudness multiplier
 
 /* ------------------------------ synth jingles ------------------------------ */
 // Event sounds generated with oscillators — no audio files needed.
@@ -69,7 +71,7 @@ function noiseHit(when, dur, vol = 0.2, freq = 1500, freqEnd = 0, q = 1.2) {
   if (freqEnd) bp.frequency.exponentialRampToValueAtTime(Math.max(60, freqEnd), when + dur);
   const gain = actx.createGain();
   gain.gain.setValueAtTime(0.0001, when);
-  gain.gain.linearRampToValueAtTime(vol * settings.sfx, when + 0.015);
+  gain.gain.linearRampToValueAtTime(vol * GAIN * settings.sfx, when + 0.015);
   gain.gain.exponentialRampToValueAtTime(0.001, when + dur);
   src.connect(bp).connect(gain).connect(OUT || actx.destination);
   src.start(when);
@@ -83,16 +85,17 @@ function note(freq, when, dur, type = 'triangle', vol = 0.2, slide = 0) {
   osc.frequency.setValueAtTime(freq, when);
   if (slide) osc.frequency.exponentialRampToValueAtTime(Math.max(30, freq + slide), when + dur);
   gain.gain.setValueAtTime(0.0001, when);
-  gain.gain.linearRampToValueAtTime(vol * settings.sfx, when + 0.012);
+  gain.gain.linearRampToValueAtTime(vol * GAIN * settings.sfx, when + 0.012);
   gain.gain.exponentialRampToValueAtTime(0.001, when + dur);
   osc.connect(gain).connect(OUT || actx.destination);
   osc.start(when);
   osc.stop(when + dur + 0.05);
 }
 
-export function playSynth(name, x = null) {
+export function playSynth(name, x = null, gain = 1) {
   if (actx.state !== 'running' || settings.sfx <= 0) return;
   OUT = x == null ? null : pannedOut(x);
+  GAIN = gain;
   const t = actx.currentTime;
   if (name === 'fanfare') {
     [523, 659, 784, 1046].forEach((f, i) => note(f, t + i * 0.12, 0.25, 'triangle', 0.22));
@@ -146,12 +149,42 @@ export function playSynth(name, x = null) {
     // one lightning bolt
     note(1500, t, 0.1, 'sawtooth', 0.07, -1100);
     noiseHit(t, 0.14, 0.1, 3200, 700, 1.6);
+  } else if (name === 'crack') {
+    // rock splitting: stony crunch, randomized per hit so a rock field never
+    // sounds like a loop — snap, deep double thud, rubble hiss, stray pebbles
+    const p = 0.88 + Math.random() * 0.28; // pitch spread
+    noiseHit(t, 0.05, 0.45, 2900 * p, 1300, 2);
+    note(78 * p, t, 0.24, 'square', 0.65, -48);
+    note(50 * p, t + 0.02, 0.24, 'sine', 0.6, -20);
+    noiseHit(t, 0.3, 0.8, 1250 * p, 220, 1);
+    noiseHit(t + 0.06 + Math.random() * 0.05, 0.26, 0.35, 540 * p, 150, 0.8);
+    if (Math.random() < 0.5) noiseHit(t + 0.17, 0.16, 0.2, 950 * p, 320, 1.6);
+  } else if (name === 'hit') {
+    // armor holds the hit: layered impact — snap transient, punch + sub
+    // thump, detuned metallic ring-off, spark sizzle; jittered per hit
+    const p = 0.88 + Math.random() * 0.28;
+    noiseHit(t, 0.03, 0.5, 4200 * p, 2400, 2.5);
+    note(150 * p, t, 0.13, 'square', 0.38, -95);
+    note(58 * p, t + 0.01, 0.16, 'sine', 0.45, -26);
+    note(910 * p, t, 0.13, 'triangle', 0.17, -260);
+    note(1370 * p * (0.97 + Math.random() * 0.07), t + 0.005, 0.1, 'triangle', 0.1, -430);
+    noiseHit(t + 0.01, 0.13, 0.15, 2600 * p, 650, 1.6);
+  } else if (name === 'thock') {
+    // giant rock chipped, not cracked: dull stone knock + gritty tick
+    const p = 0.85 + Math.random() * 0.3;
+    note(125 * p, t, 0.09, 'square', 0.32, -65);
+    noiseHit(t, 0.09, 0.35, 850 * p, 280, 1.3);
+  } else if (name === 'plasma') {
+    // x5 combo bolt: short hot sizzle layered over the gun sample
+    note(1350, t, 0.09, 'sawtooth', 0.1, -850);
+    noiseHit(t, 0.07, 0.07, 3100, 1500, 2.2);
   } else if (name === 'laser_charge') {
     note(180, t, 0.85, 'sawtooth', 0.12, 500);
   } else if (name === 'laser_fire') {
     note(950, t, 0.7, 'sawtooth', 0.16, -500);
   }
   OUT = null;
+  GAIN = 1;
 }
 
 /* ---------------------------------- music ---------------------------------- */

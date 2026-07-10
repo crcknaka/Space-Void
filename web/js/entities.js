@@ -21,27 +21,45 @@ export function drawFlames(g, img, thr, w, h, opts = {}) {
   // a composite-mode toggle per nozzle per ship flushes the GPU batch (slow).
   const boost = opts.boost ? 1.45 : 1;
   const list = img.nozzles;
+  // sputter (falling wrecks): per-nozzle malfunction — dead engines stay
+  // dark, live ones cough and gutter instead of burning steady
+  const sp = opts.sputter;
+  const flicker = (i) => {
+    const st = sp.states[i] || sp.states[0];
+    if (st.dead) return 0;
+    if (Math.sin(sp.t / 63 + st.ph * 2.3) < -0.55) return 0; // full dropout
+    return 0.35 + 0.65 * Math.abs(Math.sin(sp.t / 47 + st.ph) * Math.sin(sp.t / 19 + st.ph * 1.7));
+  };
   if (!list || !list.length) { // legacy fallback: one centered flame at the tail
-    const s = 40 * boost;
+    const f = sp ? flicker(0) : 1;
+    if (f < 0.08) return;
+    const s = 40 * boost * (sp ? 0.45 + 0.55 * f : 1);
     g.save();
     g.translate((opts.flip ? 1 : -1) * (w / 2 + 2), 0);
     if (opts.flip) g.scale(-1, 1);
+    if (sp) g.globalAlpha = 0.4 + 0.6 * f;
     g.drawImage(thr, -s * 0.75, -s / 2, s, s);
+    g.globalAlpha = 1;
     g.restore();
     return;
   }
   // afterburner: the plume stretches lengthwise, not just scales — reads as speed
   const stretch = opts.boost ? 1.55 : 1;
-  for (const n of list) {
+  for (let i = 0; i < list.length; i++) {
+    const n = list[i];
+    const f = sp ? flicker(i) : 1;
+    if (f < 0.08) continue;
     const ox = (n.x / img.width) * w - w / 2;
     const oy = (n.y / img.height) * h - h / 2;
     const rw = (n.r / img.width) * w; // engine radius in world px
-    const s = clamp(rw * 9, 20, 60) * boost;
+    const s = clamp(rw * 9, 20, 60) * boost * (sp ? 0.45 + 0.55 * f : 1);
     const sw = s * stretch;
     g.save();
     g.translate(ox, oy);
     if (opts.flip) g.scale(-1, 1);
+    if (sp) g.globalAlpha = 0.4 + 0.6 * f;
     g.drawImage(thr, -sw * (48 / 64), -s / 2, sw, s); // nozzle anchor at canvas x=48
+    g.globalAlpha = 1;
     if (opts.boost) { // second additive pass — hotter, longer tongue
       const prev = g.globalCompositeOperation;
       g.globalCompositeOperation = 'lighter';
@@ -415,7 +433,11 @@ export class Player {
     if (world.effects) world.effects.push(new MuzzleFlash(edgeX, this.y, world.time));
     this.lastShot = world.time;
     world._shots = (world._shots || 0) + 1; // for online sfx streaming
-    audio.play('gun', 0.22, this.x);
+    // combo heat in the sound too: hotter tiers drop the pitch (meatier bolt),
+    // per-shot jitter keeps autofire from sounding like a loop
+    const rate = (tier === 3 ? 0.86 : tier === 2 ? 0.94 : 1) * (0.95 + Math.random() * 0.1);
+    audio.play('gun', tier === 3 ? 0.28 : 0.22, this.x, rate);
+    if (tier === 3) audio.playSynth('plasma', this.x);
   }
 
   fireRocket(world) {
@@ -797,6 +819,49 @@ export class DistantConvoy {
   }
 }
 
+// Loose cluster of far-off rocks drifting behind the action — dark tinted
+// asteroid sprites on a slow parallax so the sector reads deep.
+export class DistantRocks {
+  constructor(images, time) {
+    const pool = images.asteroids || [images.asteroid];
+    this.rocks = [];
+    const n = 3 + ((Math.random() * 4) | 0);
+    for (let i = 0; i < n; i++) {
+      const vi = (Math.random() * pool.length) | 0;
+      this.rocks.push({
+        img: tinted(pool[vi], 'rgba(26,30,42,0.93)', `belt_rock_${vi}`),
+        x: W + 30 + Math.random() * 260,
+        y: 30 + Math.random() * (H - 60),
+        s: 8 + Math.random() * 18,
+        v: 0.12 + Math.random() * 0.2,
+        rot: Math.random() * 360,
+        rv: (Math.random() - 0.5) * 0.5,
+      });
+    }
+    this.dead = false;
+  }
+  update(world) {
+    let alive = false;
+    for (const r of this.rocks) {
+      r.x -= r.v * world.k;
+      r.rot += r.rv * world.k;
+      if (r.x > -40) alive = true;
+    }
+    if (!alive) this.dead = true;
+  }
+  draw(g) {
+    g.globalAlpha = 0.8;
+    for (const r of this.rocks) {
+      g.save();
+      g.translate(r.x, r.y);
+      g.rotate((r.rot * Math.PI) / 180);
+      g.drawImage(r.img, -r.s / 2, -r.s / 2, r.s, r.s);
+      g.restore();
+    }
+    g.globalAlpha = 1;
+  }
+}
+
 // Huge cargo hauler crossing far behind the action — baked once per sighting
 // from a fresh seed, rendered dim so it reads as a distant silhouette.
 export class Freighter {
@@ -986,6 +1051,54 @@ export class SmokeParticle {
     g.beginPath();
     g.arc(this.x, this.y, this.size, 0, Math.PI * 2);
     g.fill();
+    g.globalAlpha = 1;
+  }
+}
+
+/* -------------------------------- rock dust -------------------------------- */
+
+// Dust burst for a cracking asteroid: gritty square motes plus a few soft
+// tan puffs. Replaces 3D mesh debris, which clashed with the photo-style
+// rock sprites (the rock already splits into real pieces via breakApart).
+export class RockDust {
+  constructor(x, y, time, scale = 1, soft = false) {
+    this.soft = soft;
+    this.x = x + rand(-6, 6) * scale;
+    this.y = y + rand(-6, 6) * scale;
+    const a = rand(0, Math.PI * 2);
+    const sp = (soft ? rand(0.3, 1.2) : rand(0.8, 3.4)) * (0.7 + scale * 0.5);
+    this.vx = Math.cos(a) * sp - 0.5; // drifts left with the world flow
+    this.vy = Math.sin(a) * sp;
+    this.size = (soft ? rand(4, 9) : rand(1, 3.2)) * scale;
+    this.grow = soft ? rand(0.05, 0.1) : 0;
+    this.life = soft ? rand(500, 900) : rand(280, 700);
+    this.spawn = time;
+    this.shade = randInt(105, 170);
+    this.alpha = 1;
+    this.dead = false;
+  }
+  update(world) {
+    const age = world.time - this.spawn;
+    if (age > this.life) { this.dead = true; return; }
+    this.x += this.vx * world.k;
+    this.y += this.vy * world.k;
+    this.vx *= Math.pow(0.96, world.k);
+    this.vy *= Math.pow(0.96, world.k);
+    this.size += this.grow * world.k;
+    this.alpha = 1 - age / this.life;
+  }
+  draw(g) {
+    const s = this.shade;
+    g.fillStyle = `rgb(${s},${Math.round(s * 0.94)},${Math.round(s * 0.84)})`;
+    if (this.soft) {
+      g.globalAlpha = this.alpha * 0.22;
+      g.beginPath();
+      g.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+      g.fill();
+    } else {
+      g.globalAlpha = this.alpha * 0.9;
+      g.fillRect(this.x - this.size / 2, this.y - this.size / 2, this.size, this.size);
+    }
     g.globalAlpha = 1;
   }
 }
@@ -1217,7 +1330,7 @@ export class Enemy {
         this.aim = { y: this.y, until: world.time + 800 };
       } else if (this.aim && world.time >= this.aim.until) {
         world.enemyBullets.push(new EnemyBullet(this.x - this.w / 2, this.aim.y, this.bulletImg, -19, 0));
-        audio.play('gun', 0.3, this.x);
+        audio.play('gun', 0.3, this.x, 0.78 + Math.random() * 0.06); // deeper: reads as the sniper's heavy rifle
         this.aim = null;
         this.nextAimAt = world.time + Math.max(1800, randInt(2800, 4400) - this.level * 100);
       }
@@ -1289,11 +1402,20 @@ export class Enemy {
   draw(g, world) {
     const vw = this.w * VIS, vh = this.h * VIS;
     if (this.dying) {
-      // falling wreck: no engine flame, darkened hull
+      // falling wreck: darkened hull, engines malfunctioning — some nozzles
+      // dead, the rest cough and gutter instead of burning steady
       if (this.burning) drawGlow(g, glowEngine, this.x, this.y, 1.6 + 0.4 * Math.sin((world?.time ?? 0) / 90));
       g.save();
       g.translate(this.x, this.y);
       g.rotate((this.spinAngle * Math.PI) / 180);
+      if (!this._sputter) {
+        const n = Math.max(1, (this.img.nozzles || []).length);
+        this._sputter = Array.from({ length: n }, () => ({ dead: Math.random() < 0.4, ph: Math.random() * 7 }));
+        if (this._sputter.every((s) => s.dead)) this._sputter[0].dead = false; // one keeps coughing
+      }
+      const dt0 = world?.time ?? 0;
+      drawFlames(g, this.img, this.thrusters[((dt0 / 60) | 0) % this.thrusters.length], vw, vh,
+        { flip: true, sputter: { t: dt0, states: this._sputter } });
       g.drawImage(this.img, -vw / 2, -vh / 2, vw, vh);
       g.globalAlpha = 0.45;
       g.drawImage(tinted(this.img, 'rgba(0,0,0,1)', `black_enemy_${this.type}`),
@@ -1903,12 +2025,15 @@ export class Boss {
 export class Asteroid {
   constructor(img, size) {
     this.img = img;
+    this.volcanic = !!img.volcanic; // magma rock: blast wave when cracked
     this.size = size;
     this.angle = 0;
     if (size === 'large') {
-      this.rotSpeed = rand(0.5, 1);
-      const s = randInt(80, 150); this.w = s; this.h = s;
-      this.vx = rand(1, 2); this.vy = rand(-1, 1);
+      this.huge = rand(0, 1) < 0.16; // occasional slow monster rock
+      this.rotSpeed = this.huge ? rand(0.25, 0.55) : rand(0.5, 1);
+      const s = this.huge ? randInt(165, 235) : randInt(80, 150); this.w = s; this.h = s;
+      this.vx = this.huge ? rand(0.8, 1.4) : rand(1, 2);
+      this.vy = this.huge ? rand(-0.6, 0.6) : rand(-1, 1);
     } else if (size === 'medium') {
       this.rotSpeed = rand(1, 2);
       const s = randInt(40, 80); this.w = s; this.h = s;
@@ -1918,26 +2043,38 @@ export class Asteroid {
       const s = randInt(20, 40); this.w = s; this.h = s;
       this.vx = rand(4, 6); this.vy = rand(-3, 3);
     }
+    this.hp = this.huge ? randInt(3, 4) : 1; // giants soak hits before cracking
     this.x = W + randInt(5, 10) + this.w / 2;
     this.y = randInt(this.h / 2, H - this.h / 2);
+    this.trailUntil = 0; // fresh break pieces smoke dust for a moment
     this.dead = false;
   }
   update(world) {
     this.angle += this.rotSpeed * world.speedMul * world.k * 0.33; // pygame rotated every 50ms tick
     this.x -= this.vx * world.speedMul * world.k;
     this.y += this.vy * world.speedMul * world.k;
-    if (this.x + this.w / 2 < 0 || this.y - this.h / 2 > H || this.y + this.h / 2 < 0) this.dead = true;
+    if (this.trailUntil > world.time && world.effects && world.time - (this._lastTrail || 0) > 130) {
+      this._lastTrail = world.time;
+      const d = new RockDust(this.x + rand(-0.25, 0.25) * this.w, this.y + rand(-0.25, 0.25) * this.h,
+        world.time, Math.max(0.5, this.w / 110));
+      d.vx *= 0.35; d.vy *= 0.35; // lingering wake, not a burst
+      world.effects.push(d);
+    }
+    // right-edge cull too: bounces can send a rock back the way it came
+    if (this.x + this.w / 2 < 0 || this.x - this.w / 2 > W + 80 ||
+        this.y - this.h / 2 > H || this.y + this.h / 2 < 0) this.dead = true;
   }
-  breakApart() {
+  breakApart(now = 0) {
     const next = { large: 'medium', medium: 'small', small: null }[this.size];
     if (!next) return [];
-    const count = this.size === 'medium' ? randInt(2, 3) : 2;
+    const count = this.size === 'medium' ? randInt(2, 3) : this.huge ? randInt(3, 4) : 2;
     const pieces = [];
     for (let i = 0; i < count; i++) {
       const a = new Asteroid(this.img, next);
       a.x = this.x; a.y = this.y;
       a.vx = rand(-3, 3);
       a.vy = rand(-3, 3);
+      a.trailUntil = now + 1700;
       pieces.push(a);
     }
     return pieces;

@@ -179,7 +179,12 @@ async function boot() {
 
   let last = performance.now();
   let errCount = 0;
+  // The game is tuned for 60fps; on 120Hz+ displays (ProMotion Macs) rAF
+  // fires per refresh and doubles the update+draw work for no visual gain —
+  // the machine just runs hot. Skip ticks until ~1/60s has accumulated.
+  const MIN_FRAME = 1000 / 70;
   function frame(now) {
+    if (now - last < MIN_FRAME) { requestAnimationFrame(frame); return; }
     const dt = Math.min(Math.max(now - last, 0.1), 40); // clamp tab-switch spikes
     last = now;
     g.setTransform(scale, 0, 0, scale, 0, 0);

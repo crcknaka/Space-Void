@@ -8,7 +8,7 @@ import { genShip } from './shipgen.js';
 import { bossStaticMesh, BOSS_VIEW } from './bossgen.js';
 import {
   renderMesh, fitTransform, projectPoint, VIEW, makeRng,
-  newMesh, addVert, addFace, addLathe, addPlateY, addPlateZ,
+  newMesh, addLathe, addPlateY, addPlateZ,
 } from './mesh3d.js';
 
 const SEEDS = { player1: 4, player2: 2, basic: 3, weaver: 2, hunter: 1, tank: 5, boss: 7, sniper: 6, carrier: 2, shieldbearer: 4 };
@@ -70,34 +70,182 @@ function rocketMesh(body = [205, 210, 220], accent = [235, 70, 70]) {
 
 /* -------------------------------- asteroid -------------------------------- */
 
-function rockMesh(seed) {
+// Photo-style 2D bake — the look of the original asteroid.png (craggy
+// outline, grainy surface, craters, cracks, top-left key light) rebuilt in
+// canvas so the game stays fully procedural and each seed is a new rock.
+function bakeRock(seed, volcanic = false, D = 192) {
   const R = makeRng(seed);
-  const m = newMesh();
-  const secs = 6, sides = 7;
-  const rings = [];
-  for (let s = 0; s < secs; s++) {
-    const t = s / (secs - 1);
-    const x = -26 + t * 52;
-    const base = Math.max(1.2, Math.sin(Math.PI * t) * 20 * (0.75 + R() * 0.5));
-    const cy = (R() - 0.5) * 6, cz = (R() - 0.5) * 6;
-    const ring = [];
-    for (let i = 0; i < sides; i++) {
-      const a = (i / sides) * Math.PI * 2;
-      const r = base * (0.72 + R() * 0.55); // per-vertex lumpiness
-      ring.push(addVert(m, x + (R() - 0.5) * 5, cy + Math.cos(a) * r, cz + Math.sin(a) * r));
-    }
-    rings.push(ring);
+  const c = cv(D, D);
+  const g = c.getContext('2d');
+  const cx = D / 2, cy = D / 2, rad = D * 0.47;
+
+  // jagged silhouette: integer harmonics (loop closes cleanly) + hard jitter
+  const lumps = [];
+  for (let i = 0; i < 4; i++) lumps.push({ f: 2 + ((R() * 4) | 0), ph: R() * Math.PI * 2, amp: 0.05 + R() * 0.06 });
+  const n = 34, pts = [];
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    let r = 0.86;
+    for (const l of lumps) r += Math.cos(a * l.f + l.ph) * l.amp;
+    r += (R() - 0.5) * 0.17;
+    r = Math.max(0.55, Math.min(1, r));
+    pts.push([cx + Math.cos(a) * rad * r, cy + Math.sin(a) * rad * r]);
   }
-  const c = [138, 130, 122];
-  for (let s = 0; s < rings.length - 1; s++) {
-    for (let i = 0; i < sides; i++) {
-      const j = (i + 1) % sides;
-      addFace(m, [rings[s][i], rings[s][j], rings[s + 1][j], rings[s + 1][i]], c);
+  const path = () => {
+    g.beginPath();
+    g.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < n; i++) g.lineTo(pts[i][0], pts[i][1]);
+    g.closePath();
+  };
+
+  g.save();
+  path();
+  g.clip();
+
+  // base volume: dark rock falling off into near-black away from the light;
+  // per-seed warmth so the variants aren't the exact same shade of gray
+  const warm = 0.94 + R() * 0.13;
+  const tone = (l) => `rgb(${Math.round(l * warm)},${Math.round(l * 0.93)},${Math.round((l * 0.82) / warm)})`;
+  let gr = g.createRadialGradient(cx - D * 0.24, cy - D * 0.26, D * 0.06, cx, cy, D * 0.66);
+  gr.addColorStop(0, tone(140));
+  gr.addColorStop(0.5, tone(76));
+  gr.addColorStop(1, tone(24));
+  g.fillStyle = gr;
+  g.fillRect(0, 0, D, D);
+
+  // chiseled facets: hard-edged light/dark polygons, not soft blobs
+  for (let i = 0; i < 20; i++) {
+    const fx = cx + (R() - 0.5) * D * 0.8, fy = cy + (R() - 0.5) * D * 0.8;
+    const fr = D * (0.07 + R() * 0.14), fn = 3 + ((R() * 3) | 0), a0 = R() * Math.PI * 2;
+    g.beginPath();
+    for (let v = 0; v < fn; v++) {
+      const va = a0 + (v / fn) * Math.PI * 2;
+      const vr = fr * (0.6 + R() * 0.6);
+      const px = fx + Math.cos(va) * vr, py = fy + Math.sin(va) * vr;
+      v ? g.lineTo(px, py) : g.moveTo(px, py);
     }
+    g.closePath();
+    // faces tilted toward the top-left light read bright, away read dark
+    const lit = (fx - cx) + (fy - cy) < 0 ? R() < 0.6 : R() < 0.25;
+    g.fillStyle = lit
+      ? `rgba(205,195,178,${0.07 + R() * 0.13})`
+      : `rgba(12,10,9,${0.1 + R() * 0.18})`;
+    g.fill();
   }
-  addFace(m, rings[0].slice(), c);
-  addFace(m, rings[rings.length - 1].slice().reverse(), c);
-  return m;
+
+  // coarse photo grain
+  for (let i = 0; i < 4200; i++) {
+    const x = R() * D, y = R() * D, s = R() < 0.8 ? 1 : 2;
+    g.fillStyle = R() < 0.55
+      ? `rgba(14,12,10,${0.07 + R() * 0.18})`
+      : `rgba(225,215,198,${0.05 + R() * 0.13})`;
+    g.fillRect(x, y, s, s);
+  }
+  // mineral glints on the lit side
+  for (let i = 0; i < 60; i++) {
+    const x = cx + (R() - 0.8) * D * 0.5, y = cy + (R() - 0.8) * D * 0.5;
+    g.fillStyle = `rgba(255,248,232,${0.3 + R() * 0.45})`;
+    g.fillRect(x, y, 1 + (R() < 0.25 ? 1 : 0), 1);
+  }
+
+  // pits & craters: irregular dark gouges, faint lit far wall
+  const pits = 12 + ((R() * 6) | 0);
+  for (let i = 0; i < pits; i++) {
+    const a = R() * Math.PI * 2, d = Math.sqrt(R()) * rad * 0.72;
+    const x = cx + Math.cos(a) * d, y = cy + Math.sin(a) * d;
+    const big = R() < 0.28;
+    const r = D * (big ? 0.045 + R() * 0.045 : 0.012 + R() * 0.028);
+    const sq = 0.6 + R() * 0.4, rot = R() * Math.PI;
+    g.save();
+    g.translate(x, y); g.rotate(rot); g.scale(1, sq);
+    const p = g.createRadialGradient(0, 0, 0, 0, 0, r);
+    p.addColorStop(0, `rgba(8,7,6,${0.5 + R() * 0.3})`);
+    p.addColorStop(0.7, `rgba(8,7,6,${0.25 + R() * 0.2})`);
+    p.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = p;
+    g.beginPath(); g.arc(0, 0, r, 0, Math.PI * 2); g.fill();
+    if (big) { // far wall catches the light
+      g.lineWidth = Math.max(1, r * 0.16);
+      g.strokeStyle = `rgba(215,205,185,${0.2 + R() * 0.2})`;
+      g.beginPath(); g.arc(0, 0, r * 0.8, Math.PI * 0.1, Math.PI * 0.65); g.stroke();
+    }
+    g.restore();
+  }
+
+  // hairline cracks with branches
+  const crack = (x, y, a, segs, w) => {
+    g.lineWidth = w;
+    g.strokeStyle = `rgba(10,8,7,${0.4 + R() * 0.25})`;
+    g.beginPath(); g.moveTo(x, y);
+    for (let s = 0; s < segs; s++) {
+      a += (R() - 0.5) * 1.2;
+      x += Math.cos(a) * D * (0.03 + R() * 0.05);
+      y += Math.sin(a) * D * (0.03 + R() * 0.05);
+      g.lineTo(x, y);
+      if (w > 1 && R() < 0.3) crackBranch.push([x, y, a + (R() < 0.5 ? 1 : -1) * (0.6 + R())]);
+    }
+    g.stroke();
+  };
+  const crackBranch = [];
+  for (let i = 0, cn = 3 + ((R() * 3) | 0); i < cn; i++) {
+    crack(cx + (R() - 0.5) * D * 0.6, cy + (R() - 0.5) * D * 0.6, R() * Math.PI * 2, 4 + ((R() * 4) | 0), 1 + R());
+  }
+  for (const [bx, by, ba] of crackBranch.splice(0, 4)) crack(bx, by, ba, 2 + ((R() * 3) | 0), 1);
+
+  // key light: strong sheen top-left, deep shade bottom-right
+  gr = g.createLinearGradient(cx - rad, cy - rad, cx + rad, cy + rad);
+  gr.addColorStop(0, 'rgba(255,250,238,0.28)');
+  gr.addColorStop(0.4, 'rgba(0,0,0,0)');
+  gr.addColorStop(1, 'rgba(0,0,0,0.72)');
+  g.fillStyle = gr;
+  g.fillRect(0, 0, D, D);
+
+  // shadow-side rim only (a full outline reads like a sticker)
+  gr = g.createLinearGradient(cx - rad, cy - rad, cx + rad, cy + rad);
+  gr.addColorStop(0, 'rgba(0,0,0,0)');
+  gr.addColorStop(0.55, 'rgba(0,0,0,0.1)');
+  gr.addColorStop(1, 'rgba(0,0,0,0.8)');
+  path();
+  g.lineWidth = D * 0.05;
+  g.strokeStyle = gr;
+  g.stroke();
+  g.restore();
+
+  if (volcanic) {
+    // magma rock: glowing fissures + embers over the finished surface
+    g.save();
+    path();
+    g.clip();
+    g.globalCompositeOperation = 'lighter';
+    let heat = g.createRadialGradient(cx, cy, 0, cx, cy, D * 0.42);
+    heat.addColorStop(0, 'rgba(255,80,20,0.13)');
+    heat.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = heat;
+    g.fillRect(0, 0, D, D);
+    g.shadowColor = 'rgba(255,90,30,0.9)';
+    g.shadowBlur = 7;
+    for (let i = 0, fn = 4 + ((R() * 3) | 0); i < fn; i++) {
+      g.lineWidth = 1.4 + R() * 1.3;
+      g.strokeStyle = `rgba(255,${110 + ((R() * 60) | 0)},40,${0.5 + R() * 0.35})`;
+      let x = cx + (R() - 0.5) * D * 0.55, y = cy + (R() - 0.5) * D * 0.55, a = R() * Math.PI * 2;
+      g.beginPath(); g.moveTo(x, y);
+      for (let s = 0, segs = 3 + ((R() * 4) | 0); s < segs; s++) {
+        a += (R() - 0.5) * 1.3;
+        x += Math.cos(a) * D * (0.03 + R() * 0.05);
+        y += Math.sin(a) * D * (0.03 + R() * 0.05);
+        g.lineTo(x, y);
+      }
+      g.stroke();
+    }
+    g.shadowBlur = 0;
+    for (let i = 0; i < 26; i++) {
+      const x = cx + (R() - 0.5) * D * 0.7, y = cy + (R() - 0.5) * D * 0.7;
+      g.fillStyle = `rgba(255,${120 + ((R() * 80) | 0)},50,${0.3 + R() * 0.5})`;
+      g.fillRect(x, y, 1 + (R() < 0.3 ? 1 : 0), 1);
+    }
+    g.restore();
+  }
+  return c; // no mesh attached: rocks burst into dust, not 3D debris
 }
 
 /* ------------------------------ bullet bolts ------------------------------ */
@@ -365,7 +513,20 @@ export function generateSprites(images) {
   // static level-1 boss (coop guests see this; the host renders bosses live)
   images.boss = bakeInto(bossStaticMesh(1), 300, 300, BOSS_VIEW, 0.94);
 
-  images.asteroid = bakeInto(rockMesh(11), 128, 128, VIEW, 0.95);
+  // several rock variants; varIdx travels with the sprite for co-op sync
+  images.asteroids = [11, 29, 47, 68].map((s, i) => {
+    const r = bakeRock(s);
+    r.varIdx = i;
+    return r;
+  });
+  // volcanic rocks (rare spawns): glowing fissures, blast wave when cracked
+  [83, 97].forEach((s, k) => {
+    const r = bakeRock(s, true);
+    r.varIdx = 4 + k;
+    r.volcanic = true;
+    images.asteroids.push(r);
+  });
+  images.asteroid = images.asteroids[0];
   images.rocket = bakeInto(rocketMesh(), 48, 24, VIEW, 0.95);
   images.enemy_rocket = bakeInto(rocketMesh([125, 62, 68], [255, 75, 60]), 48, 24, VIEW, 0.95);
   images.bullet = makeBolt('rgb(255,225,120)', 'rgba(255,190,70,0.9)');

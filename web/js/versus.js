@@ -139,7 +139,7 @@ export class VersusState extends BaseWorld {
     const edgeX = p.facingLeft ? p.x - p.w / 2 : p.x + p.w / 2;
     bullets.push(new Bullet(edgeX, p.y, this.app.images.bullet, vx));
     p.lastShot = this.time;
-    audio.play('gun', 0.22, p.x);
+    audio.play('gun', 0.22, p.x, 0.95 + Math.random() * 0.1);
   }
 
   update(dt) {

@@ -208,7 +208,7 @@ export class CoopHost {
         ...g.enemyRockets.map((r) => [Math.round(r.x), Math.round(r.y), Math.round(r.angle), 1]),
       ],
       as: g.asteroids.map((a) => [Math.round(a.x), Math.round(a.y), Math.round(a.w / 2), Math.round(a.angle),
-        Math.round(-a.vx * m), Math.round(a.vy * m)]),
+        Math.round(-a.vx * m), Math.round(a.vy * m), a.img.varIdx || 0]),
       pu: g.powerups.map((p) => [Math.round(p.x), Math.round(p.y), PU_TYPES.indexOf(p.type)]),
     };
   }
@@ -329,7 +329,7 @@ export class CoopGuest extends BaseWorld {
       for (const f of m.fx || []) { this.effects.push(new Explosion(f[0], f[1], this.app.images.explosion_spritesheet, this.time, f[2])); audio.play('explosion', 0.4); }
       for (const s of m.sd || []) {
         if (s === 'siren') audio.playSynth('siren');
-        else audio.play(s, s === 'gun' ? 0.2 : s === 'rocket' ? 0.5 : 0.6);
+        else audio.play(s, s === 'gun' ? 0.2 : s === 'rocket' ? 0.5 : 0.6, null, s === 'gun' ? 0.95 + Math.random() * 0.1 : 1);
       }
       for (const l of m.lz || []) { this.effects.push(new LaserBeam(l[0], l[1], this.time)); audio.playSynth('plaser', l[0]); }
       for (const s of m.sp || []) this.effects.push(new ScorePopup(s[0], s[1], s[2], this.time));
@@ -591,7 +591,7 @@ export class CoopGuest extends BaseWorld {
       const ex = Math.min(this.time - (this.snapAt || this.time), 90) / STEP;
       for (const p of s.pu) { const img = this.puImg[PU_TYPES[p[2]]] || images.powerup; g.drawImage(img, p[0] - 30, p[1] - 15, 60, 30); }
       for (const mn of s.mi || []) drawMine(g, mn[0], mn[1], this.time);
-      for (const a of s.as) { const ax = a[0] + (a[4] || 0) * ex, ay = a[1] + (a[5] || 0) * ex; g.save(); g.translate(ax, ay); g.rotate(a[3] * Math.PI / 180); g.drawImage(images.asteroid, -a[2], -a[2], a[2] * 2, a[2] * 2); g.restore(); }
+      for (const a of s.as) { const ax = a[0] + (a[4] || 0) * ex, ay = a[1] + (a[5] || 0) * ex; const rock = images.asteroids?.[a[6]] || images.asteroid; g.save(); g.translate(ax, ay); g.rotate(a[3] * Math.PI / 180); g.drawImage(rock, -a[2], -a[2], a[2] * 2, a[2] * 2); g.restore(); }
       const thr = images.thrusters.enemy[this.frame >> 2 & 3];
       for (const e of s.en) {
         const w = e[5] || 50, h = e[2] === 4 ? w : Math.round(w * 0.6);
