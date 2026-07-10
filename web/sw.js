@@ -1,7 +1,7 @@
 // Space Void service worker — offline play + instant repeat loads.
 // Assets are cache-first (immutable), code/html/fonts are network-first
 // with cache fallback, /api is never cached.
-const CACHE = 'space-void-v3'; // v2: sprites are generated in-code, PNGs dropped
+const CACHE = 'space-void-v4'; // v4: fully procedural art, zero image downloads
 
 const PRECACHE = [
   '.',
@@ -12,7 +12,6 @@ const PRECACHE = [
   'js/versus.js', 'js/menu.js', 'js/scores.js', 'js/options.js',
   'js/lb.js', 'js/settings.js',
   'js/mesh3d.js', 'js/shipgen.js', 'js/procassets.js', 'js/bossgen.js', 'js/bggen.js',
-  'assets/images/menu_background.png',
   'assets/images/icon.png', 'assets/images/icon-192.png', 'assets/images/icon-512.png',
   'assets/sounds/click.m4a', 'assets/sounds/hover.m4a', 'assets/sounds/gun.m4a',
   'assets/sounds/explosion.m4a', 'assets/sounds/powerup.m4a', 'assets/sounds/rocket.m4a',

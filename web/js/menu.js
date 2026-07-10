@@ -3,7 +3,8 @@ import { W, H, STEP, randInt, rand, setRngSeed } from './const.js';
 import * as input from './input.js';
 import * as audio from './audio.js';
 import { Button, ButtonGroup, drawText } from './ui.js';
-import { Star, StaticStar } from './entities.js';
+import { Star, StaticStar, DistantConvoy, Freighter, Comet } from './entities.js';
+import { makeSpaceBackdrop, makePlanetSprite } from './bggen.js';
 import { GameState } from './game.js';
 import { VersusState } from './versus.js';
 import { ScoresState } from './scores.js';
@@ -21,6 +22,15 @@ export class MenuState {
     setRngSeed(null); // leave daily-seeded RNG
     this.page = 'main'; // main | local
     this.dailyBlock = 0;
+    this.time = 0;
+    this.k = 1;
+    // procedural vista: deep-space tile + a big dim world low in the frame +
+    // slow ambient traffic. Replaces the last PNG the game shipped with.
+    this.bg = makeSpaceBackdrop((Math.random() * 1e9) | 0);
+    this.bgX = 0;
+    this.planet = makePlanetSprite((Math.random() * 1e9) | 0);
+    this.ambient = [];
+    this.nextAmbientAt = 2000 + Math.random() * 5000;
     this.starfield();
     this.layout();
   }
@@ -73,8 +83,21 @@ export class MenuState {
 
   update(dt) {
     const k = dt / STEP;
+    this.k = k;
+    this.time += dt;
+    this.bgX -= 0.05 * k; // slow drift
     for (const s of this.stars) s.update(k);
     for (const s of this.staticStars) s.update(k);
+    // lazy ambient traffic crossing behind the buttons
+    if (this.time > this.nextAmbientAt) {
+      this.nextAmbientAt = this.time + 9000 + Math.random() * 14000;
+      const roll = Math.random();
+      this.ambient.push(roll < 0.35 ? new Comet(this.time)
+        : roll < 0.6 ? new DistantConvoy(this.app.images, this.time)
+        : new Freighter(this.time));
+    }
+    for (const a of this.ambient) a.update(this);
+    this.ambient = this.ambient.filter((a) => !a.dead);
     if (this.dailyBlock > 0) this.dailyBlock -= k;
 
     const action = this.menu.update();
@@ -96,17 +119,25 @@ export class MenuState {
   }
 
   draw(g) {
-    const { images } = this.app;
     g.fillStyle = '#000';
     g.fillRect(0, 0, W, H);
 
-    // background image near the bottom with slight mouse parallax, like menu.py
-    const img = images.menu_background;
-    const bgW = Math.min(W, 720);
-    const bgH = Math.round((bgW / img.width) * img.height);
+    // drifting deep-space tile + a large world rising from the bottom edge,
+    // both with slight mouse parallax like the old painting had
     const offX = -(input.pointer.x - W / 2) * 0.02;
     const offY = -(input.pointer.y - H / 2) * 0.02;
-    g.drawImage(img, (W - bgW) / 2 + offX, H - bgH + offY, bgW, bgH);
+    const q = g.imageSmoothingQuality;
+    g.imageSmoothingQuality = 'low';
+    const bgH = H, bgW = this.bg.width * (bgH / this.bg.height);
+    let bx = this.bgX % bgW;
+    if (bx > 0) bx -= bgW;
+    g.drawImage(this.bg, bx + offX * 0.4, offY * 0.4, bgW, bgH);
+    g.drawImage(this.bg, bx + bgW + offX * 0.4, offY * 0.4, bgW, bgH);
+    for (const a of this.ambient) a.draw(g, this);
+    const pw = Math.min(W * 0.9, 900);
+    const ph = pw * (this.planet.height / this.planet.width);
+    g.drawImage(this.planet, (W - pw) / 2 + offX, H - ph * 0.55 + offY, pw, ph);
+    g.imageSmoothingQuality = q;
 
     for (const s of this.staticStars) s.draw(g);
     for (const s of this.stars) s.draw(g);

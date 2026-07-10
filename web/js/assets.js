@@ -1,9 +1,6 @@
-// Image preloader. Only the big background paintings still load from PNG —
-// every sprite (ships, bullets, power-ups, explosion, thruster flames) is
-// generated procedurally at boot by procassets.js.
-const LIST = [
-  ['menu_background', 'png'],
-];
+// Image preloader. Every visual — sprites AND backgrounds — is generated
+// procedurally at boot now (procassets.js / bggen.js); nothing loads from PNG.
+const LIST = [];
 
 export const IMG_COUNT = LIST.length;
 
