@@ -111,7 +111,7 @@ export class GameState extends BaseWorld {
     if (this.app.debugBoss) {
       this.level = this.app.debugBoss;
       const b = new Boss(images, this.level, 0);
-      b.health = b.maxHealth = b.maxHealth * 6;
+      b.health = b.maxHealth = b.maxHealth * (b.mega ? 2 : 6); // megas: reach phase 2 fast in tests
       this.enemies.push(b);
       this.bossSpawned = true;
     }
@@ -141,6 +141,11 @@ export class GameState extends BaseWorld {
 
     // touch state (mobile: drag to move, on-screen rocket button)
     this.drag = null;
+    // first-run touch tutorial: ghost hints for ~10s
+    this.tutUntil = 0;
+    try {
+      if (input.isTouch && !this.online && !this.daily && !localStorage.getItem('sv_tut')) this.tutUntil = 10000;
+    } catch {}
 
     this._rtAt = -1; // per-frame cache key for rocketTargets()
 
@@ -1092,7 +1097,7 @@ export class GameState extends BaseWorld {
       const blink = 0.55 + 0.45 * Math.sin(this.time / 110);
       g.globalAlpha = active ? blink : Math.min(1, blink + 0.2);
       drawText(g, active ? '⚡ ION STORM — WEAPONS OFFLINE ⚡' : '⚡ ION STORM INCOMING ⚡',
-        W / 2, 120, 20, 'rgb(150,205,255)');
+        W / 2, 90, 20, 'rgb(150,205,255)');
       g.globalAlpha = 1;
     }
 
@@ -1166,7 +1171,7 @@ export class GameState extends BaseWorld {
         drawText(g, `LEVEL ${this.levelBanner.level}`, W / 2, H / 2 - 180, size, 'rgb(255,215,90)');
         drawText(g, `— ${sectorName(this.levelBanner.level)} —`, W / 2, H / 2 - 180 + size * 0.72, Math.round(size * 0.3), 'rgb(150,200,255)');
         g.globalAlpha = alpha * 0.8;
-        drawText(g, 'WAVE CLEARED', W / 2, H / 2 - 180 + size * 0.75, 18, 'rgb(200,200,200)');
+        drawText(g, 'WAVE CLEARED', W / 2, H / 2 - 180 + size * 0.72 + 30, 15, 'rgb(200,200,200)');
         g.globalAlpha = 1;
       }
     }
@@ -1185,8 +1190,8 @@ export class GameState extends BaseWorld {
       g.fillRect(mx, 38, 46 * frac, 3);
     }
     drawText(g, `Level: ${this.level}`, W - 10, 24, 26, '#fff', 'right');
-    drawText(g, sectorName(this.level), W - 10, 46, 12, 'rgba(160,190,220,0.75)', 'right');
-    if (this.daily) drawText(g, `DAILY · ${this.mod.name}`, W - 10, 52, 15, 'rgb(255,210,60)', 'right');
+    drawText(g, sectorName(this.level), W - 10, 44, 12, 'rgba(160,190,220,0.75)', 'right');
+    if (this.daily) drawText(g, `DAILY · ${this.mod.name}`, W - 10, 64, 15, 'rgb(255,210,60)', 'right');
 
     // daily modifier intro banner (first seconds of the run)
     if (this.daily && this.time < 3600 && !this.over) {
@@ -1210,6 +1215,33 @@ export class GameState extends BaseWorld {
       drawText(g, `⚡${p.lasers}`, many ? 168 : 192, y, fs, 'rgb(120,220,255)', 'left');
     });
     if (this.speedMul < 1) drawText(g, 'SLOW-MO', W / 2, 24, 24, 'rgb(120,200,255)');
+
+    // first-run touch tutorial overlay
+    if (this.tutUntil && !this.over) {
+      if (this.time >= this.tutUntil) {
+        this.tutUntil = 0;
+        try { localStorage.setItem('sv_tut', '1'); } catch {}
+      } else {
+        const a = Math.min(1, (this.tutUntil - this.time) / 1500) * 0.85;
+        const pulse = 1 + 0.12 * Math.sin(this.time / 250);
+        g.globalAlpha = a;
+        // move hint at the left third
+        const hx = W * 0.3, hy = H * 0.62;
+        g.strokeStyle = 'rgb(140,210,255)';
+        g.lineWidth = 2;
+        g.beginPath(); g.arc(hx, hy, 26 * pulse, 0, Math.PI * 2); g.stroke();
+        g.beginPath(); g.arc(hx, hy, 5, 0, Math.PI * 2); g.stroke();
+        drawText(g, 'DRAG ANYWHERE TO MOVE', hx, hy + 56, 16, 'rgb(140,210,255)');
+        drawText(g, 'GUNS FIRE ON THEIR OWN', hx, hy + 80, 13, 'rgba(200,220,240,0.85)');
+        // button hints
+        const rb = this.rocketBtn(), lb2 = this.laserBtn();
+        g.beginPath(); g.arc(rb.x, rb.y, (rb.r + 8) * pulse, 0, Math.PI * 2); g.stroke();
+        drawText(g, 'ROCKET', rb.x - rb.r - 12, rb.y, 15, 'rgb(140,210,255)', 'right');
+        g.beginPath(); g.arc(lb2.x, lb2.y, (lb2.r + 8) * pulse, 0, Math.PI * 2); g.stroke();
+        drawText(g, 'LASER', lb2.x - lb2.r - 12, lb2.y, 15, 'rgb(140,210,255)', 'right');
+        g.globalAlpha = 1;
+      }
+    }
 
     // achievement toasts
     this.drawToasts(g);
@@ -1269,13 +1301,15 @@ export class GameState extends BaseWorld {
       g.fillStyle = `rgba(0,0,0,${this.overAlpha})`;
       g.fillRect(0, 0, W, H);
       if (this.online && this.overAlpha >= 0.5) {
-        drawText(g, 'GAME OVER', W / 2, H / 2 - 40, 56, 'rgb(255,0,0)');
-        drawText(g, `Score: ${this.score}`, W / 2, H / 2 + 20, 30);
+        drawText(g, 'GAME OVER', W / 2, H / 2 - 44, 56, 'rgb(255,0,0)');
+        drawText(g, `LOST IN ${sectorName(this.level)}`, W / 2, H / 2 - 6, 14, 'rgba(160,190,220,0.8)');
+        drawText(g, `Score: ${this.score}`, W / 2, H / 2 + 26, 30);
       }
       if (this.overMenu) {
         drawText(g, 'GAME OVER', W / 2, H / 2 - 100, 56, 'rgb(255,0,0)');
-        drawText(g, `Score: ${this.score}`, W / 2, H / 2 - 40, 30);
-        drawText(g, `Best: ${this.app.highScore}`, W / 2, H / 2, 24, 'rgb(180,180,180)');
+        drawText(g, `LOST IN ${sectorName(this.level)}`, W / 2, H / 2 - 62, 14, 'rgba(160,190,220,0.8)');
+        drawText(g, `Score: ${this.score}`, W / 2, H / 2 - 32, 30);
+        drawText(g, `Best: ${this.app.highScore}`, W / 2, H / 2 + 2, 24, 'rgb(180,180,180)');
         if (this.daily) {
           const left = dailyAttemptsLeft();
           drawText(g, left > 0 ? `DAILY ATTEMPTS LEFT: ${left}` : 'NO DAILY ATTEMPTS LEFT TODAY',

@@ -6,7 +6,7 @@ import * as input from './input.js';
 import * as audio from './audio.js';
 import { glowBullet, glowEnemyBullet, glowPowerup, glowEngine, glowExplosion, glowElite, drawGlow, tinted, drawShieldBubble } from './fx.js';
 import { renderMesh, fitTransform, projectPoint, VIEW } from './mesh3d.js';
-import { genBoss, BOSS_VIEW, aimYaw } from './bossgen.js';
+import { genBoss, genBossCore, BOSS_VIEW, aimYaw } from './bossgen.js';
 import { genFreighter } from './shipgen.js';
 
 // Ships draw ~25% larger than their (unchanged) hitboxes — reads better on
@@ -1404,6 +1404,12 @@ export class Boss {
     if (level % 4 === 0) this.patterns.push('ram', 'ram');
     this.laser2 = null; // sweeping beam {phase, until, ang, dir}
     this.ram = null;    // charge attack {phase, until, retX}
+    // every 5th boss is a MEGA: tougher, and at half health the hull blows
+    // away to reveal a core with rotating cross-beams
+    this.mega = level % 5 === 0;
+    if (this.mega) this.health = this.maxHealth = Math.round(this.maxHealth * 1.5);
+    this.phase2 = false;
+    this.coreBeams = null; // { ang, activeAt }
     this.health = 5 + (level - 1) * 5;
     this.maxHealth = this.health;
     this.shieldUntil = 0;                                  // invulnerable phase
@@ -1445,6 +1451,28 @@ export class Boss {
     audio.playSynth('siren');
   }
 
+  startPhase2(world) {
+    this.phase2 = true;
+    this.laser = null;
+    this.laser2 = null;
+    this.ram = null;
+    this.queue = [];
+    this.shieldUntil = 0;
+    for (const tr of this.gen.turrets) tr.dead = true;
+    // the hull blows away…
+    world.explode(this.x, this.y, true, 2.2);
+    world.effects.push(new Shockwave(this.x, this.y, world.time, 320));
+    shatterSprite(world, { mesh: this.gen.core, fitScale: this.fit.scale, width: this.w },
+      this.x, this.y, this.w, { vis: 1, chunks: 8, vx: 0.6 });
+    // …revealing the core
+    this.w = this.h = Math.round(this.w * 0.55);
+    this.coreGen = genBossCore(this.level);
+    this.fit = fitTransform(this.coreGen, this.w, this.h, BOSS_VIEW, 0.88);
+    this.coreBeams = { ang: 0.6, activeAt: world.time + 900 };
+    this.lastShot = world.time;
+    audio.playSynth('laser_charge', this.x);
+  }
+
   updateDeathSeq(world) {
     const t = world.time - this.deathSeq.start;
     this.x += 0.25 * world.k; // listing hull drifts back
@@ -1459,7 +1487,7 @@ export class Boss {
       this.dead = true;
       world.explode(this.x, this.y, true, 2.6);
       world.effects.push(new Shockwave(this.x, this.y, world.time, 380));
-      shatterSprite(world, { mesh: this.gen.core, fitScale: this.fit.scale, width: this.w },
+      shatterSprite(world, { mesh: this.phase2 ? this.coreGen : this.gen.core, fitScale: this.fit.scale, width: this.w },
         this.x, this.y, this.w, { vis: 1, chunks: 8, vx: 0.4 });
       world.levelUp(this.x, this.y);
     }
@@ -1650,6 +1678,36 @@ export class Boss {
     }
     if (this.flash > 0) this.flash = Math.max(0, this.flash - 0.07 * world.k);
 
+    // MEGA: at half health the fight changes shape
+    if (this.mega && !this.phase2 && this.health <= this.maxHealth / 2) this.startPhase2(world);
+
+    // phase 2: rotating cross-beams + periodic bullet rings
+    if (this.phase2) {
+      const cb = this.coreBeams;
+      if (world.time >= cb.activeAt) {
+        cb.ang += 0.0035 * world.k;
+        for (const p of world.players()) {
+          if (!p.alive) continue;
+          const dx = p.x - this.x, dy = p.y - this.y;
+          const d = Math.hypot(dx, dy);
+          if (d < this.w * 0.4) continue; // inside the dead zone next to the core
+          for (const a of [cb.ang, cb.ang + Math.PI / 2]) {
+            const perp = Math.abs(dx * Math.sin(a) - dy * Math.cos(a));
+            if (perp < 14) { world.killPlayer(p, this.x, this.y); break; }
+          }
+        }
+      }
+      if (world.time - this.lastShot > 3800 && !(world.ionStorm?.phase === 'active')) {
+        this.lastShot = world.time;
+        for (let i = 0; i < 12; i++) {
+          const a = (Math.PI * 2 * i) / 12;
+          world.enemyBullets.push(new EnemyBullet(this.x, this.y, this.bulletImg, 7 * Math.cos(a), 7 * Math.sin(a)));
+        }
+      }
+      if (this.flash > 0) this.flash = Math.max(0, this.flash - 0.07 * world.k);
+      return; // no turrets/volleys/lasers in core form
+    }
+
     // turrets swivel toward the nearest player
     const tgt = this.nearestPlayer(world);
     if (tgt) {
@@ -1755,21 +1813,65 @@ export class Boss {
     const jx = shudder ? (Math.random() - 0.5) * 5 : 0;
     const jy = shudder ? (Math.random() - 0.5) * 5 : 0;
     const bx = this.x - this.w / 2 + jx, by = this.y - this.h / 2 + jy;
+    // phase-2 rotating cross-beams (under the core)
+    if (this.phase2 && this.coreBeams && !world?.over) {
+      const cb = this.coreBeams;
+      const tele = t < cb.activeAt;
+      const prev = g.globalCompositeOperation;
+      g.globalCompositeOperation = 'lighter';
+      for (const a of [cb.ang, cb.ang + Math.PI / 2]) {
+        g.save();
+        g.translate(this.x + jx, this.y + jy);
+        g.rotate(-a);
+        if (tele) {
+          g.globalAlpha = 0.35 + 0.3 * Math.sin(t / 55);
+          g.strokeStyle = 'rgb(255,60,60)';
+          g.lineWidth = 2;
+          g.setLineDash([10, 8]);
+          g.beginPath();
+          g.moveTo(-(W + H), 0);
+          g.lineTo(W + H, 0);
+          g.stroke();
+          g.setLineDash([]);
+        } else {
+          const flick = 0.8 + 0.2 * Math.sin(t / 25 + a);
+          g.globalAlpha = 0.85 * flick;
+          const grad = g.createLinearGradient(0, -13, 0, 13);
+          grad.addColorStop(0, 'rgba(255,60,60,0)');
+          grad.addColorStop(0.5, 'rgba(255,180,160,0.95)');
+          grad.addColorStop(1, 'rgba(255,60,60,0)');
+          g.fillStyle = grad;
+          g.fillRect(-(W + H), -13, (W + H) * 2, 26);
+          g.globalAlpha = 0.85;
+          g.fillStyle = '#fff';
+          g.fillRect(-(W + H), -2.5, (W + H) * 2, 5);
+        }
+        g.restore();
+      }
+      g.globalAlpha = 1;
+      g.globalCompositeOperation = prev;
+    }
     const thr = this.thrusters[(t / 55 | 0) % this.thrusters.length];
-    g.save();
-    g.translate(this.x, this.y);
-    drawFlames(g, this.flameImg, thr, this.w, this.h, { flip: true });
-    g.restore();
-    const base = { ...BOSS_VIEW, scale: this.fit.scale, x: bx + this.fit.x, y: by + this.fit.y };
-    renderMesh(g, this.gen.core, base);
-    for (const tr of this.gen.turrets) {
-      if (tr.dead) continue;
-      const p = projectPoint(BOSS_VIEW, this.fit, tr.pivot);
-      renderMesh(g, tr.mesh, { rx: BOSS_VIEW.rx, ry: tr.yaw, scale: this.fit.scale, x: bx + p.x, y: by + p.y });
+    if (!this.phase2) {
+      g.save();
+      g.translate(this.x, this.y);
+      drawFlames(g, this.flameImg, thr, this.w, this.h, { flip: true });
+      g.restore();
+    }
+    const pulse = this.phase2 ? 1 + 0.045 * Math.sin(t / 160) : 1;
+    const body = this.phase2 ? this.coreGen : this.gen.core;
+    const base = { ...BOSS_VIEW, scale: this.fit.scale * pulse, x: bx + this.fit.x, y: by + this.fit.y, ry: BOSS_VIEW.ry + (this.phase2 ? t / 900 : 0) };
+    renderMesh(g, body, base);
+    if (!this.phase2) {
+      for (const tr of this.gen.turrets) {
+        if (tr.dead) continue;
+        const p = projectPoint(BOSS_VIEW, this.fit, tr.pivot);
+        renderMesh(g, tr.mesh, { rx: BOSS_VIEW.rx, ry: tr.yaw, scale: this.fit.scale, x: bx + p.x, y: by + p.y });
+      }
     }
     if (this.flash > 0.05) {
       g.globalAlpha = this.flash * 0.6;
-      renderMesh(g, this.gen.core, { ...base, flat: [255, 255, 255] });
+      renderMesh(g, body, { ...base, flat: [255, 255, 255] });
       g.globalAlpha = 1;
     }
 

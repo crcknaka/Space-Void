@@ -1,70 +1,65 @@
-Game Title: Space Void
-Genre: Space Shooter
-Platform: PC (Python - Pygame) + Web (JS/Canvas)
-Game Type: Arcade/Action
-Developer: Ilja Kovalenko (cRc^ )
+# SPACE VOID
 
-🎮 Play in browser: https://space-void.vercel.app
+Retro space shooter for the browser. **Every pixel of art is generated in code** — ships, bosses, planets, explosions, backgrounds, even the menu: the game ships zero image assets (only sounds are downloaded).
 
-Web version (web/ folder): a faithful JavaScript/Canvas port of the pygame game —
-all three modes (Single / Coop / Versus), bosses, asteroids, power-ups.
-Extras: HiDPI rendering, 120 Hz-smooth delta timing, glow effects, screen shake,
-boss health bar, high score (localStorage), touch controls on mobile.
-Deployed on Vercel as a static site (no build step).
+🎮 **Play now: https://space-void.vercel.app** — desktop or phone, installable as a PWA, works offline.
 
-Game Description
-Space Void is an exhilarating 2D space shooter that puts players in command of a sleek spaceship tasked with defending the galaxy from waves of increasingly dangerous enemies. Set in the vast expanse of outer space, Space Void challenges players to survive relentless waves of enemy spacecraft, dodge asteroids, and battle formidable bosses while upgrading their ship's abilities. Featuring fast-paced action, dynamic visuals, and immersive gameplay, Space Void is a thrilling adventure into the unknown void of space.
+| Gameplay | Menu | Ship generator |
+|---|---|---|
+| ![gameplay](docs/shot-gameplay.png) | ![menu](docs/shot-menu.png) | ![gallery](docs/shot-gallery.png) |
 
-Gameplay Overview
-The core of Space Void revolves around maneuvering your spaceship across the screen, shooting down enemies, avoiding asteroids, and surviving waves of hostile encounters. As the game progresses, enemies become more challenging, and powerful bosses emerge. The player can gather power-ups to enhance their ship's capabilities, and each level introduces new hazards and increased difficulty.
+## Modes
 
-Controls
-Arrow Keys/WASD: Control your spaceship’s movement.
-Spacebar: Shoot bullets to destroy enemies and asteroids.
-P: Pause the game.
-Key Features
-1. Dynamic Space Combat
-Fast-Paced Shooting Mechanics: Players can shoot bullets to destroy enemy ships and obstacles, with responsive controls that allow for quick dodging and precise aiming.
-Enemy Waves: The game features waves of enemy ships that attack with increasing intensity, requiring players to stay sharp and reactive.
-Asteroids: Floating asteroids traverse the screen at varying speeds and sizes. Upon being shot, larger asteroids break into smaller fragments, keeping players on their toes.
-2. Boss Battles
-Formidable Boss Encounters: Every few levels, players face off against powerful bosses with distinct attack patterns. These bosses take multiple hits to defeat and offer a significant challenge as they try to overwhelm the player with firepower.
-3. Power-Ups
-Weapon Power-Ups: Collect power-ups that increase the rate of fire and improve weapon strength. Upgrading your ship’s arsenal is crucial for survival as the enemies become more numerous and dangerous.
-Health Restoratives: Occasionally, health pick-ups spawn, allowing players to recover lost health in the heat of battle.
-4. Smooth and Subtle Visual Effects
-Asteroid Rotation: Every asteroid rotates subtly as it drifts across the screen, adding to the visual dynamics of the gameplay.
-Planetary Parallax Effect: A large planet in the background drifts slowly across the upper-right corner of the screen with a gradual zoom, enhancing the immersive space environment.
-5. Challenging Level Progression
-Increasing Difficulty: As players advance through the levels, the number and speed of enemy ships increase, making each wave more challenging. The bosses also become more difficult to defeat.
-New Hazards: Each new level introduces additional obstacles like more asteroids and faster-moving enemies to keep the gameplay fresh.
-6. Immersive Audio and Visuals
-Dimming Effect Upon Game Over: When the player’s ship is destroyed, the screen gradually dims to black, creating a dramatic ending. A game-over sound plays as the screen darkens, adding emotional weight to defeat.
-Explosive Effects: When enemies or asteroids are destroyed, dynamic explosion animations occur, creating visually satisfying effects.
-Background Music and Sound Effects: A gripping space-themed soundtrack plays in the background, complemented by sound effects for shooting, explosions, and enemy hits.
-7. Infinite Replayability
-Endless Mode: The game offers continuous levels with increasing difficulty, allowing players to push themselves to survive for as long as possible, racking up high scores and trying to beat their personal best.
-8. Intuitive User Interface
-Main Menu: The game opens with a clean and minimalistic main menu where players can start the game, exit, or view the credits. The buttons in the menu have smooth hover effects for a polished user experience.
-Author Credits: In the main menu, the game's author is credited with the text "Made by cRc^" subtly placed in the bottom-right corner, giving the developer credit in a stylish, unobtrusive way.
-9. Responsive Game Over Mechanic
-Game Over Screen: When the player loses, the screen gradually dims while a "Game Over" message is displayed in the center. A sound effect plays to emphasize the dramatic conclusion of the game.
-Game Progression
-Start Menu:
+- **SINGLE** — waves, elites, wedge formations, bosses every level, mega boss every 5th
+- **LOCAL 2P** — co-op or versus on one keyboard / two gamepads
+- **ONLINE** — up to 4 players co-op or 1v1 versus over WebRTC (P2P, host-authoritative)
+- **DAILY** — seeded daily challenge with a global leaderboard, one modifier a day (BULLET HELL, MINEFIELD, CONVOY RAID…), 3 attempts
 
-Players begin at the start menu, where they can select to start the game. The planet in the background slowly zooms and drifts across the upper-right corner, setting the atmosphere.
-Initial Levels:
+## What's inside
 
-The player’s ship is equipped with basic shooting abilities. Waves of enemies appear, requiring precise shooting and dodging. Asteroids float across the screen, and larger ones break into smaller pieces when shot.
-Boss Battles:
+- **Procedural everything.** A ~300-line software 3D renderer (`mesh3d.js`) flat-shades low-poly meshes onto the 2D canvas. Ships come from a parts-based generator (hull/wings/fins/engines by family seed), bosses are assembled live from a hull plus turret modules that track players and blow off as health drops, planets/nebulae/backdrops are painted per level, and the hyperspace jump between levels swaps the whole scene at peak streak-speed.
+- **Enemy roster:** basic, weaver, hunter, tank (rockets + mines at high levels), sniper (telegraphed rail shot), carrier (launches drones), shieldbearer (own hex bubble), elites (golden aura, guaranteed drop), wedge formations, falling wrecks that stay dangerous.
+- **Bosses:** per-level generated dreadnoughts with fan/spiral/ring/wall volleys, aimed shots, homing-rocket salvos, straight and sweeping lasers, minion warps; every 3rd is a carrier, every 4th rams, every 5th is a **two-phase mega boss** whose hull blows away to reveal a rotating-beam core.
+- **World:** a stream of unique planets (rings, moons, storms, city lights, orbital stations), comets that sometimes strike them, cargo freighters (a rare golden one rains power-ups when shot down), convoys fleeing pirates, ion storms that knock every weapon offline.
+- **Feel:** positional stereo audio (WebAudio synth + panners), 3D debris on every kill, hex shields with impact ripples, combo-heated weapons, slow-mo boss kills, screen-shake, sector names, touch tutorial.
 
-Every few levels, the player encounters a large, challenging boss with multiple attack patterns. Defeating the boss is crucial to progressing to the next stage, where the difficulty continues to rise.
-Power-Up Collection:
+## Controls
 
-As the player progresses, power-ups occasionally appear on the screen, enhancing the ship's rate of fire or restoring health, providing a much-needed boost in the face of tougher enemies.
-Endless Mode:
+**Desktop** — P1: `WASD` move, `Shift` boost, `Space` rocket, `E`/`Q` laser (guns auto-fire). P2 (local): arrows, `RShift`, `Enter`, `Numpad1`/`/`. Gamepads supported (stick/D-pad, `A`/`RT` rocket, `X` laser, `B`/`RB` boost). `Esc`/`P` pause.
 
-After several levels, the game enters an endless mode, where enemies continue to spawn at increasing difficulty. Players aim to achieve the highest score possible before being overwhelmed.
-Game Over:
+**Touch** — drag anywhere to move, on-screen rocket & laser buttons, guns auto-fire.
 
-When the player's health is depleted, the game transitions into the game-over sequence. The screen dims smoothly, the "Game Over" message appears, and the game-over sound plays, capping off the experience.
+## Run locally
+
+Static site, no build step:
+
+```bash
+cd web
+python3 -m http.server 8791
+# open http://localhost:8791
+```
+
+Online modes need the Vercel API routes (`/api/rtc`, `/api/scores`) — use `vercel dev` for those; everything else works from any static server.
+
+## Dev cheats (URL params)
+
+`?mode=single|coop|versus|daily` skip the menu · `&god` invincible · `&ff=30000` fast-forward 30s · `&boss=N` instant boss of level N · `&ion` ion storm at 5s · `&mod=<id>` force a daily modifier (`minefield`, `rocketday`, `convoy`…) · `&bg=N` force a backdrop seed · `&prof` frame-time overlay · `?shipgen` procedural ship gallery (click to inspect, `R` rerolls).
+
+## Repo layout
+
+```
+web/            the game (deployed to Vercel)
+  js/mesh3d.js      software 3D renderer + sprite baking
+  js/shipgen.js     parts-based ship generator (all families)
+  js/bossgen.js     modular bosses + mega-boss core
+  js/bggen.js       planets, backdrops, sector names
+  js/procassets.js  builds the whole sprite set at boot
+  js/entities.js    everything that moves
+  js/game.js        single/coop/daily world
+  js/versus*.js     versus (local + online)
+  js/coop_online.js online co-op (host-authoritative snapshots)
+  api/              Vercel functions: WebRTC signaling + leaderboards
+*.py            the original pygame prototype (legacy, PNG-based)
+```
+
+Made by **cRc^** · procedural art & engine built with Claude

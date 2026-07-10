@@ -45,6 +45,26 @@ export function bossStaticMesh(level) {
   return m;
 }
 
+// Phase-2 core of a mega boss: pulsing sphere, glowing equator ring, spikes.
+export function genBossCore(level) {
+  const R = makeRng((level * 5077 + 7) >>> 0);
+  const hue = (348 + (level - 1) * 63) % 360;
+  const c1 = hsl(hue, 26, 46);
+  const dark = hsl(hue, 30, 30);
+  const acc = hsl((hue + 40) % 360, 92, 62);
+  const m = newMesh();
+  addLathe(m, [
+    { x: 18, r: 3 }, { x: 12, r: 12.5 }, { x: 0, r: 16 }, { x: -12, r: 12.5 }, { x: -18, r: 3 },
+  ], 8, c1, { capFront: true, capBack: true, capColor: dark });
+  addLathe(m, [{ x: 3.2, r: 17.6 }, { x: -3.2, r: 17.6 }], 8, acc, { e: 0.85, layer: 1 });
+  // four armor spikes
+  addBox(m, 24, 0, 0, 14, 3.4, 3.4, dark, 0, 1);
+  addBox(m, -24, 0, 0, 14, 3.4, 3.4, dark, 0, 1);
+  addBox(m, 0, 0, 24, 3.4, 3.4, 14, dark, 0, 1);
+  addBox(m, 0, 0, -24, 3.4, 3.4, 14, dark, 0, 1);
+  return m;
+}
+
 export function genBoss(level) {
   const R = makeRng((level * 2654435761 + 0xB055) >>> 0);
   const rng = (a, b) => a + R() * (b - a);
