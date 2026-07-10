@@ -6,7 +6,7 @@ import * as audio from './audio.js';
 import { Button, ButtonGroup, drawText } from './ui.js';
 import { makeStarLayers } from './entities.js';
 import { makeNebulaField, updateNebulae, drawNebulae } from './fx.js';
-import { makePlanetSprite } from './bggen.js';
+import { makePlanetSprite, drawLiveStation } from './bggen.js';
 import { OptionsState } from './options.js';
 
 export class BaseWorld {
@@ -116,6 +116,15 @@ export class BaseWorld {
       if (a <= 0) continue;
       g.globalAlpha = a;
       g.drawImage(pl.img, pl.x, pl.y);
+      const st = pl.img.station;
+      if (st) { // live satellite: slow orbit + self-spin + beacon
+        const t = this.time || 0;
+        const oa = st.a0 + t * 0.00005;
+        drawLiveStation(g,
+          pl.x + pl.img.width / 2 + Math.cos(oa) * st.d,
+          pl.y + pl.img.height / 2 + Math.sin(oa) * st.d * 0.7,
+          st.s, t * 0.0005 * st.spin, t);
+      }
     }
     g.globalAlpha = 1;
     drawNebulae(g, this.nebulae);

@@ -67,7 +67,16 @@ export function makePlanetSprite(seed) {
   c.planetR = r; // comet-impact targeting
   const g = c.getContext('2d');
   drawPlanet(g, w / 2, h / 2, r, (R() * 360) | 0, R, false);
-  if (R() < 0.35) drawStation(g, w / 2, h / 2, r, R);
+  if (R() < 0.4) {
+    // station is NOT baked in — the world draws it live so it can slowly
+    // orbit, spin and blink (see drawLiveStation)
+    c.station = {
+      d: r * (1.3 + R() * 0.45),
+      a0: R() * Math.PI * 2,
+      s: r * (0.11 + R() * 0.05),
+      spin: (R() < 0.5 ? 1 : -1) * (0.5 + R() * 0.5),
+    };
+  }
   const nm = R() < 0.6 ? 1 + ((R() * 2) | 0) : 0;
   for (let i = 0; i < nm; i++) {
     const mr = r * (0.06 + R() * 0.08);
@@ -297,16 +306,11 @@ function drawRing(g, x, y, rr, tilt, hue, R, farHalf, dim = 1) {
   g.globalAlpha = 1;
 }
 
-// Tiny orbital station silhouette: hub + solar wings + lit windows.
-function drawStation(g, px, py, pr, R) {
-  const ang = R() * Math.PI * 2;
-  const d = pr * (1.25 + R() * 0.5);
-  const x = px + Math.cos(ang) * d;
-  const y = py + Math.sin(ang) * d * 0.7;
-  const s = pr * (0.1 + R() * 0.06); // half-length
+// Orbital station drawn live each frame: slow self-rotation + blinking beacon.
+export function drawLiveStation(g, cx, cy, s, rot, t) {
   g.save();
-  g.translate(x, y);
-  g.rotate((R() - 0.5) * 0.6);
+  g.translate(cx, cy);
+  g.rotate(rot);
   g.fillStyle = 'rgb(30,34,44)';
   g.fillRect(-s, -s * 0.12, s * 2, s * 0.24);          // spine
   g.fillRect(-s * 0.25, -s * 0.3, s * 0.5, s * 0.6);   // hub
@@ -315,6 +319,11 @@ function drawStation(g, px, py, pr, R) {
   g.fillRect(s * 1.05, -s * 0.4, s * 0.45, s * 0.8);
   g.fillStyle = 'rgba(255,220,150,0.8)';
   for (let i = 0; i < 4; i++) g.fillRect(-s * 0.8 + i * s * 0.45, -s * 0.03, 1.5, 1.5); // windows
+  // blinking beacon on top of the hub
+  if (Math.sin(t / 240) > 0.45) {
+    g.fillStyle = 'rgba(255,90,80,0.95)';
+    g.fillRect(-1.2, -s * 0.3 - 3, 2.4, 2.4);
+  }
   g.restore();
 }
 

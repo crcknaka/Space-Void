@@ -728,11 +728,15 @@ export class Skirmish {
     this.x -= this.v * world.k * (world.warpMul || 1);
     if (world.time - this.lastShot > 700 + Math.random() * 900) {
       this.lastShot = world.time;
-      const py = this.y + this.s * (1.6 + Math.random());
-      this.tracers.push([this.x + this.s * (2.2 + Math.random() * 2), py + (Math.random() - 0.5) * this.s, this.s * 1.4, world.time]);
+      // muzzle of one of the two pirates (their sprites face left)
+      const pi = (Math.random() * 2) | 0;
+      const px = this.x + this.s * (2.6 + pi * 1.6);
+      const py = this.y + this.s * 0.9 + pi * this.s * 0.9 + this.s * 0.315;
+      this.tracers.push([px - 2, py, this.s * 1.2, world.time]);
     }
-    this.tracers = this.tracers.filter((tr) => world.time - tr[3] < 500);
     for (const tr of this.tracers) tr[0] -= 3.2 * world.k;
+    // tracers die when they reach the convoy (or age out)
+    this.tracers = this.tracers.filter((tr) => world.time - tr[3] < 700 && tr[0] > this.x - this.s);
     if (!this.hit && world.time > this.casualtyAt && this.n > 1) {
       this.hit = true; // one convoy ship doesn't make it
       this.n -= 1;
@@ -815,7 +819,10 @@ export class Freighter {
     this.dead = false;
   }
   update(world) {
-    this.x -= this.v * (world.warpMul || 1) * world.k;
+    // the golden hauler rides the hyperspace jump with you — it must not be
+    // swept off-screen the moment a boss dies
+    const wm = this.golden ? 1 : (world.warpMul || 1);
+    this.x -= this.v * wm * world.k;
     if (this.x + this.img.width < -60) this.dead = true;
   }
   draw(g, world) {

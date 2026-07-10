@@ -4,7 +4,7 @@ import * as input from './input.js';
 import * as audio from './audio.js';
 import { Button, ButtonGroup, drawText } from './ui.js';
 import { Star, StaticStar, DistantConvoy, Freighter, Comet } from './entities.js';
-import { makeSpaceBackdrop, makePlanetSprite } from './bggen.js';
+import { makeSpaceBackdrop, makePlanetSprite, drawLiveStation } from './bggen.js';
 import { GameState } from './game.js';
 import { VersusState } from './versus.js';
 import { ScoresState } from './scores.js';
@@ -136,7 +136,17 @@ export class MenuState {
     for (const a of this.ambient) a.draw(g, this);
     const pw = Math.min(W * 0.9, 900);
     const ph = pw * (this.planet.height / this.planet.width);
-    g.drawImage(this.planet, (W - pw) / 2 + offX, H - ph * 0.55 + offY, pw, ph);
+    const px0 = (W - pw) / 2 + offX, py0 = H - ph * 0.55 + offY;
+    g.drawImage(this.planet, px0, py0, pw, ph);
+    const st = this.planet.station;
+    if (st) {
+      const k2 = pw / this.planet.width;
+      const oa = st.a0 + this.time * 0.00005;
+      drawLiveStation(g,
+        px0 + this.planet.width / 2 * k2 + Math.cos(oa) * st.d * k2,
+        py0 + this.planet.height / 2 * k2 + Math.sin(oa) * st.d * 0.7 * k2,
+        st.s * k2, this.time * 0.0005 * st.spin, this.time);
+    }
     g.imageSmoothingQuality = q;
 
     for (const s of this.staticStars) s.draw(g);
