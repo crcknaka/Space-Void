@@ -3,6 +3,7 @@
 // event handler — installAutoUnlock() resumes the context and "warms" the music
 // elements (muted play/pause) on the first touch/click/key.
 import { settings } from './settings.js';
+import { W } from './const.js';
 
 const AC = window.AudioContext || window.webkitAudioContext;
 const actx = new AC();
@@ -25,16 +26,27 @@ export async function loadSounds(onProgress) {
   );
 }
 
-export function play(name, volume = 0.6) {
+// x (world px) → stereo position; sounds follow their source across the field
+function pannedOut(x) {
+  if (x == null || !actx.createStereoPanner) return actx.destination;
+  const p = actx.createStereoPanner();
+  p.pan.value = Math.max(-1, Math.min(1, (x / W) * 2 - 1)) * 0.75;
+  p.connect(actx.destination);
+  return p;
+}
+
+export function play(name, volume = 0.6, x = null) {
   const buf = buffers[name];
   if (!buf || actx.state !== 'running' || settings.sfx <= 0) return;
   const src = actx.createBufferSource();
   const gain = actx.createGain();
   gain.gain.value = volume * settings.sfx;
   src.buffer = buf;
-  src.connect(gain).connect(actx.destination);
+  src.connect(gain).connect(pannedOut(x));
   src.start();
 }
+
+let OUT = null; // per-playSynth output (panned); null = master
 
 /* ------------------------------ synth jingles ------------------------------ */
 // Event sounds generated with oscillators — no audio files needed.
@@ -59,7 +71,7 @@ function noiseHit(when, dur, vol = 0.2, freq = 1500, freqEnd = 0, q = 1.2) {
   gain.gain.setValueAtTime(0.0001, when);
   gain.gain.linearRampToValueAtTime(vol * settings.sfx, when + 0.015);
   gain.gain.exponentialRampToValueAtTime(0.001, when + dur);
-  src.connect(bp).connect(gain).connect(actx.destination);
+  src.connect(bp).connect(gain).connect(OUT || actx.destination);
   src.start(when);
   src.stop(when + dur + 0.05);
 }
@@ -73,13 +85,14 @@ function note(freq, when, dur, type = 'triangle', vol = 0.2, slide = 0) {
   gain.gain.setValueAtTime(0.0001, when);
   gain.gain.linearRampToValueAtTime(vol * settings.sfx, when + 0.012);
   gain.gain.exponentialRampToValueAtTime(0.001, when + dur);
-  osc.connect(gain).connect(actx.destination);
+  osc.connect(gain).connect(OUT || actx.destination);
   osc.start(when);
   osc.stop(when + dur + 0.05);
 }
 
-export function playSynth(name) {
+export function playSynth(name, x = null) {
   if (actx.state !== 'running' || settings.sfx <= 0) return;
+  OUT = x == null ? null : pannedOut(x);
   const t = actx.currentTime;
   if (name === 'fanfare') {
     [523, 659, 784, 1046].forEach((f, i) => note(f, t + i * 0.12, 0.25, 'triangle', 0.22));
@@ -138,6 +151,7 @@ export function playSynth(name) {
   } else if (name === 'laser_fire') {
     note(950, t, 0.7, 'sawtooth', 0.16, -500);
   }
+  OUT = null;
 }
 
 /* ---------------------------------- music ---------------------------------- */

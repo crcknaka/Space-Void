@@ -281,7 +281,7 @@ export class GameState extends BaseWorld {
     const HALF = 14; // beam half-height for hit tests
     this.effects.push(new LaserBeam(x0, y, this.time));
     if (this.online) (this._lzQ = this._lzQ || []).push([Math.round(x0), Math.round(y)]);
-    audio.playSynth('plaser');
+    audio.playSynth('plaser', p.x);
     vibrate(40);
     this.shake = Math.min(12, this.shake + 3);
 
@@ -301,7 +301,7 @@ export class GameState extends BaseWorld {
       if (e.isBoss && e.deathSeq) continue; // already going down
       if (e.isBoss && e.shieldUntil > this.time) { // shield eats the beam
         e.shieldRipple = { a: Math.PI, start: this.time };
-        audio.playSynth('shield_hit');
+        audio.playSynth('shield_hit', e.x);
         continue;
       }
       if (e.takeDamage(2)) {
@@ -344,7 +344,7 @@ export class GameState extends BaseWorld {
   explode(x, y, sound = true, scale = 1) {
     this.effects.push(new Explosion(x, y, this.app.images.explosion_spritesheet, this.time, scale));
     this.shake = Math.min(12, this.shake + 3 * scale);
-    if (sound) audio.play('explosion', 0.5);
+    if (sound) audio.play('explosion', 0.5, x);
   }
 
   killPlayer(p, hx, hy) {
@@ -357,7 +357,7 @@ export class GameState extends BaseWorld {
       p.shieldRipple = { a: hx !== undefined ? Math.atan2(hy - p.y, hx - p.x) : Math.PI, start: this.time };
       p.invulnUntil = this.time + 1200;
       this.spawnSparks(p.x, p.y, 16);
-      audio.playSynth('shield_pop');
+      audio.playSynth('shield_pop', p.x);
       vibrate(50);
       this.pushToasts(bumpStats({ shieldSaves: 1 }));
       return;
@@ -469,13 +469,6 @@ export class GameState extends BaseWorld {
         this.warp = null;
         this.warpMul = 1;
         if (this._zoomAfterWarp != null) { this.bgZoomTarget = this._zoomAfterWarp; this._zoomAfterWarp = null; }
-        // arrival: ships swoop in from the left edge under afterburner
-        for (const pl of this.players()) {
-          if (!pl.alive) continue;
-          pl.flyInFrom = pl.x;
-          pl.flyInUntil = this.time + 700;
-          pl.invulnUntil = Math.max(pl.invulnUntil || 0, this.time + 900);
-        }
       } else {
         const env = p < 0.35 ? p / 0.35 : p > 0.65 ? (1 - p) / 0.35 : 1; // trapezoid
         this.warpMul = 1 + 27 * env * env * (3 - 2 * env);               // smoothstep edges
@@ -571,8 +564,9 @@ export class GameState extends BaseWorld {
       } else if (st.phase === 'active') {
         if (this.time - (st.lastBolt || 0) > 380) {
           st.lastBolt = this.time;
-          this.effects.push(new Lightning(this.time));
-          if (Math.random() < 0.5) audio.playSynth('zap');
+          const bolt = new Lightning(this.time);
+          this.effects.push(bolt);
+          if (Math.random() < 0.5) audio.playSynth('zap', bolt.pts[0][0]);
         }
         if (this.time >= st.until) {
           this.ionStorm = null;
@@ -609,14 +603,6 @@ export class GameState extends BaseWorld {
 
     // --- updates ---
     for (const p of this.players()) p.update(this);
-    for (const p of this.players()) {
-      if (p.flyInUntil && this.time < p.flyInUntil) {
-        const ft = 1 - (p.flyInUntil - this.time) / 700;
-        const ease = 1 - (1 - ft) * (1 - ft);
-        p.x = -50 + (p.flyInFrom + 50) * ease;
-        p.boosting = true;
-      }
-    }
     // micro-parallax follows the lead ship
     const ptgt = -(this.player1.y - H / 2) * 0.02;
     this.parallaxOffY = (this.parallaxOffY || 0) + (ptgt - (this.parallaxOffY || 0)) * Math.min(1, 0.06 * this.k);
@@ -754,7 +740,7 @@ export class GameState extends BaseWorld {
             enemy.shieldRipple = { a: Math.atan2(b.y - enemy.y, b.x - enemy.x), start: this.time };
             if (this.time > (this._shieldPingAt || 0)) {
               this._shieldPingAt = this.time + 90;
-              audio.playSynth('shield_hit');
+              audio.playSynth('shield_hit', enemy.x);
             }
             continue;
           }
@@ -937,14 +923,6 @@ export class GameState extends BaseWorld {
       if (!p.alive) continue;
       for (const b of this.enemyBullets) {
         if (!b.dead && overlap(p, b, 0.8)) { b.dead = true; this.killPlayer(p, b.x, b.y); break; }
-        // near miss — a bolt whisks right past the hull: brief soft slow-mo
-        if (!b.dead && !b._nm && !this.slowmo && this.time > (this._nmCooldown || 0)
-            && this.time > (p.invulnUntil || 0)
-            && Math.abs(b.x - p.x) < 34 && Math.abs(b.y - p.y) < 28) {
-          b._nm = true;
-          this._nmCooldown = this.time + 2600;
-          this.slowmo = { t: 0, dur: 520, depth: 0.55 };
-        }
       }
       if (!p.alive) continue;
       for (const r of this.enemyRockets) {
@@ -1009,7 +987,7 @@ export class GameState extends BaseWorld {
     };
     this.popup(p.x, p.y - 28, NAME[type] || type.toUpperCase(), RING[type] || 'rgb(120,255,180)');
     this.effects.push(new Shockwave(p.x, p.y, this.time, 70, RING[type] || 'rgb(120,255,180)'));
-    if (type === 'shooting') { p.powerUp(this); audio.play('powerup', 0.6); }
+    if (type === 'shooting') { p.powerUp(this); audio.play('powerup', 0.6, p.x); }
     else if (type === 'slow_motion') { this.speedMul = 0.5; this.slowMoEnd = this.time + 10000; audio.play('powerup', 0.6); }
     else if (type === 'kill_all') {
       for (const e of this.enemies) if (!e.isBoss && !e.dead && !e.dying) { e.dead = true; this.explode(e.x, e.y, false); }
@@ -1018,10 +996,10 @@ export class GameState extends BaseWorld {
       for (const m of this.mines) if (!m.dead) { m.dead = true; this.explode(m.x, m.y, false, 0.8); }
       audio.play('explosion', 0.6);
     }
-    else if (type === 'rocket') { p.rockets += 1; audio.play('powerup', 0.6); }
+    else if (type === 'rocket') { p.rockets += 1; audio.play('powerup', 0.6, p.x); }
     else if (type === 'spread') { p.spread = Math.min(5, p.spread + 1); audio.play('powerup', 0.6); } // capped so runs don't snowball
-    else if (type === 'shield') { p.shield = true; audio.play('powerup', 0.6); }
-    else if (type === 'laser') { p.lasers += 1; audio.play('powerup', 0.6); }
+    else if (type === 'shield') { p.shield = true; audio.play('powerup', 0.6, p.x); }
+    else if (type === 'laser') { p.lasers += 1; audio.play('powerup', 0.6, p.x); }
   }
 
   // Guest grabbed a power-up near (x,y): find & apply to that player.

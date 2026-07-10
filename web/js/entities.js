@@ -415,7 +415,7 @@ export class Player {
     if (world.effects) world.effects.push(new MuzzleFlash(edgeX, this.y, world.time));
     this.lastShot = world.time;
     world._shots = (world._shots || 0) + 1; // for online sfx streaming
-    audio.play('gun', 0.22);
+    audio.play('gun', 0.22, this.x);
   }
 
   fireRocket(world) {
@@ -423,7 +423,7 @@ export class Player {
     world.rockets.push(new Rocket(this.x, this.y, this.rocketImg));
     this.lastRocket = world.time;
     this.rockets--;
-    audio.play('rocket', 0.5);
+    audio.play('rocket', 0.5, this.x);
   }
 
   fireLaser(world) {
@@ -1086,7 +1086,7 @@ export class Enemy {
       this.shieldHp -= dmg;
       this.flash = 0.5;
       this.shieldRipple = { a: Math.PI, start: this._t || 0 };
-      audio.playSynth('shield_hit');
+      audio.playSynth('shield_hit', this.x);
       return false;
     }
     this.health -= dmg;
@@ -1209,8 +1209,8 @@ export class Enemy {
       if (!this.aim && world.time > this.nextAimAt) {
         this.aim = { y: this.y, until: world.time + 800 };
       } else if (this.aim && world.time >= this.aim.until) {
-        world.enemyBullets.push(new EnemyBullet(this.x - this.w / 2, this.aim.y, this.bulletImg, -13, 0));
-        audio.play('gun', 0.3);
+        world.enemyBullets.push(new EnemyBullet(this.x - this.w / 2, this.aim.y, this.bulletImg, -19, 0));
+        audio.play('gun', 0.3, this.x);
         this.aim = null;
         this.nextAimAt = world.time + Math.max(1800, randInt(2800, 4400) - this.level * 100);
       }
@@ -1263,7 +1263,7 @@ export class Enemy {
         rk.rotSpeed = 1.4;
         rk.enemyFire = true;
         world.enemyRockets.push(rk);
-        audio.play('rocket', 0.35);
+        audio.play('rocket', 0.35, this.x);
       }
     }
     // veteran tanks are minelayers too
@@ -1509,7 +1509,7 @@ export class Boss {
       // volley of shootable homing rockets
       const target = this.nearestPlayer(world);
       if (target && world.enemyRockets) {
-        audio.play('rocket', 0.5);
+        audio.play('rocket', 0.5, this.x);
         for (let i = -1; i <= 1; i++) {
           const rk = new Rocket(this.x - this.w / 2, clamp(this.y + i * 44, 30, H - 30),
             this.images.enemy_rocket || this.images.rocket, target, 180);
@@ -1751,7 +1751,7 @@ export class Boss {
 
     // live modular render: engine flames → hull → turrets → hit-flash pass
     // (a dying hull shudders)
-    const shudder = this.deathSeq || this.ram?.phase === 'windup';
+    const shudder = (this.deathSeq || this.ram?.phase === 'windup') && !world?.over;
     const jx = shudder ? (Math.random() - 0.5) * 5 : 0;
     const jy = shudder ? (Math.random() - 0.5) * 5 : 0;
     const bx = this.x - this.w / 2 + jx, by = this.y - this.h / 2 + jy;

@@ -215,7 +215,7 @@ export class VersusOnline extends BaseWorld {
       this.localBullets.push(new Bullet(edgeX, p.y, this.app.images.bullet, vx));
       this.net.send({ k: 'f', x: edgeX, y: p.y, vx });
       p.lastShot = this.time;
-      audio.play('gun', 0.22);
+      audio.play('gun', 0.22, m.x);
     }
     // rocket (E / Slash / pad X)
     if ((k.has('KeyE') || k.has('Slash') || (pad && pad.fire2)) && p.rockets > 0 && this.time - p.lastRk > RK_CD) {
@@ -223,14 +223,14 @@ export class VersusOnline extends BaseWorld {
       const rk = new Rocket(edgeX, p.y, this.app.images.rocket, this.remote, p.facingLeft ? 180 : 0);
       this.localRockets.push(rk);
       this.net.send({ k: 'rf', x: Math.round(edgeX), y: Math.round(p.y) });
-      audio.play('rocket', 0.5);
+      audio.play('rocket', 0.5, m.x);
     }
     // laser (Q / Period / pad Y)
     if ((k.has('KeyQ') || k.has('Period') || (pad && pad.fire3)) && p.lasers > 0 && this.time - p.lastLz > LZ_CD) {
       p.lastLz = this.time; p.lasers--;
       const dir = p.facingLeft ? -1 : 1;
       this.effects.push(new LaserBeam(edgeX, p.y, this.time, 'rgb(120,220,255)', dir));
-      audio.playSynth('plaser');
+      audio.playSynth('plaser', m.x);
       this.net.send({ k: 'lf', x0: Math.round(edgeX), y: Math.round(p.y), dir });
     }
     // thruster anim
@@ -244,7 +244,7 @@ export class VersusOnline extends BaseWorld {
     const edgeX = p.facingLeft ? p.x - p.w / 2 : p.x + p.w / 2;
     const dir = p.facingLeft ? -1 : 1;
     this.effects.push(new LaserBeam(edgeX, p.y, this.time, 'rgb(120,220,255)', dir));
-    audio.playSynth('plaser');
+    audio.playSynth('plaser', p.x);
     this.net.send({ k: 'lf', x0: Math.round(edgeX), y: Math.round(p.y), dir });
   }
 
@@ -255,7 +255,7 @@ export class VersusOnline extends BaseWorld {
     const edgeX = p.facingLeft ? p.x - p.w / 2 : p.x + p.w / 2;
     this.localRockets.push(new Rocket(edgeX, p.y, this.app.images.rocket, this.remote, p.facingLeft ? 180 : 0));
     this.net.send({ k: 'rf', x: Math.round(edgeX), y: Math.round(p.y) });
-    audio.play('rocket', 0.5);
+    audio.play('rocket', 0.5, p.x);
   }
 
   update(dt) {

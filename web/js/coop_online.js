@@ -325,7 +325,7 @@ export class CoopGuest extends BaseWorld {
         if (s === 'siren') audio.playSynth('siren');
         else audio.play(s, s === 'gun' ? 0.2 : s === 'rocket' ? 0.5 : 0.6);
       }
-      for (const l of m.lz || []) { this.effects.push(new LaserBeam(l[0], l[1], this.time)); audio.playSynth('plaser'); }
+      for (const l of m.lz || []) { this.effects.push(new LaserBeam(l[0], l[1], this.time)); audio.playSynth('plaser', l[0]); }
       for (const s of m.sp || []) this.effects.push(new ScorePopup(s[0], s[1], s[2], this.time));
     }
     else if (m.k === 'w') {

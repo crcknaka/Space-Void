@@ -87,7 +87,7 @@ export class VersusState extends BaseWorld {
     const rk = new Rocket(p.facingLeft ? p.x - p.w / 2 : p.x + p.w / 2, p.y, this.app.images.rocket, opponent, angle);
     rk.ownerId = id;
     this.rockets.push(rk);
-    audio.play('rocket', 0.5);
+    audio.play('rocket', 0.5, rk.x);
   }
 
   fireLaserVs(p, id, opponent, controls) {
@@ -98,7 +98,7 @@ export class VersusState extends BaseWorld {
     const x0 = p.facingLeft ? p.x - p.w / 2 : p.x + p.w / 2;
     const dir = p.facingLeft ? -1 : 1;
     this.effects.push(new LaserBeam(x0, p.y, this.time, 'rgb(120,220,255)', dir));
-    audio.playSynth('plaser');
+    audio.playSynth('plaser', p.x);
     this.shake = Math.min(12, (this.shake || 0) + 3);
     // instant hit if the opponent is on the beam's path and side
     if (opponent.alive && Math.abs(opponent.y - p.y) < LZ_BAND && (dir > 0 ? opponent.x > x0 : opponent.x < x0)) {
@@ -139,7 +139,7 @@ export class VersusState extends BaseWorld {
     const edgeX = p.facingLeft ? p.x - p.w / 2 : p.x + p.w / 2;
     bullets.push(new Bullet(edgeX, p.y, this.app.images.bullet, vx));
     p.lastShot = this.time;
-    audio.play('gun', 0.22);
+    audio.play('gun', 0.22, p.x);
   }
 
   update(dt) {
