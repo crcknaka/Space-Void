@@ -155,9 +155,9 @@ export class Bullet {
   update(world) {
     this.x += this.vx * world.k;
     this.y += this.vy * world.k;
-    if (this.tier === 3 && world.effects && world.time - (this._tr || 0) > 50) {
-      this._tr = world.time; // plasma ember trail at max combo
-      world.effects.push(new BoostParticle(this.x - 6, this.y, world.time, 'rgb(130,210,255)', -1));
+    if (this.tier === 3 && world.effects && world.time - (this._tr || 0) > 85) {
+      this._tr = world.time; // plasma ember trail at max combo — subtle, not a smoke wall
+      world.effects.push(new BoostParticle(this.x - 6, this.y, world.time, 'rgb(130,210,255)', -1, 0.5));
     }
     if (this.x - this.w / 2 > W || this.x + this.w / 2 < 0 || this.y < -20 || this.y > H + 20) this.dead = true;
   }
@@ -223,15 +223,15 @@ export class RocketTrailParticle {
 
 // Streak behind a boosting ship (cyan for players; enemies pass their own color)
 export class BoostParticle {
-  constructor(x, y, time, color = 'rgb(120,220,255)', dir = -1) {
+  constructor(x, y, time, color = 'rgb(120,220,255)', dir = -1, scale = 1) {
     this.color = color;
-    this.x = x; this.y = y + rand(-7, 7);
+    this.x = x; this.y = y + rand(-7, 7) * scale;
     this.vx = rand(0.8, 1.6) * dir;
     this.vy = rand(-0.3, 0.3);
-    this.size = rand(1.5, 3);
+    this.size = rand(1.5, 3) * scale;
     this.life = 320;
     this.spawn = time;
-    this.alpha = 0.8;
+    this.alpha = 0.8 * Math.min(1, 0.3 + scale * 0.7);
     this.dead = false;
   }
   update(world) {

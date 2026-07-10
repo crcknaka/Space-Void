@@ -803,7 +803,7 @@ export class GameState extends BaseWorld {
           if (b.dead) continue;
           if (Math.abs(b.x - cx) > a.img.width * 0.45 || Math.abs(b.y - cy) > a.img.height * 0.42) continue;
           b.dead = true;
-          a.hp = (a.hp ?? (a.golden ? 9 : 6)) - 1;
+          a.hp = (a.hp ?? (a.golden ? 18 : 6)) - 1;
           this.spawnSparks(b.x, b.y, 4);
           if (a.hp <= 0) {
             a.dead = true;
