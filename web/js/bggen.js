@@ -64,8 +64,10 @@ export function makePlanetSprite(seed) {
   const w = Math.ceil(r * 4.9), h = Math.ceil(r * 2.7);
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
+  c.planetR = r; // comet-impact targeting
   const g = c.getContext('2d');
   drawPlanet(g, w / 2, h / 2, r, (R() * 360) | 0, R, false);
+  if (R() < 0.35) drawStation(g, w / 2, h / 2, r, R);
   const nm = R() < 0.6 ? 1 + ((R() * 2) | 0) : 0;
   for (let i = 0; i < nm; i++) {
     const mr = r * (0.06 + R() * 0.08);
@@ -295,6 +297,27 @@ function drawRing(g, x, y, rr, tilt, hue, R, farHalf, dim = 1) {
   g.globalAlpha = 1;
 }
 
+// Tiny orbital station silhouette: hub + solar wings + lit windows.
+function drawStation(g, px, py, pr, R) {
+  const ang = R() * Math.PI * 2;
+  const d = pr * (1.25 + R() * 0.5);
+  const x = px + Math.cos(ang) * d;
+  const y = py + Math.sin(ang) * d * 0.7;
+  const s = pr * (0.1 + R() * 0.06); // half-length
+  g.save();
+  g.translate(x, y);
+  g.rotate((R() - 0.5) * 0.6);
+  g.fillStyle = 'rgb(30,34,44)';
+  g.fillRect(-s, -s * 0.12, s * 2, s * 0.24);          // spine
+  g.fillRect(-s * 0.25, -s * 0.3, s * 0.5, s * 0.6);   // hub
+  g.fillStyle = 'rgb(22,30,52)';
+  g.fillRect(-s * 1.5, -s * 0.4, s * 0.45, s * 0.8);   // solar wings
+  g.fillRect(s * 1.05, -s * 0.4, s * 0.45, s * 0.8);
+  g.fillStyle = 'rgba(255,220,150,0.8)';
+  for (let i = 0; i < 4; i++) g.fillRect(-s * 0.8 + i * s * 0.45, -s * 0.03, 1.5, 1.5); // windows
+  g.restore();
+}
+
 function drawMoon(g, x, y, r, R) {
   const grad = g.createRadialGradient(x - r * 0.4, y - r * 0.4, r * 0.1, x, y, r);
   const lit = 55 + R() * 15;
@@ -312,4 +335,17 @@ function drawMoon(g, x, y, r, R) {
     g.fill();
   }
   g.globalAlpha = 1;
+}
+
+
+/* -------------------------------- sector names ------------------------------- */
+// "SECTOR 4 · KHARON DRIFT" — seeded per level, same for every player.
+const SYL_A = ['KAR', 'VEL', 'THO', 'RHI', 'AZH', 'MOR', 'QUE', 'TAL', 'ISH', 'ODA', 'BRA', 'KES', 'UMB', 'NYX', 'SOL', 'FEN', 'ORI', 'CYG', 'DRA', 'HEL'];
+const SYL_B = ['on', 'ara', 'eus', 'ion', 'ith', 'os', 'ane', 'ir', 'ux', 'ea', 'antis', 'orn', 'ari', 'ex', 'ium'];
+const PLACE = ['DRIFT', 'REACH', 'EXPANSE', 'VERGE', 'GATE', 'BELT', 'SHOALS', 'ABYSS', 'CROSSING', 'VEIL', 'FRONTIER', 'RIFT', 'DEEP', 'PASSAGE'];
+
+export function sectorName(level) {
+  const R = makeRng((level * 7919 + 271) >>> 0);
+  const star = SYL_A[(R() * SYL_A.length) | 0] + SYL_B[(R() * SYL_B.length) | 0].toUpperCase();
+  return `${star} ${PLACE[(R() * PLACE.length) | 0]}`;
 }

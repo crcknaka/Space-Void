@@ -249,13 +249,13 @@ export function genShip(seed, family = 'basic', over = null) {
 /* ------------------------------ cargo freighter ------------------------------ */
 // Big slow hauler for background ambience: tug + container train + engines.
 // Rendered dim (silhouette against the void), so shapes matter more than color.
-export function genFreighter(seed) {
+export function genFreighter(seed, golden = false) {
   const R = makeRng((seed * 48271 + 331) >>> 0);
   const rng = (a, b) => a + R() * (b - a);
   const m = newMesh();
-  const hue = rng(200, 250);
-  const hull = hsl(hue, 10, 34);
-  const dark = hsl(hue, 12, 24);
+  const hue = golden ? 45 : rng(200, 250);
+  const hull = golden ? hsl(45, 65, 55) : hsl(hue, 10, 34);
+  const dark = golden ? hsl(40, 55, 38) : hsl(hue, 12, 24);
   // tug cab up front
   addLathe(m, [
     { x: 78, r: 2 }, { x: 66, r: 9 }, { x: 48, r: 10 }, { x: 40, r: 5 },
@@ -269,8 +269,8 @@ export function genFreighter(seed) {
   const n = 3 + ((R() * 3) | 0);
   for (let i = 0; i < n; i++) {
     const len = rng(16, 26);
-    const col = hsl((hue + rng(-30, 90) + 360) % 360, rng(18, 40), rng(26, 42));
-    addBox(m, cx - len / 2, rng(-1, 1), 0, len - 3, rng(9, 12), rng(10, 14), col, 0, 1);
+    const col = golden ? hsl(45 + rng(-8, 8), 70, rng(48, 60)) : hsl((hue + rng(-30, 90) + 360) % 360, rng(18, 40), rng(26, 42));
+    addBox(m, cx - len / 2, rng(-1, 1), 0, len - 3, rng(9, 12), rng(10, 14), col, golden ? 0.15 : 0, 1);
     cx -= len;
   }
   // engine block with twin glowing nozzles

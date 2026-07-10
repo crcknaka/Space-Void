@@ -102,25 +102,26 @@ function rockMesh(seed) {
 
 /* ------------------------------ bullet bolts ------------------------------ */
 
-function makeBolt(core, outer) {
-  const c = cv(24, 12);
+function makeBolt(core, outer, w = 24, h = 12) {
+  const c = cv(w, h);
   const g = c.getContext('2d');
-  const grad = g.createRadialGradient(12, 6, 0, 12, 6, 11);
+  const cx = w / 2, cy = h / 2;
+  const grad = g.createRadialGradient(cx, cy, 0, cx, cy, cx - 1);
   grad.addColorStop(0, outer);
   grad.addColorStop(1, 'rgba(0,0,0,0)');
   g.save();
-  g.translate(12, 6); g.scale(1, 0.45); g.translate(-12, -6);
+  g.translate(cx, cy); g.scale(1, h / w * 0.9); g.translate(-cx, -cy);
   g.fillStyle = grad;
-  g.fillRect(0, -8, 24, 28);
+  g.fillRect(0, cy - w, w, w * 2);
   g.restore();
   const ell = (rx, ry, fill) => {
     g.fillStyle = fill;
     g.beginPath();
-    g.ellipse(12, 6, rx, ry, 0, 0, Math.PI * 2);
+    g.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
     g.fill();
   };
-  ell(9, 3, core);
-  ell(5.5, 1.8, '#fff');
+  ell(cx * 0.75, cy * 0.5, core);
+  ell(cx * 0.45, cy * 0.3, '#fff');
   return c;
 }
 
@@ -368,6 +369,9 @@ export function generateSprites(images) {
   images.rocket = bakeInto(rocketMesh(), 48, 24, VIEW, 0.95);
   images.enemy_rocket = bakeInto(rocketMesh([125, 62, 68], [255, 75, 60]), 48, 24, VIEW, 0.95);
   images.bullet = makeBolt('rgb(255,225,120)', 'rgba(255,190,70,0.9)');
+  // combo-tier bolts: hotter and bigger as the multiplier climbs
+  images.bullet2 = makeBolt('rgb(255,190,80)', 'rgba(255,140,40,0.95)', 28, 14);
+  images.bullet3 = makeBolt('rgb(190,240,255)', 'rgba(90,190,255,0.95)', 34, 16);
   images.enemy_bullet = makeBolt('rgb(255,120,110)', 'rgba(255,70,60,0.9)');
 
   // colors follow the original badges: shooting green, slow-mo orange

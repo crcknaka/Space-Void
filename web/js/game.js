@@ -6,7 +6,7 @@ import { Button, ButtonGroup, drawText } from './ui.js';
 import { BaseWorld } from './world.js';
 import {
   Player, Enemy, Boss, Asteroid, PowerUp, Explosion, Spark, Shockwave,
-  Mine, MeshDebris, shatterSprite, Comet, DistantConvoy, Freighter, WarpStreak, Lightning,
+  Mine, MeshDebris, shatterSprite, Comet, DistantConvoy, Freighter, Skirmish, WarpStreak, Lightning,
   LaserBeam, ScorePopup,
   POWERUP_TYPES, POWERUP_IMG,
 } from './entities.js';
@@ -14,7 +14,7 @@ import { makeNebulaField, tinted } from './fx.js';
 import { askName, submitScore, savedName } from './lb.js';
 import { bumpStats, vibrate } from './settings.js';
 import { dailySeed, todayMod, useDailyAttempt, dailyAttemptsLeft, MODS } from './daily.js';
-import { makeSpaceBackdrop } from './bggen.js';
+import { makeSpaceBackdrop, sectorName } from './bggen.js';
 
 const P1_CONTROLS = {
   up: 'KeyW', down: 'KeyS', left: 'KeyA', right: 'KeyD',
@@ -368,6 +368,10 @@ export class GameState extends BaseWorld {
     this.dmgFlash = 1; // red screen-edge pulse
     p.alive = false;
     p.lives -= 1;
+    // the run's final death plays out in slow motion
+    if (p.lives <= 0 && this.players().every((pp) => !pp.alive && pp.lives <= 0)) {
+      this.slowmo = { t: 0, dur: 1700, depth: 0.9 };
+    }
     if (p.lives > 0) p.respawnAt = this.time + 1500;
   }
 
@@ -465,6 +469,13 @@ export class GameState extends BaseWorld {
         this.warp = null;
         this.warpMul = 1;
         if (this._zoomAfterWarp != null) { this.bgZoomTarget = this._zoomAfterWarp; this._zoomAfterWarp = null; }
+        // arrival: ships swoop in from the left edge under afterburner
+        for (const pl of this.players()) {
+          if (!pl.alive) continue;
+          pl.flyInFrom = pl.x;
+          pl.flyInUntil = this.time + 700;
+          pl.invulnUntil = Math.max(pl.invulnUntil || 0, this.time + 900);
+        }
       } else {
         const env = p < 0.35 ? p / 0.35 : p > 0.65 ? (1 - p) / 0.35 : 1; // trapezoid
         this.warpMul = 1 + 27 * env * env * (3 - 2 * env);               // smoothstep edges
@@ -578,9 +589,13 @@ export class GameState extends BaseWorld {
       } else {
         this.nextAmbientAt = this.time + 18000 + Math.random() * 26000;
         const roll = Math.random();
-        this.ambient.push(roll < 0.4 ? new Comet(this.time)
-          : roll < 0.7 ? new DistantConvoy(this.app.images, this.time)
-          : new Freighter(this.time));
+        if (roll < 0.32) {
+          // a quarter of comets are on a collision course with the planet
+          const target = Math.random() < 0.25 ? this.planets?.[0] : null;
+          this.ambient.push(new Comet(this.time, target));
+        } else if (roll < 0.55) this.ambient.push(new DistantConvoy(this.app.images, this.time));
+        else if (roll < 0.8) this.ambient.push(new Freighter(this.time));
+        else this.ambient.push(new Skirmish(this.app.images, this.time));
       }
     }
     for (const a of this.ambient) a.update(this);
@@ -594,6 +609,17 @@ export class GameState extends BaseWorld {
 
     // --- updates ---
     for (const p of this.players()) p.update(this);
+    for (const p of this.players()) {
+      if (p.flyInUntil && this.time < p.flyInUntil) {
+        const ft = 1 - (p.flyInUntil - this.time) / 700;
+        const ease = 1 - (1 - ft) * (1 - ft);
+        p.x = -50 + (p.flyInFrom + 50) * ease;
+        p.boosting = true;
+      }
+    }
+    // micro-parallax follows the lead ship
+    const ptgt = -(this.player1.y - H / 2) * 0.02;
+    this.parallaxOffY = (this.parallaxOffY || 0) + (ptgt - (this.parallaxOffY || 0)) * Math.min(1, 0.06 * this.k);
     this.handleTouch();
     for (const b of this.bullets) b.update(this);
     for (const r of this.rockets) r.update(this);
@@ -776,23 +802,31 @@ export class GameState extends BaseWorld {
       }
     }
 
-    // CONVOY RAID: freighters take fire and pay out big
-    if (this.mod?.convoy) {
+    // Freighters under fire: all of them during CONVOY RAID, golden ones always
+    {
       for (const a of this.ambient) {
         if (!(a instanceof Freighter) || a.dead) continue;
+        if (!this.mod?.convoy && !a.golden) continue;
         const cx = a.x + a.img.width / 2, cy = a.y + a.img.height / 2;
         for (const b of this.bullets) {
           if (b.dead) continue;
           if (Math.abs(b.x - cx) > a.img.width * 0.45 || Math.abs(b.y - cy) > a.img.height * 0.42) continue;
           b.dead = true;
-          a.hp = (a.hp ?? 6) - 1;
+          a.hp = (a.hp ?? (a.golden ? 9 : 6)) - 1;
           this.spawnSparks(b.x, b.y, 4);
           if (a.hp <= 0) {
             a.dead = true;
             this.explode(cx, cy, true, 1.7);
             shatterSprite(this, a.img, cx, cy, a.img.width, { vis: 1, chunks: 7 });
-            this.addKill(50, cx, cy);
-            this.dropPowerup(cx, cy);
+            if (a.golden) { // treasure hauler: powerup rain
+              this.addKill(100, cx, cy);
+              for (const dx of [-50, 0, 50]) this.dropPowerup(cx + dx, cy + (dx ? 24 : -18));
+              this.popup(cx, cy - 44, 'JACKPOT!', 'rgb(255,215,80)');
+              audio.playSynth('fanfare');
+            } else {
+              this.addKill(50, cx, cy);
+              this.dropPowerup(cx, cy);
+            }
           }
           break;
         }
@@ -820,6 +854,7 @@ export class GameState extends BaseWorld {
         b.dead = true;
         a.dead = true;
         this.explode(a.x, a.y);
+        shatterSprite(this, a.img, a.x, a.y, a.w, { vis: 1, chunks: 4, ry: 0 });
         this.addKill(5, a.x, a.y);
         this.asteroids.push(...a.breakApart());
         break;
@@ -834,6 +869,7 @@ export class GameState extends BaseWorld {
         r.dead = true;
         a.dead = true;
         this.explode(a.x, a.y);
+        shatterSprite(this, a.img, a.x, a.y, a.w, { vis: 1, chunks: 5, ry: 0 });
         this.addKill(10, a.x, a.y);
         break;
       }
@@ -1102,6 +1138,17 @@ export class GameState extends BaseWorld {
       this.killFlash = Math.max(0, this.killFlash - 0.022 * this.k);
     }
 
+    // last life: the screen edge breathes red
+    const alive = this.players().filter((p) => p.alive || p.lives > 0);
+    if (!this.over && alive.length && alive.every((p) => p.lives === 1)) {
+      const breathe = 0.09 + 0.05 * Math.sin(this.time / 320);
+      const vg = g.createRadialGradient(W / 2, H / 2, H * 0.32, W / 2, H / 2, H * 0.72);
+      vg.addColorStop(0, 'rgba(255,0,0,0)');
+      vg.addColorStop(1, `rgba(255,30,30,${breathe})`);
+      g.fillStyle = vg;
+      g.fillRect(0, 0, W, H);
+    }
+
     // damage flash: red edge pulse when a life is lost
     if (this.dmgFlash > 0) {
       const grad = g.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, H * 0.7);
@@ -1139,6 +1186,7 @@ export class GameState extends BaseWorld {
         drawText(g, `LEVEL ${this.levelBanner.level}`, W / 2, H / 2 - 180, size, 'rgb(120,80,20)');
         g.globalCompositeOperation = prevOp;
         drawText(g, `LEVEL ${this.levelBanner.level}`, W / 2, H / 2 - 180, size, 'rgb(255,215,90)');
+        drawText(g, `— ${sectorName(this.levelBanner.level)} —`, W / 2, H / 2 - 180 + size * 0.72, Math.round(size * 0.3), 'rgb(150,200,255)');
         g.globalAlpha = alpha * 0.8;
         drawText(g, 'WAVE CLEARED', W / 2, H / 2 - 180 + size * 0.75, 18, 'rgb(200,200,200)');
         g.globalAlpha = 1;
@@ -1159,6 +1207,7 @@ export class GameState extends BaseWorld {
       g.fillRect(mx, 38, 46 * frac, 3);
     }
     drawText(g, `Level: ${this.level}`, W - 10, 24, 26, '#fff', 'right');
+    drawText(g, sectorName(this.level), W - 10, 46, 12, 'rgba(160,190,220,0.75)', 'right');
     if (this.daily) drawText(g, `DAILY · ${this.mod.name}`, W - 10, 52, 15, 'rgb(255,210,60)', 'right');
 
     // daily modifier intro banner (first seconds of the run)

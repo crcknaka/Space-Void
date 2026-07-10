@@ -81,6 +81,7 @@ export class Star {
     this.speed = speed;
     this.size = size;
     this.opacity = opacity / 255;
+    this.twk = Math.random() < 0.12 ? Math.random() * 6 : -1; // a few stars twinkle
     this.sprite = starSprite('#fff');
   }
   update(k = 1) {
@@ -91,7 +92,7 @@ export class Star {
     }
   }
   draw(g) {
-    g.globalAlpha = this.opacity;
+    g.globalAlpha = this.opacity * (this.twk < 0 ? 1 : 0.55 + 0.45 * Math.sin(performance.now() / 320 + this.twk));
     const d = this.size * 2.6;
     g.drawImage(this.sprite, this.x - d / 2, this.y - d / 2, d, d);
     g.globalAlpha = 1;
@@ -154,6 +155,10 @@ export class Bullet {
   update(world) {
     this.x += this.vx * world.k;
     this.y += this.vy * world.k;
+    if (this.tier === 3 && world.effects && world.time - (this._tr || 0) > 50) {
+      this._tr = world.time; // plasma ember trail at max combo
+      world.effects.push(new BoostParticle(this.x - 6, this.y, world.time, 'rgb(130,210,255)', -1));
+    }
     if (this.x - this.w / 2 > W || this.x + this.w / 2 < 0 || this.y < -20 || this.y > H + 20) this.dead = true;
   }
   draw(g) {
@@ -308,6 +313,7 @@ export class Player {
     this.shipFlipped = !!opts.shipFlipped;
     this.autoShoot = opts.autoShoot !== false;
     this.useRockets = opts.useRockets !== false;
+    this.images = images; // combo tiers swap the bolt sprite at shoot time
     this.bulletImg = images.bullet;
     this.rocketImg = images.rocket;
 
@@ -396,8 +402,15 @@ export class Player {
     const edgeX = this.facingLeft ? this.x - this.w / 2 : this.x + this.w / 2;
     const spreadAngle = 10;
     const start = -((this.spread - 1) * spreadAngle) / 2;
+    // combo heat: hotter, larger bolts at x3+, plasma at x5
+    const tier = (world.mult || 1) >= 5 ? 3 : (world.mult || 1) >= 3 ? 2 : 1;
+    const img = tier === 3 ? this.images.bullet3 || this.bulletImg
+      : tier === 2 ? this.images.bullet2 || this.bulletImg : this.bulletImg;
     for (let i = 0; i < this.spread; i++) {
-      world.bullets.push(new Bullet(edgeX, this.y, this.bulletImg, vx, start + i * spreadAngle));
+      const b = new Bullet(edgeX, this.y, img, vx, start + i * spreadAngle);
+      b.tier = tier;
+      if (tier > 1) { b.w = tier === 3 ? 14 : 12; b.h = tier === 3 ? 7 : 6; }
+      world.bullets.push(b);
     }
     if (world.effects) world.effects.push(new MuzzleFlash(edgeX, this.y, world.time));
     this.lastShot = world.time;
@@ -445,8 +458,9 @@ export class Player {
     }
 
     const vw = this.w * VIS, vh = this.h * VIS;
+    const bob = Math.sin(t / 480 + (this.slot || 0) * 2) * 1.2; // idle hover
     g.save();
-    g.translate(this.x, this.y);
+    g.translate(this.x, this.y + bob);
     g.rotate(this.tilt * (bank ? 0.35 : 1));
     if (this.shipFlipped) g.scale(-1, 1);
     // engine flames at the sprite's real nozzles (afterburner while boosting
@@ -613,13 +627,22 @@ export class Mine {
 // Pure eye-candy — Math.random by design (never touches the seeded game RNG).
 
 export class Comet {
-  constructor(time) {
+  constructor(time, target = null) {
     this.x = W * (0.3 + Math.random() * 0.7);
     this.y = -30;
-    const a = Math.PI * (0.62 + Math.random() * 0.2); // down-left diagonal
+    this.target = target; // planet layer entry → impact trajectory
     const sp = 2.6 + Math.random() * 2;
-    this.vx = Math.cos(a) * sp;
-    this.vy = Math.abs(Math.sin(a)) * sp;
+    if (target) {
+      const tx = target.x + target.img.width / 2;
+      const ty = target.y + target.img.height / 2;
+      const d = Math.hypot(tx - this.x, ty - this.y) || 1;
+      this.vx = ((tx - this.x) / d) * sp;
+      this.vy = ((ty - this.y) / d) * sp;
+    } else {
+      const a = Math.PI * (0.62 + Math.random() * 0.2); // down-left diagonal
+      this.vx = Math.cos(a) * sp;
+      this.vy = Math.abs(Math.sin(a)) * sp;
+    }
     this.spawn = time;
     this.hue = Math.random() < 0.5 ? '200,230,255' : '255,225,180';
     this.dead = false;
@@ -627,6 +650,17 @@ export class Comet {
   update(world) {
     this.x += this.vx * world.k;
     this.y += this.vy * world.k;
+    // impact: the comet dies in a flash on the planet's face
+    const t = this.target;
+    if (t && !t.dead) {
+      const cx = t.x + t.img.width / 2, cy = t.y + t.img.height / 2;
+      const r = (t.img.planetR || t.img.height / 2.7) * 0.85;
+      if (Math.hypot(this.x - cx, this.y - cy) < r) {
+        this.dead = true;
+        world.effects.push(new ImpactFlash(this.x, this.y, world.time));
+        if (world.effects) world.effects.push(new Shockwave(this.x, this.y, world.time, 60, 'rgb(255,230,170)'));
+      }
+    }
     if (this.y > H + 60 || this.x < -160) this.dead = true;
   }
   draw(g) {
@@ -644,6 +678,89 @@ export class Comet {
     g.stroke();
     g.fillStyle = '#fff';
     g.beginPath(); g.arc(this.x, this.y, 2, 0, Math.PI * 2); g.fill();
+    g.globalCompositeOperation = prev;
+  }
+}
+
+// Bright bloom where a comet strikes a planet — a background wow-moment.
+export class ImpactFlash {
+  constructor(x, y, time) {
+    this.x = x; this.y = y;
+    this.spawn = time;
+    this.life = 900;
+    this.dead = false;
+  }
+  update(world) {
+    if (world.time - this.spawn > this.life) this.dead = true;
+  }
+  draw(g, world) {
+    const t = (world.time - this.spawn) / this.life;
+    const r = 6 + 26 * t;
+    const prev = g.globalCompositeOperation;
+    g.globalCompositeOperation = 'lighter';
+    const grad = g.createRadialGradient(this.x, this.y, 0, this.x, this.y, r);
+    grad.addColorStop(0, `rgba(255,245,220,${0.9 * (1 - t)})`);
+    grad.addColorStop(0.5, `rgba(255,190,110,${0.5 * (1 - t)})`);
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = grad;
+    g.beginPath(); g.arc(this.x, this.y, r, 0, Math.PI * 2); g.fill();
+    g.globalCompositeOperation = prev;
+  }
+}
+
+// Background skirmish: a convoy flees while two pirates chase, tracers flying.
+// Pure theatre at silhouette scale — none of it touches gameplay.
+export class Skirmish {
+  constructor(images, time) {
+    this.ships = tinted(images.enemy_basic, 'rgba(22,28,40,0.96)', 'convoy_silhouette');
+    this.pirate = tinted(images.enemy_hunter, 'rgba(42,20,24,0.96)', 'pirate_silhouette');
+    this.n = 2 + ((Math.random() * 2) | 0);
+    this.x = W + 40;
+    this.y = 60 + Math.random() * (H * 0.55);
+    this.v = 0.55 + Math.random() * 0.25; // fleeing — faster than a convoy
+    this.s = 15 + Math.random() * 7;
+    this.lastShot = 0;
+    this.tracers = []; // [x, y, len, born]
+    this.casualtyAt = time + 4000 + Math.random() * 6000;
+    this.dead = false;
+  }
+  update(world) {
+    this.x -= this.v * world.k * (world.warpMul || 1);
+    if (world.time - this.lastShot > 700 + Math.random() * 900) {
+      this.lastShot = world.time;
+      const py = this.y + this.s * (1.6 + Math.random());
+      this.tracers.push([this.x + this.s * (2.2 + Math.random() * 2), py + (Math.random() - 0.5) * this.s, this.s * 1.4, world.time]);
+    }
+    this.tracers = this.tracers.filter((tr) => world.time - tr[3] < 500);
+    for (const tr of this.tracers) tr[0] -= 3.2 * world.k;
+    if (!this.hit && world.time > this.casualtyAt && this.n > 1) {
+      this.hit = true; // one convoy ship doesn't make it
+      this.n -= 1;
+      world.effects.push(new ImpactFlash(this.x + this.s * 0.8, this.y, world.time));
+    }
+    if (this.x + this.n * this.s * 1.6 + this.s * 5 < -40) this.dead = true;
+  }
+  draw(g, world) {
+    g.globalAlpha = 0.85;
+    for (let i = 0; i < this.n; i++) { // the fleeing convoy
+      g.drawImage(this.ships, this.x + i * this.s * 1.5, this.y + Math.sin(i * 1.7) * this.s * 0.5, this.s, this.s * 0.6);
+    }
+    const py = this.y + this.s * 0.9;
+    for (let i = 0; i < 2; i++) { // pirates behind
+      g.drawImage(this.pirate, this.x + this.s * (2.6 + i * 1.6), py + i * this.s * 0.9, this.s * 1.05, this.s * 0.63);
+    }
+    g.globalAlpha = 1;
+    const prev = g.globalCompositeOperation;
+    g.globalCompositeOperation = 'lighter';
+    for (const tr of this.tracers) {
+      const a = 1 - (world.time - tr[3]) / 500;
+      g.strokeStyle = `rgba(255,120,90,${0.7 * a})`;
+      g.lineWidth = 1;
+      g.beginPath();
+      g.moveTo(tr[0], tr[1]);
+      g.lineTo(tr[0] + tr[2], tr[1]);
+      g.stroke();
+    }
     g.globalCompositeOperation = prev;
   }
 }
@@ -679,14 +796,15 @@ export class DistantConvoy {
 // Huge cargo hauler crossing far behind the action — baked once per sighting
 // from a fresh seed, rendered dim so it reads as a distant silhouette.
 export class Freighter {
-  constructor(time) {
-    const mesh = genFreighter((Math.random() * 1e9) | 0);
+  constructor(time, forceGolden = false) {
+    this.golden = forceGolden || Math.random() < 0.05; // rare treasure hauler
+    const mesh = genFreighter((Math.random() * 1e9) | 0, this.golden);
     const wpx = Math.ceil(300 + Math.random() * 220);
     const c = document.createElement('canvas');
     c.width = wpx;
     c.height = Math.ceil(wpx * 0.3);
     const fit = fitTransform(mesh, c.width, c.height, BOSS_VIEW, 0.95);
-    renderMesh(c.getContext('2d'), mesh, { ...BOSS_VIEW, ...fit, gain: 0.5, ambient: 0.3 });
+    renderMesh(c.getContext('2d'), mesh, { ...BOSS_VIEW, ...fit, gain: this.golden ? 1 : 0.5, ambient: this.golden ? 0.45 : 0.3 });
     c.mesh = mesh;          // convoy-raid mode shatters these
     c.fitScale = fit.scale;
     this.img = c;
@@ -701,10 +819,14 @@ export class Freighter {
     if (this.x + this.img.width < -60) this.dead = true;
   }
   draw(g, world) {
+    const t = world?.time ?? 0;
+    if (this.golden) { // it glimmers — you're meant to chase it
+      drawGlow(g, glowElite, this.x + this.img.width / 2, this.y + this.img.height / 2,
+        (this.img.width / 34) * (0.9 + 0.15 * Math.sin(t / 220)));
+    }
     g.globalAlpha = 0.92;
     g.drawImage(this.img, this.x, this.y);
     g.globalAlpha = 1;
-    const t = world?.time ?? 0;
     // blinking nav strobe + steady engine embers
     if (Math.sin((t + this.phase) / 260) > 0.75) {
       g.fillStyle = 'rgba(255,110,90,0.9)';

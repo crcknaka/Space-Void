@@ -97,6 +97,8 @@ export class BaseWorld {
   drawBackdrop(g) {
     g.fillStyle = '#000';
     g.fillRect(0, 0, W, H);
+    g.save();
+    g.translate(0, this.parallaxOffY || 0); // micro-parallax vs player motion
     const bg = this.bgOverride || this.app.images[this.bgKey];
     const bgH = H * (this.bgZoom || 1);
     const bgW = this.bgW || bg.width * (bgH / bg.height);
@@ -117,6 +119,7 @@ export class BaseWorld {
     }
     g.globalAlpha = 1;
     drawNebulae(g, this.nebulae);
+    g.restore();
     for (const layer of this.starLayers) for (const s of layer) s.draw(g);
   }
 
