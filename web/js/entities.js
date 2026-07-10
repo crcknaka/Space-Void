@@ -2128,10 +2128,10 @@ export class PowerUp {
 /* ------------------------------ player laser beam ---------------------------- */
 // Visual for the instantaneous piercing beam (damage is resolved on fire).
 export class LaserBeam {
-  constructor(x0, y, time, color = 'rgb(120,220,255)', dir = 1) {
+  constructor(x0, y, time, color = 'rgb(120,220,255)', dir = 1, life = 520) {
     this.x0 = x0; this.y = y;
     this.spawn = time;
-    this.life = 520; // lingering beam so it reads clearly
+    this.life = life; // lingering beam so it reads clearly
     this.color = color;
     this.dir = dir; // +1 sweeps right, -1 sweeps left
     this.dead = false;
@@ -2141,7 +2141,8 @@ export class LaserBeam {
   }
   draw(g, world) {
     const t = (world.time - this.spawn) / this.life;
-    const a = 1 - t;
+    // hold near-full brightness while the beam is hot, then fade out
+    const a = t < 0.5 ? 1 - t * 0.2 : 0.9 * (1 - (t - 0.5) / 0.5);
     const prev = g.globalCompositeOperation;
     g.globalCompositeOperation = 'lighter';
     const bx = this.dir > 0 ? this.x0 : 0;

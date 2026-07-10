@@ -71,6 +71,7 @@ export class GameState extends BaseWorld {
     this.slowMoEnd = 0;
 
     this.bullets = [];
+    this.beams = []; // active player laser beams (hot damage windows)
     this.rockets = [];
     this.enemyBullets = [];
     this.enemyRockets = []; // homing rockets fired by high-level tanks
@@ -316,26 +317,34 @@ export class GameState extends BaseWorld {
     if (this.online) (this._spQ = this._spQ || []).push([Math.round(x), Math.round(y), text]);
   }
 
-  // Piercing laser: instant hitscan along y from the ship's nose to the right
-  // edge. Damages EVERY enemy on the line, burns enemy bullets, blows wrecks,
-  // splits asteroids. Charges are finite (Player.lasers).
+  // Piercing laser: a beam from the ship's nose to the right edge that stays
+  // hot for ~450ms — everything on the line when it fires AND everything that
+  // flies into it while it burns gets hit (once per beam). Burns enemy
+  // bullets, blows wrecks, splits asteroids. Charges are finite (Player.lasers).
   laserBlast(p) {
     const x0 = p.x + p.w / 2;
     const y = p.y;
-    const HALF = 14; // beam half-height for hit tests
-    this.effects.push(new LaserBeam(x0, y, this.time));
+    this.effects.push(new LaserBeam(x0, y, this.time, undefined, 1, 900));
     if (this.online) (this._lzQ = this._lzQ || []).push([Math.round(x0), Math.round(y)]);
     audio.playSynth('plaser', p.x);
     vibrate(40);
     this.shake = Math.min(12, this.shake + 3);
+    const bm = { x0, y, until: this.time + 450, hit: new Set() };
+    this.beams.push(bm);
+    this.laserBeamDamage(bm); // first tick lands instantly
+  }
 
+  laserBeamDamage(bm) {
+    const { x0, y } = bm;
+    const HALF = 14; // beam half-height for hit tests
     // enemy bullets on the line burn up
     for (const b of this.enemyBullets) {
       if (!b.dead && b.x > x0 && Math.abs(b.y - y) < HALF + 4) { b.dead = true; this.spawnSparks(b.x, b.y, 3); }
     }
-    // enemies (incl. boss) — pierces through all of them
+    // enemies (incl. boss) — pierces through all of them, once per beam each
     for (const e of this.enemies) {
-      if (e.dead || e.x + e.w / 2 < x0 || Math.abs(e.y - y) > HALF + e.h * 0.4) continue;
+      if (e.dead || bm.hit.has(e) || e.x + e.w / 2 < x0 || Math.abs(e.y - y) > HALF + e.h * 0.4) continue;
+      bm.hit.add(e);
       this.spawnSparks(Math.max(x0, e.x - e.w / 2), e.y, 10);
       if (e.dying) {
         e.dead = true;
@@ -362,9 +371,11 @@ export class GameState extends BaseWorld {
         audio.playSynth('hit', e.x, 1.2); // hull held against the beam
       }
     }
-    // asteroids split like a bullet hit (the beam gouges a giant for 2)
+    // asteroids split like a bullet hit (the beam gouges a giant for 2),
+    // once per beam each
     for (const a of this.asteroids) {
-      if (a.dead || a.x + a.w / 2 < x0 || Math.abs(a.y - y) > HALF + a.h * 0.35) continue;
+      if (a.dead || bm.hit.has(a) || a.x + a.w / 2 < x0 || Math.abs(a.y - y) > HALF + a.h * 0.35) continue;
+      bm.hit.add(a);
       if (a.hp > 2) {
         a.hp -= 2;
         this.spawnSparks(a.x - a.w / 2, a.y, 6);
@@ -703,6 +714,11 @@ export class GameState extends BaseWorld {
     const ptgt = -(this.player1.y - H / 2) * 0.02;
     this.parallaxOffY = (this.parallaxOffY || 0) + (ptgt - (this.parallaxOffY || 0)) * Math.min(1, 0.06 * this.k);
     this.handleTouch();
+    // lasers stay hot for a while — keep burning whatever crosses the line
+    if (this.beams.length) {
+      this.beams = this.beams.filter((b) => this.time < b.until);
+      for (const b of this.beams) this.laserBeamDamage(b);
+    }
     for (const b of this.bullets) b.update(this);
     for (const r of this.rockets) r.update(this);
     for (const r of this.enemyRockets) r.update(this);

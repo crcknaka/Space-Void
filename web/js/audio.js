@@ -127,14 +127,17 @@ export function playSynth(name, x = null, gain = 1) {
     note(880, t, 1.3, 'sawtooth', 0.07, -640);
     note(860, t + 0.06, 1.2, 'triangle', 0.05, -600);
   } else if (name === 'plaser') {
-    // player beam: charge blip → thick descending zap over a sub-hum,
-    // with a sizzling noise sweep and a shimmering top harmonic
-    note(500, t, 0.06, 'sine', 0.1, 1700);
-    note(2300, t + 0.05, 0.38, 'sawtooth', 0.17, -2050);
-    note(1150, t + 0.05, 0.3, 'square', 0.09, -950);
-    note(150, t + 0.05, 0.42, 'square', 0.12, -95);
-    note(4400, t + 0.06, 0.2, 'triangle', 0.06, -3400);
-    noiseHit(t + 0.05, 0.34, 0.16, 3400, 500, 1.4);
+    // player beam: charge blip → massive layered zap — sub-bass slam under a
+    // thick descending core, shimmer harmonic, long sizzling tail to match
+    // the beam staying hot on screen
+    note(500, t, 0.06, 'sine', 0.13, 1900);
+    note(60, t + 0.05, 0.5, 'sine', 0.4, -18);
+    note(2300, t + 0.05, 0.5, 'sawtooth', 0.2, -2100);
+    note(1150, t + 0.05, 0.42, 'square', 0.11, -960);
+    note(150, t + 0.05, 0.55, 'square', 0.14, -100);
+    note(4400, t + 0.06, 0.3, 'triangle', 0.07, -3500);
+    noiseHit(t + 0.05, 0.16, 0.26, 900, 320, 1);
+    noiseHit(t + 0.05, 0.55, 0.2, 3400, 420, 1.3);
   } else if (name === 'warp') {
     // hyperspace spool-up: rising sweep + accelerating whoosh
     note(240, t, 0.3, 'sine', 0.15, 620);
@@ -179,9 +182,17 @@ export function playSynth(name, x = null, gain = 1) {
     note(1350, t, 0.09, 'sawtooth', 0.1, -850);
     noiseHit(t, 0.07, 0.07, 3100, 1500, 2.2);
   } else if (name === 'laser_charge') {
-    note(180, t, 0.85, 'sawtooth', 0.12, 500);
+    // boss beam spool-up: rising twin saws with a building shimmer — dread
+    note(180, t, 0.85, 'sawtooth', 0.15, 520);
+    note(91, t, 0.85, 'square', 0.11, 265);
+    noiseHit(t + 0.2, 0.68, 0.09, 700, 2800, 1.6);
   } else if (name === 'laser_fire') {
-    note(950, t, 0.7, 'sawtooth', 0.16, -500);
+    // boss beam: heavy — sub roar under a detuned saw stack + searing noise
+    note(60, t, 0.9, 'sine', 0.36, -22);
+    note(950, t, 0.8, 'sawtooth', 0.2, -520);
+    note(715, t + 0.02, 0.75, 'sawtooth', 0.13, -370);
+    note(1900, t, 0.5, 'triangle', 0.08, -900);
+    noiseHit(t, 0.85, 0.17, 2600, 700, 1.2);
   }
   OUT = null;
   GAIN = 1;

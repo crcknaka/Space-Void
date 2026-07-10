@@ -19,11 +19,21 @@ export function init(canvas) {
   addEventListener('keydown', (e) => {
     if (e.target && e.target.tagName === 'INPUT') return; // typing in name overlay
     if (PREVENT.has(e.code)) e.preventDefault();
+    // Cmd/Win combos: the browser swallows the other key's keyup while the
+    // modifier is held — registering it would leave it stuck in the Set
+    if (e.metaKey && !e.code.startsWith('Meta')) return;
     if (!e.repeat) pressed.add(e.code);
     keys.add(e.code);
   });
-  addEventListener('keyup', (e) => keys.delete(e.code));
+  addEventListener('keyup', (e) => {
+    keys.delete(e.code);
+    // Cmd/Win released: keyups fired while it was held never arrived —
+    // anything still marked held is stale
+    if (e.code.startsWith('Meta')) keys.clear();
+  });
   addEventListener('blur', () => keys.clear());
+  addEventListener('focus', () => keys.clear());
+  document.addEventListener('visibilitychange', () => { if (document.hidden) keys.clear(); });
 
   const toXY = (e) => {
     const r = cv.getBoundingClientRect();
