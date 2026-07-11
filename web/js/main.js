@@ -15,6 +15,11 @@ const g = canvas.getContext('2d');
 let scale = 1;
 let vignette = null;
 
+// Camera zoom: a smaller world with the same-size sprites reads as a pulled-in
+// camera (bigger ships/pickups, a touch less playfield shown). Online modes keep
+// the untouched fixed field so both peers stay identical.
+const ZOOM = 1.12;
+
 function fit() {
   // Adapt the world to the screen aspect: widescreen extends the playfield
   // horizontally, tall phones extend it vertically — no black bars.
@@ -24,12 +29,15 @@ function fit() {
   if (app.lockWorld) {
     // online modes: identical fixed field for both peers, letterboxed
     w = BASE_W; h = BASE_H;
-  } else if (aspect >= BASE_W / BASE_H) {
-    h = BASE_H;
-    w = clamp(Math.round(BASE_H * aspect), BASE_W, MAX_W);
   } else {
-    w = BASE_W;
-    h = clamp(Math.round(BASE_W / aspect), BASE_H, MAX_H);
+    const bw = BASE_W / ZOOM, bh = BASE_H / ZOOM;
+    if (aspect >= BASE_W / BASE_H) {
+      h = bh;
+      w = clamp(Math.round(bh * aspect), bw, MAX_W);
+    } else {
+      w = bw;
+      h = clamp(Math.round(bw / aspect), bh, MAX_H);
+    }
   }
   setSize(w, h);
 

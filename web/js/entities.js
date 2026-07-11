@@ -2105,7 +2105,7 @@ export class PowerUp {
   constructor(img, type) {
     this.img = img;
     this.type = type;
-    this.w = 60; this.h = 30;
+    this.w = 80; this.h = 40; // larger pod so the glyph reads at a glance
     this.x = W + randInt(50, 100) + this.w / 2;
     this.baseY = randInt(60, H - 60);
     this.y = this.baseY;
