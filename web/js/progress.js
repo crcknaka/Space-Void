@@ -41,6 +41,34 @@ export function saveProgress() {
   try { localStorage.setItem(P_KEY, JSON.stringify(progress)); } catch {}
 }
 
+// Portable profile code (base64 of the JSON) for moving progress between
+// browsers/devices. import mutates the live `progress` object in place so the
+// shared reference every module holds stays valid.
+export function exportCode() {
+  try { return btoa(unescape(encodeURIComponent(JSON.stringify(progress)))); } catch { return ''; }
+}
+export function importCode(code) {
+  try {
+    const raw = JSON.parse(decodeURIComponent(escape(atob(String(code).trim()))));
+    if (!raw || typeof raw !== 'object' || typeof raw.credits !== 'number') return false;
+    const clean = {
+      ...fresh(),
+      ...raw,
+      v: VERSION,
+      credits: Math.max(0, Math.floor(raw.credits)),
+      upgrades: { ...DEFAULTS.upgrades, ...(raw.upgrades || {}) },
+      unlockedShips: Array.isArray(raw.unlockedShips) && raw.unlockedShips.length
+        ? [...new Set(['vanguard', ...raw.unlockedShips])] : [...DEFAULTS.unlockedShips],
+    };
+    for (const k of Object.keys(progress)) delete progress[k];
+    Object.assign(progress, clean);
+    saveProgress();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Credits earned for a finished run. Score is the main driver; bosses and a
 // fresh personal best add flat bonuses. Returns the breakdown so the game-over
 // screen can show where the reward came from.

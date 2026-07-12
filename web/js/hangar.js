@@ -8,6 +8,7 @@ import { Star } from './entities.js';
 import { SHIPS } from './ships.js';
 import {
   progress, saveProgress, UPGRADES, upgradeLevel, upgradeCost, buyUpgrade,
+  exportCode, importCode,
 } from './progress.js';
 
 const BASE = { defaultSpeed: 5, fastSpeed: 8, shootDelay: 500, rockets: 3, lasers: 2, lives: 3, w: 50, h: 30 };
@@ -69,6 +70,9 @@ export class HangarState {
     this.actionBtn = new Button(pa.label, W / 2, H - 166, 340, 56, pa.color, pa.action);
     this.actionBtn.selected = true; // primary CTA always shows its state colour
     this.backBtn = new Button('BACK', W / 2, H - 92, 200, 54, 'rgb(255,0,0)', 'back');
+    // profile transfer, flanking BACK
+    this.exportBtn = new Button('EXPORT', W / 2 - 210, H - 92, 150, 46, 'rgb(0,200,255)', 'export');
+    this.importBtn = new Button('IMPORT', W / 2 + 210, H - 92, 150, 46, 'rgb(0,200,255)', 'import');
   }
 
   cycle(d) {
@@ -108,11 +112,27 @@ export class HangarState {
       if (buyUpgrade(UPGRADES[this.upIdx].id)) { audio.playSynth('fanfare'); this.layout(); }
     } else if (action === 'back') {
       this.app.goMenu();
+    } else if (action === 'export') {
+      const code = exportCode();
+      try {
+        navigator.clipboard?.writeText(code);
+        this.setToast('PROFILE CODE COPIED TO CLIPBOARD');
+      } catch { /* fall through to the prompt */ }
+      if (!navigator.clipboard) window.prompt('Your profile code (copy it):', code);
+    } else if (action === 'import') {
+      const code = window.prompt('Paste a profile code to restore progress:');
+      if (code) {
+        if (importCode(code)) { this.idx = Math.max(0, SHIPS.findIndex((s) => s.id === progress.selectedShip)); this.layout(); this.setToast('PROFILE IMPORTED'); }
+        else this.setToast('INVALID CODE');
+      }
     }
   }
 
+  setToast(msg) { this.toast = msg; this.toastAt = this._t || 0; }
+
   update(dt) {
     const k = dt / STEP;
+    this._t = (this._t || 0) + dt;
     for (const s of this.stars) s.update(k);
     const p = input.pointer;
 
@@ -137,7 +157,7 @@ export class HangarState {
     }
 
     // hover + clicks on the fixed buttons
-    for (const b of [this.tabShips, this.tabUpg, this.actionBtn, this.backBtn]) {
+    for (const b of [this.tabShips, this.tabUpg, this.actionBtn, this.backBtn, this.exportBtn, this.importBtn]) {
       b.hovered = b.contains(p.x, p.y);
     }
     this.tabShips.selected = this.tab === 'ships';
@@ -149,6 +169,8 @@ export class HangarState {
       if (this.tabShips.contains(p.x, p.y)) return this.setTab('ships');
       if (this.tabUpg.contains(p.x, p.y)) return this.setTab('upgrades');
       if (this.actionBtn.contains(p.x, p.y)) { audio.play('click', 0.55); return this.doAction(this.actionBtn.action); }
+      if (this.exportBtn.contains(p.x, p.y)) { audio.play('click', 0.5); return this.doAction('export'); }
+      if (this.importBtn.contains(p.x, p.y)) { audio.play('click', 0.5); return this.doAction('import'); }
       if (this.backBtn.contains(p.x, p.y)) return this.app.goMenu();
     }
   }
@@ -211,5 +233,14 @@ export class HangarState {
     if (this.tab === 'ships') this.drawShips(g); else this.drawUpgrades(g);
     this.actionBtn.draw(g);
     this.backBtn.draw(g);
+    this.exportBtn.draw(g);
+    this.importBtn.draw(g);
+    // transient confirmation toast
+    if (this.toast && (this._t || 0) - (this.toastAt || 0) < 2600) {
+      const age = (this._t || 0) - (this.toastAt || 0);
+      g.globalAlpha = age > 2100 ? 1 - (age - 2100) / 500 : 1;
+      drawText(g, this.toast, W / 2, H - 32, 15, 'rgb(0,255,140)');
+      g.globalAlpha = 1;
+    }
   }
 }
