@@ -12,7 +12,7 @@ import {
 } from './entities.js';
 import { makeNebulaField, tinted } from './fx.js';
 import { askName, submitScore, savedName } from './lb.js';
-import { bumpStats, vibrate } from './settings.js';
+import { bumpStats, vibrate, settings } from './settings.js';
 import { dailySeed, todayMod, useDailyAttempt, dailyAttemptsLeft, MODS } from './daily.js';
 import { makeSpaceBackdrop, sectorName } from './bggen.js';
 
@@ -49,6 +49,7 @@ export class GameState extends BaseWorld {
     this.coop = coop;
     this.daily = !!opts.daily;
     this.online = !!opts.online;   // driven by CoopHost; no pause/menu/leaderboard
+    this.canAutoPause = true;      // pause on window blur (offline; guarded in autoPause)
     this.extraPlayers = opts.extraPlayers || 0; // guest-controlled ships (online 4p)
     this.colored = !!opts.colored; // distinct ship colours per player
   }
@@ -1277,8 +1278,13 @@ export class GameState extends BaseWorld {
     if (this.lb.status === 'asking') return; // overlay is open, don't react to Enter/clicks
 
     const action = this.overMenu.update();
-    if (action === 'retry') this.app.setState(new GameState(this.app, this.coop, { daily: this.daily }));
-    else if (action === 'main_menu') this.app.goMenu();
+    const canRetry = !this.daily || dailyAttemptsLeft() > 0;
+    const retryKey = input.pressed.has('Enter') || input.pressed.has('NumpadEnter') || input.pressed.has('KeyR');
+    if (action === 'retry' || (retryKey && canRetry)) {
+      this.app.setState(new GameState(this.app, this.coop, { daily: this.daily }));
+    } else if (action === 'main_menu' || input.pressed.has('Escape') || input.pressed.has('KeyM')) {
+      this.app.goMenu();
+    }
   }
 
   // Cosmetic cinematic camera. A single UNIFORM transform (pivot-zoom ≥1 + a
@@ -1288,7 +1294,8 @@ export class GameState extends BaseWorld {
   // The pan is CLAMPED to the zoom's hidden margin, so black edges are
   // impossible no matter how hard it leads. Offline only; online untouched.
   updateCamera() {
-    if (this.online) { this.camZoom = 1; this.camPanX = this.camPanY = 0; this.camPivotX = W / 2; this.camPivotY = H / 2; return; }
+    // online keeps the fixed field; motionFx off = a calm static framing
+    if (this.online || !settings.motionFx) { this.camZoom = 1; this.camPanX = this.camPanY = 0; this.camPivotX = W / 2; this.camPivotY = H / 2; return; }
     const k = this.k;
     const p = this.player1;
     // base zoom gives the pan/shake headroom to work in
@@ -1340,7 +1347,7 @@ export class GameState extends BaseWorld {
       g.translate(px, py); g.scale(z, z); g.translate(-px, -py);
       g.translate(this.camPanX || 0, this.camPanY || 0);
     }
-    if (this.shake > 0.3 && !this.paused && !this.over) {
+    if (this.shake > 0.3 && !this.paused && !this.over && settings.motionFx) {
       g.translate((Math.random() - 0.5) * this.shake, (Math.random() - 0.5) * this.shake);
     }
 
@@ -1630,8 +1637,25 @@ export class GameState extends BaseWorld {
         } else if (this.lb.status === 'offline') {
           drawText(g, 'Leaderboard unavailable', W / 2, ly, 16, 'rgb(120,120,120)');
         }
+
+        // keyboard shortcut hint at the foot of the screen
+        if (this.lb.status !== 'asking') {
+          const canRetry = !this.daily || dailyAttemptsLeft() > 0;
+          drawText(g, canRetry ? 'Enter / R — retry     Esc — menu' : 'Esc — menu',
+            W / 2, H - 22, 13, 'rgba(175,175,175,0.85)');
+        }
       }
     }
+  }
+
+  // pause overlay + this run's stats above the base menu
+  drawPauseOverlay(g) {
+    if (!this.paused) return;
+    super.drawPauseOverlay(g);
+    const secs = Math.floor(this.time / 1000);
+    const mmss = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+    drawText(g, `SCORE ${this.score}     LEVEL ${this.level}     ${mmss}`,
+      W / 2, H / 2 - 168, 18, 'rgba(200,220,255,0.9)');
   }
 
   drawToasts(g) {

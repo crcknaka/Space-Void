@@ -11,7 +11,9 @@ function save(key, val) {
   try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
 }
 
-export const settings = load(S_KEY, { music: 0.6, sfx: 0.6, vibro: true });
+// motionFx: screen shake + the dynamic follow camera. Off = a calm, fixed
+// framing for players who find the motion distracting or nauseating.
+export const settings = load(S_KEY, { music: 0.6, sfx: 0.6, vibro: true, motionFx: true });
 export function saveSettings() { save(S_KEY, settings); }
 
 export const stats = load(T_KEY, {

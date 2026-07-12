@@ -25,6 +25,7 @@ const P2_CONTROLS = {
 export class VersusState extends BaseWorld {
   constructor(app) {
     super(app, 'versus_background');
+    this.canAutoPause = true; // local hotseat: pause on window blur
   }
 
   enter() {

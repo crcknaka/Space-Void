@@ -57,6 +57,9 @@ function fit() {
 }
 addEventListener('resize', fit);
 document.addEventListener('fullscreenchange', fit);
+// auto-pause offline runs when the window/tab loses focus (no dead ships on alt-tab)
+addEventListener('blur', () => app.state?.autoPause?.());
+document.addEventListener('visibilitychange', () => { if (document.hidden) app.state?.autoPause?.(); });
 input.init(canvas);
 audio.installAutoUnlock();
 // offline play + instant repeat loads

@@ -63,6 +63,14 @@ export class BaseWorld {
     if (this.paused) this.pauseMenu = this.buildPauseMenu();
   }
 
+  // Auto-pause when the window/tab loses focus (offline only). Prevents the
+  // classic "alt-tabbed back to a dead ship". Silent, no toggle-off.
+  autoPause() {
+    if (!this.canAutoPause || this.online || this.pauseDisabled || this.paused || this.over) return;
+    this.paused = true;
+    this.pauseMenu = this.buildPauseMenu();
+  }
+
   // Esc/P toggling + pause menu interaction. Returns true while paused.
   handlePause() {
     if (this.pauseDisabled) return false;

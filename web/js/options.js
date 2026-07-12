@@ -31,15 +31,17 @@ export class OptionsState {
     for (let i = 0; i < 60; i++) {
       this.stars.push(new Star(randInt(0, W), randInt(0, H), rand(0.1, 0.4), randInt(1, 3), randInt(50, 200)));
     }
-    const y0 = 158;
-    const dy = 66;
-    this.btnName = new Button(`NAME: ${savedName() || '—'}`, W / 2, y0, 300, 54, 'rgb(0,200,255)', 'name');
-    this.btnMusic = new Button(`MUSIC: ${pct(settings.music)}`, W / 2, y0 + dy, 300, 54, 'rgb(0,220,130)', 'music');
-    this.btnSfx = new Button(`SOUND FX: ${pct(settings.sfx)}`, W / 2, y0 + dy * 2, 300, 54, 'rgb(0,220,130)', 'sfx');
-    this.btnVibro = new Button(`VIBRATION: ${settings.vibro ? 'ON' : 'OFF'}`, W / 2, y0 + dy * 3, 300, 54, 'rgb(0,220,130)', 'vibro');
-    this.btnFs = new Button('FULLSCREEN', W / 2, y0 + dy * 4, 300, 54, 'rgb(255,140,0)', 'fullscreen');
+    const y0 = 150;
+    const dy = 60;
+    this.btnName = new Button(`NAME: ${savedName() || '—'}`, W / 2, y0, 300, 50, 'rgb(0,200,255)', 'name');
+    this.btnMusic = new Button(`MUSIC: ${pct(settings.music)}`, W / 2, y0 + dy, 300, 50, 'rgb(0,220,130)', 'music');
+    this.btnSfx = new Button(`SOUND FX: ${pct(settings.sfx)}`, W / 2, y0 + dy * 2, 300, 50, 'rgb(0,220,130)', 'sfx');
+    this.btnVibro = new Button(`VIBRATION: ${settings.vibro ? 'ON' : 'OFF'}`, W / 2, y0 + dy * 3, 300, 50, 'rgb(0,220,130)', 'vibro');
+    this.btnMotion = new Button(`MOTION: ${settings.motionFx ? 'ON' : 'OFF'}`, W / 2, y0 + dy * 4, 300, 50, 'rgb(0,220,130)', 'motion');
+    this.btnFs = new Button('FULLSCREEN', W / 2, y0 + dy * 5, 300, 50, 'rgb(255,140,0)', 'fullscreen');
+    this.achY = y0 + dy * 5 + 54; // achievements sit just below the last toggle
     this.menu = new ButtonGroup([
-      this.btnName, this.btnMusic, this.btnSfx, this.btnVibro, this.btnFs,
+      this.btnName, this.btnMusic, this.btnSfx, this.btnVibro, this.btnMotion, this.btnFs,
       new Button('BACK', W / 2, H - 90, 200, 56, 'rgb(255,0,0)', 'back'),
     ]);
   }
@@ -74,6 +76,10 @@ export class OptionsState {
       saveSettings();
       if (settings.vibro) { try { navigator.vibrate?.(60); } catch {} }
       this.btnVibro.text = `VIBRATION: ${settings.vibro ? 'ON' : 'OFF'}`;
+    } else if (action === 'motion') {
+      settings.motionFx = !settings.motionFx;
+      saveSettings();
+      this.btnMotion.text = `MOTION: ${settings.motionFx ? 'ON' : 'OFF'}`;
     } else if (action === 'fullscreen') {
       if (document.fullscreenEnabled) {
         if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
@@ -102,7 +108,7 @@ export class OptionsState {
     }
 
     // achievements
-    const ay = 500;
+    const ay = this.achY || 500;
     drawText(g, `ACHIEVEMENTS  ${unlockedCount()}/${ACHIEVEMENTS.length}`, W / 2, ay, 22, 'rgb(255,210,80)');
     ACHIEVEMENTS.forEach((a, i) => {
       const got = isUnlocked(a.id);
