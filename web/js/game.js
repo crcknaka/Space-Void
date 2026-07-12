@@ -713,6 +713,7 @@ export class GameState extends BaseWorld {
     // micro-parallax follows the lead ship
     const ptgt = -(this.player1.y - H / 2) * 0.02;
     this.parallaxOffY = (this.parallaxOffY || 0) + (ptgt - (this.parallaxOffY || 0)) * Math.min(1, 0.06 * this.k);
+    this.updateCamera();
     this.handleTouch();
     // lasers stay hot for a while — keep burning whatever crosses the line
     if (this.beams.length) {
@@ -1280,10 +1281,65 @@ export class GameState extends BaseWorld {
     else if (action === 'main_menu') this.app.goMenu();
   }
 
+  // Cosmetic cinematic camera. A single UNIFORM transform (pivot-zoom ≥1 + a
+  // small pan) is applied to the whole scene, so every sprite, bullet and
+  // hitbox moves together — what you see still matches where collisions land.
+  // No perspective/foreshortening on the play plane (that would be unfair).
+  // The pan is CLAMPED to the zoom's hidden margin, so black edges are
+  // impossible no matter how hard it leads. Offline only; online untouched.
+  updateCamera() {
+    if (this.online) { this.camZoom = 1; this.camPanX = this.camPanY = 0; this.camPivotX = W / 2; this.camPivotY = H / 2; return; }
+    const k = this.k;
+    const p = this.player1;
+    // base zoom gives the pan/shake headroom to work in
+    let targetZoom = 1.06, pivotX = W / 2, pivotY = H / 2;
+    const dead = this.players().every((pp) => !pp.alive);
+    const cinematic = (this.slowmo && dead) || this.bossWarnStart || (this.warp && this.warpMul > 2);
+    if (this.slowmo && dead) {            // final-death: slow dramatic push-in on the ship
+      targetZoom = 1.16; pivotX = p.x; pivotY = p.y;
+    } else if (this.bossWarnStart) {      // boss approaching: ominous push toward its entry
+      targetZoom = 1.08; pivotX = W * 0.7; pivotY = p.y;
+    }
+    if (this.warp && this.warpMul > 2) targetZoom += Math.min(0.09, (this.warpMul - 2) / 55); // hyperspace kick
+    targetZoom += (this.killFlash || 0) * 0.05; // boss-kill punch rides the flash
+
+    // --- alive follow: only while the normal cam is in charge ---
+    let leadX = 0, leadY = 0;
+    if (!cinematic) {
+      const vy = p.y - (this._camPY ?? p.y);
+      const vx = p.x - (this._camPX ?? p.x);
+      leadY = -(p.y - H / 2) * 0.07 - vy * 2.4;      // frame the ship + anticipate its motion
+      leadX = -(p.x - W * 0.32) * 0.05 - vx * 2.4;   // anchored around the left third it lives in
+      if (p.boosting) { targetZoom += 0.03; leadX += 12; } // speed: push in, ship drifts back
+      targetZoom += Math.min(0.03, (this.mult - 1) * 0.007); // combo heat: subtle push-in
+    }
+    this._camPY = p.y; this._camPX = p.x;
+
+    const ez = 1 - Math.pow(0.86, k);
+    this.camZoom = (this.camZoom ?? 1.06) + (targetZoom - (this.camZoom ?? 1.06)) * ez;
+    this.camPivotX = (this.camPivotX ?? pivotX) + (pivotX - (this.camPivotX ?? pivotX)) * ez;
+    this.camPivotY = (this.camPivotY ?? pivotY) + (pivotY - (this.camPivotY ?? pivotY)) * ez;
+
+    // ease pan toward the lead, then clamp to the hidden margin (reserve a few
+    // px for shake) so the transform can never pull the void into view
+    this.camPanX = (this.camPanX ?? 0) + (leadX - (this.camPanX ?? 0)) * Math.min(1, 0.09 * k);
+    this.camPanY = (this.camPanY ?? 0) + (leadY - (this.camPanY ?? 0)) * Math.min(1, 0.09 * k);
+    const z = this.camZoom, safe = (m) => Math.max(0, m - 7);
+    this.camPanX = clamp(this.camPanX, -safe((W - this.camPivotX) * (1 - 1 / z)), safe(this.camPivotX * (1 - 1 / z)));
+    this.camPanY = clamp(this.camPanY, -safe((H - this.camPivotY) * (1 - 1 / z)), safe(this.camPivotY * (1 - 1 / z)));
+  }
+
   draw(g) {
     const { images } = this.app;
 
     g.save();
+    // cinematic camera (uniform → collisions stay honest) + screen shake
+    const z = this.camZoom || 1;
+    if (z !== 1) {
+      const px = this.camPivotX ?? W / 2, py = this.camPivotY ?? H / 2;
+      g.translate(px, py); g.scale(z, z); g.translate(-px, -py);
+      g.translate(this.camPanX || 0, this.camPanY || 0);
+    }
     if (this.shake > 0.3 && !this.paused && !this.over) {
       g.translate((Math.random() - 0.5) * this.shake, (Math.random() - 0.5) * this.shake);
     }
