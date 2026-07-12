@@ -190,7 +190,7 @@ export class OnlineState {
       drawText(g, `PLAYERS: ${total} / 4`, W / 2, H / 2 - 28, 24, '#fff');
       for (let i = 0; i < 4; i++) {
         const on = i < total;
-        drawText(g, i === 0 ? 'HOST (you)' : (on ? `Player ${i + 1}` : 'open'), W / 2, H / 2 + 12 + i * 26, 16, on ? PLAYER_COLORS[i % 4] : 'rgb(90,90,90)');
+        drawText(g, i === 0 ? 'HOST (YOU)' : (on ? `PLAYER ${i + 1}` : 'OPEN'), W / 2, H / 2 + 12 + i * 26, 16, on ? PLAYER_COLORS[i % 4] : 'rgb(90,90,90)');
       }
       drawText(g, 'Share the code · press START when ready', W / 2, H - 250, 14, 'rgb(150,150,150)');
       if (total < 2) drawText(g, 'need at least one more player', W / 2, H - 230, 13, 'rgb(255,150,80)');

@@ -103,7 +103,7 @@ export class OptionsState {
 
     if (this.fsHint > 0) {
       g.globalAlpha = Math.min(1, this.fsHint / 60);
-      drawText(g, 'iPhone/iPad: Share → Add to Home Screen for fullscreen', W / 2, 470, 15, 'rgb(255,210,80)');
+      drawText(g, 'iPhone/iPad: Share → Add to Home Screen for fullscreen', W / 2, H - 132, 15, 'rgb(255,210,80)');
       g.globalAlpha = 1;
     }
 

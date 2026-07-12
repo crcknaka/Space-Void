@@ -302,8 +302,10 @@ export class Rocket {
       this.angle += clamp(diff, -this.rotSpeed * world.k, this.rotSpeed * world.k);
     }
     const rad = (this.angle * Math.PI) / 180;
-    this.x += this.speed * Math.cos(rad) * world.k;
-    this.y += this.speed * Math.sin(rad) * world.k;
+    // enemy-fired rockets slow with the world during slow-mo (player rockets don't)
+    const m = (this.enemyFire ? (world.speedMul || 1) : 1) * world.k;
+    this.x += this.speed * Math.cos(rad) * m;
+    this.y += this.speed * Math.sin(rad) * m;
     if (world.time - this.lastEmit > 14) {
       world.effects.push(new RocketTrailParticle(this.x, this.y, world.time));
       this.lastEmit = world.time;
@@ -1169,10 +1171,10 @@ export class Enemy {
     if (type === 'weaver') {
       this.vx = randInt(-3, -2) - (level - 1) * 0.7;
       this.vy = 0;
-      this.amp = randInt(50, 130);
+      this.amp = Math.min(randInt(50, 130), (H - 40) / 2); // keep the swing inside short viewports
       this.freq = rand(0.002, 0.004);
       this.phase = rand(0, Math.PI * 2);
-      this.baseY = clamp(this.y, this.amp + 20, H - this.amp - 20);
+      this.baseY = clamp(this.y, this.amp + 20, Math.max(this.amp + 20, H - this.amp - 20));
       this.shootDelay = Math.max(300, randInt(1300, 2600) - (level - 1) * 100);
     } else if (type === 'hunter') {
       this.vx = -(3.5 + (level - 1) * 0.4);
@@ -1586,10 +1588,10 @@ export class Boss {
     // every 5th boss is a MEGA: tougher, and at half health the hull blows
     // away to reveal a core with rotating cross-beams
     this.mega = level % 5 === 0;
-    if (this.mega) this.health = this.maxHealth = Math.round(this.maxHealth * 1.5);
     this.phase2 = false;
     this.coreBeams = null; // { ang, activeAt }
     this.health = 5 + (level - 1) * 5;
+    if (this.mega) this.health = Math.round(this.health * 1.5); // tougher (must run AFTER base health is set)
     this.maxHealth = this.health;
     this.shieldUntil = 0;                                  // invulnerable phase
     this.shieldBreaks = level >= 4 ? [0.66, 0.33] : [];    // health fractions that trigger shields

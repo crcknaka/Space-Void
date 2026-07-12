@@ -177,7 +177,7 @@ export class MenuState {
       // daily challenge info: today's modifier, attempts, reset countdown
       const tries = dailyAttemptsLeft();
       const dailyLine = `DAILY · ${todayMod().name} · ${tries > 0 ? `${tries} ${tries === 1 ? 'try' : 'tries'} left` : 'no tries left'} · resets in ${timeToNextDaily()}`;
-      drawText(g, dailyLine, W / 2, H - 78, 13, tries > 0 ? 'rgb(255,210,80)' : 'rgb(150,120,60)');
+      drawText(g, dailyLine, W / 2, H - 92, 13, tries > 0 ? 'rgb(255,210,80)' : 'rgb(150,120,60)');
     }
     if (this.dailyBlock > 0) {
       g.globalAlpha = Math.min(1, this.dailyBlock / 60);

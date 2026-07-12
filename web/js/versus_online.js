@@ -382,8 +382,10 @@ export class VersusOnline extends BaseWorld {
     // HUD — P1 left, P2 right; names shown, your side marked
     const p1c = this.localId === 1 ? 'rgb(0,255,140)' : '#fff';
     const p2c = this.localId === 2 ? 'rgb(0,255,140)' : '#fff';
-    const name1 = this.localId === 1 ? this.myName : this.oppName;
-    const name2 = this.localId === 2 ? this.myName : this.oppName;
+    // clip long names so the side scores never run into the centered "First to N"
+    const clip = (s) => (s.length > 9 ? `${s.slice(0, 9)}…` : s);
+    const name1 = clip(this.localId === 1 ? this.myName : this.oppName);
+    const name2 = clip(this.localId === 2 ? this.myName : this.oppName);
     drawText(g, `${name1}: ${this.score1}`, 10, 24, 22, p1c, 'left');
     drawText(g, `${name2}: ${this.score2}`, W - 10, 24, 22, p2c, 'right');
     drawText(g, `First to ${SCORE_LIMIT}`, W / 2, 24, 16, 'rgb(160,160,160)');

@@ -230,9 +230,9 @@ export class GameState extends BaseWorld {
   buildOverMenu() {
     const buttons = [];
     if (!this.daily || dailyAttemptsLeft() > 0) {
-      buttons.push(new Button('RETRY', W / 2, H / 2 + 75, 200, 50, 'rgb(0,255,0)', 'retry'));
+      buttons.push(new Button('RETRY', W / 2, H / 2 + 88, 200, 50, 'rgb(0,255,0)', 'retry'));
     }
-    buttons.push(new Button('MAIN MENU', W / 2, H / 2 + 145, 200, 50, 'rgb(255,0,0)', 'main_menu'));
+    buttons.push(new Button('MAIN MENU', W / 2, H / 2 + 156, 200, 50, 'rgb(255,0,0)', 'main_menu'));
     return new ButtonGroup(buttons);
   }
 
@@ -482,9 +482,8 @@ export class GameState extends BaseWorld {
   killPlayer(p, hx, hy) {
     if (this.app.debugGod) return;
     if (this.time < (p.invulnUntil || 0)) return;
-    this.resetCombo();
     if (p.shield && this.ionStorm?.phase !== 'active') {
-      // shield absorbs the hit — hex bubble ripples out from the impact point
+      // shield absorbs the hit — combo survives (a save, not a death)
       p.shield = false;
       p.shieldRipple = { a: hx !== undefined ? Math.atan2(hy - p.y, hx - p.x) : Math.PI, start: this.time };
       p.invulnUntil = this.time + 1200;
@@ -494,6 +493,7 @@ export class GameState extends BaseWorld {
       this.pushToasts(bumpStats({ shieldSaves: 1 }));
       return;
     }
+    this.resetCombo(); // a real death — the multiplier drops
     if (this.shower) this.shower.survived = false; // shower bonus lost
     this.explode(p.x, p.y, true, 1.6);
     shatterSprite(this, p.img, p.x, p.y, p.w, { ry: 0, vx: -0.5 });
@@ -527,7 +527,7 @@ export class GameState extends BaseWorld {
     }
     const gained = points * this.mult * (this.mod?.scoreMul || 1);
     this.score += gained;
-    if (x !== undefined) this.popup(x, y, `+${gained}`, this.mult > 1 ? 'rgb(255,215,90)' : 'rgb(220,220,220)');
+    if (x !== undefined && gained > 0) this.popup(x, y, `+${gained}`, this.mult > 1 ? 'rgb(255,215,90)' : 'rgb(220,220,220)');
   }
 
   resetCombo() {
@@ -866,7 +866,9 @@ export class GameState extends BaseWorld {
     this.effects = this.effects.filter((s) => !s.dead);
 
     // --- game over check: all players dead with no lives left ---
-    if (this.players().every((p) => !p.alive && p.lives <= 0)) {
+    // hold the transition while the final-death slow-mo plays, so its
+    // time-dilation + camera push-in actually run before the screen freezes
+    if (this.players().every((p) => !p.alive && p.lives <= 0) && !this.slowmo) {
       this.over = true;
       this.overAlpha = 0;
       this.newBest = this.score > 0 && this.score > this.app.highScore; // capture before saveHigh
@@ -1300,6 +1302,7 @@ export class GameState extends BaseWorld {
       for (const a of this.asteroids) if (!a.dead) { a.dead = true; this.explode(a.x, a.y, false); this.spawnRockDust(a.x, a.y, a.w); }
       for (const r of this.enemyRockets) if (!r.dead) { r.dead = true; this.explode(r.x, r.y, false, 0.8); }
       for (const m of this.mines) if (!m.dead) { m.dead = true; this.explode(m.x, m.y, false, 0.8); }
+      for (const b of this.enemyBullets) if (!b.dead) { b.dead = true; this.spawnSparks(b.x, b.y, 3); } // clear fire in flight too
       audio.play('explosion', 0.6);
     }
     else if (type === 'rocket') { p.rockets += 1; audio.play('powerup', 0.6, p.x); }
@@ -1564,7 +1567,8 @@ export class GameState extends BaseWorld {
     }
     drawText(g, `Level: ${this.level}`, W - 10, 24, 26, '#fff', 'right');
     drawText(g, sectorName(this.level), W - 10, 44, 12, 'rgba(160,190,220,0.75)', 'right');
-    if (this.daily) drawText(g, `DAILY · ${this.mod.name}`, W - 10, 64, 15, 'rgb(255,210,60)', 'right');
+    // on touch the pause button sits top-right at y~72, so drop the DAILY tag below it
+    if (this.daily) drawText(g, `DAILY · ${this.mod.name}`, W - 10, input.isTouch ? 110 : 64, 15, 'rgb(255,210,60)', 'right');
 
     // daily modifier intro banner (first seconds of the run)
     if (this.daily && this.time < 3600 && !this.over) {
@@ -1583,7 +1587,10 @@ export class GameState extends BaseWorld {
     shown.forEach((p, i) => {
       const y = 58 + i * (many ? 26 : 32);
       drawText(g, `P${p.slot + 1}`, 10, y, fs, p.color, 'left');
-      drawText(g, '♥'.repeat(Math.max(0, p.lives)), 44, y, fs, 'rgb(255,80,90)', 'left');
+      // compact form past 4 lives (hull upgrades / Juggernaut) so hearts don't
+      // run into the rocket counter
+      const hearts = p.lives > 4 ? `♥×${p.lives}` : '♥'.repeat(Math.max(0, p.lives));
+      drawText(g, hearts, 44, y, fs, 'rgb(255,80,90)', 'left');
       // out-of-ammo dry-fire briefly flashes the counter red
       const rkCol = this.time - (p.rkEmptyFlash || 0) < 300 ? 'rgb(255,80,80)' : '#fff';
       const lzCol = this.time - (p.lzEmptyFlash || 0) < 300 ? 'rgb(255,80,80)' : 'rgb(120,220,255)';
@@ -1686,7 +1693,8 @@ export class GameState extends BaseWorld {
         drawText(g, `LOST IN ${sectorName(this.level)}`, W / 2, H / 2 - 64, 14, 'rgba(160,190,220,0.8)');
         drawText(g, `Score: ${this.score}`, W / 2, H / 2 - 38, 30);
         if (this.newBest) {
-          const pulse = 0.72 + 0.28 * Math.sin(this.time / 170);
+          // performance.now(): world time is frozen once the run is over
+          const pulse = 0.72 + 0.28 * Math.sin(performance.now() / 170);
           g.globalAlpha = pulse;
           drawText(g, '★ NEW BEST! ★', W / 2, H / 2 - 11, 25, 'rgb(255,215,80)');
           g.globalAlpha = 1;

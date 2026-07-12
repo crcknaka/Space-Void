@@ -70,9 +70,12 @@ export class HangarState {
     this.actionBtn = new Button(pa.label, W / 2, H - 166, 340, 56, pa.color, pa.action);
     this.actionBtn.selected = true; // primary CTA always shows its state colour
     this.backBtn = new Button('BACK', W / 2, H - 92, 200, 54, 'rgb(255,0,0)', 'back');
-    // profile transfer, flanking BACK
-    this.exportBtn = new Button('EXPORT', W / 2 - 210, H - 92, 150, 46, 'rgb(0,200,255)', 'export');
-    this.importBtn = new Button('IMPORT', W / 2 + 210, H - 92, 150, 46, 'rgb(0,200,255)', 'import');
+    // profile transfer, flanking BACK — offset/width shrink to stay on-screen
+    // on narrow (portrait) layouts instead of clipping at the edges
+    const ew = Math.min(150, W * 0.27);
+    const eoff = Math.min(210, W / 2 - ew / 2 - 8);
+    this.exportBtn = new Button('EXPORT', W / 2 - eoff, H - 92, ew, 46, 'rgb(0,200,255)', 'export');
+    this.importBtn = new Button('IMPORT', W / 2 + eoff, H - 92, ew, 46, 'rgb(0,200,255)', 'import');
   }
 
   cycle(d) {
@@ -149,9 +152,9 @@ export class HangarState {
     } else {
       if (input.pressed.has('ArrowDown') || input.pressed.has('KeyS')) this.moveUp(1);
       if (input.pressed.has('ArrowUp') || input.pressed.has('KeyW')) this.moveUp(-1);
-      // click a row to select it
-      if (p.justDown && p.y > 176 && p.y < 176 + UPGRADES.length * 52) {
-        const row = Math.floor((p.y - 176) / 52);
+      // click a row to select it (bands match the drawn highlight: 190 + i*52)
+      if (p.justDown && p.y > 190 && p.y < 190 + UPGRADES.length * 52) {
+        const row = Math.floor((p.y - 190) / 52);
         if (row >= 0 && row < UPGRADES.length && row !== this.upIdx) { this.upIdx = row; this.layout(); }
       }
     }
@@ -181,7 +184,8 @@ export class HangarState {
     const owned = this.owned(ship.id);
     const isSel = progress.selectedShip === ship.id;
     const spr = this.app.images.ships?.[ship.id];
-    const cy = H * 0.4;
+    // keep the stat block (ends ~cy+310) clear of the action button (top ~H-194)
+    const cy = Math.min(H * 0.4, H - 524);
     if (spr) {
       const sw = 240, sh = sw * (spr.height / spr.width);
       g.drawImage(spr, W / 2 - sw / 2, cy - sh / 2, sw, sh);

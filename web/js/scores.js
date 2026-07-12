@@ -9,7 +9,7 @@ import { fetchTop, savedName } from './lb.js';
 const TABS = [
   { id: 'all', label: 'ALL' },
   { id: 'single', label: 'SINGLE' },
-  { id: 'coop', label: 'COOP' },
+  { id: 'coop', label: 'CO-OP' },
   { id: 'daily', label: 'DAILY' },
 ];
 
@@ -38,7 +38,7 @@ export class ScoresState {
       this.stars.push(new Star(randInt(0, W), randInt(0, H), rand(0.1, 0.4), randInt(1, 3), randInt(50, 200)));
     }
     this.tabButtons = TABS.map((t, i) => {
-      const bw = 118;
+      const bw = Math.min(118, (W - 36) / TABS.length - 8); // shrink to fit narrow widths
       const x = W / 2 + (i - (TABS.length - 1) / 2) * (bw + 8);
       const b = new Button(t.label, x, 170, bw, 44, 'rgb(255,210,0)', `tab_${t.id}`);
       b.selected = t.id === this.mode;
@@ -104,11 +104,12 @@ export class ScoresState {
         drawText(g, String(e.score), W / 2 + 150, y, 21, col, 'right');
         drawText(g, e.mode === 'coop' ? 'CO' : '', W / 2 + 190, y, 13, 'rgb(120,120,120)', 'right');
       });
-      // your own position, even outside the top-10
+      // your own position, even outside the top-10 (kept clear of BACK)
+      const sy = Math.min(y0 + 10 * 42 + 24, this.menu.buttons[0].cy - 40);
       if (this.data.you) {
-        drawText(g, `YOU: #${this.data.you.rank} · ${this.data.you.score}`, W / 2, y0 + 10 * 42 + 24, 20, 'rgb(0,255,140)');
+        drawText(g, `YOU: #${this.data.you.rank} · ${this.data.you.score}`, W / 2, sy, 20, 'rgb(0,255,140)');
       } else if (me) {
-        drawText(g, `${me}: no score in this board yet`, W / 2, y0 + 10 * 42 + 24, 16, 'rgb(130,130,130)');
+        drawText(g, `${me}: no score in this board yet`, W / 2, sy, 16, 'rgb(130,130,130)');
       }
     }
 
