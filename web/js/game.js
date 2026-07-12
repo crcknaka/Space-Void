@@ -285,6 +285,24 @@ export class GameState extends BaseWorld {
   }
 
   // Wedge formation: a leader and two wingmen, dashes synchronized.
+  // a killed brood bursts into two small fast fragments that scatter apart
+  spawnSplit(e) {
+    e._split = true;
+    for (const dy of [-1, 1]) {
+      const f = new Enemy(this.app.images, Math.max(1, this.level - 1), 'basic', this.time);
+      f.w = 32; f.h = 20; f.health = 1; f.points = 5;
+      f.x = e.x; f.y = clamp(e.y + dy * 16, 20, H - 20);
+      f.vx = -(3 + this.level * 0.2);
+      f.vy = dy * rand(1, 2.6);
+      f.canDash = true;
+      f.nextDashAt = this.time + randInt(500, 1500);
+      f.warpUntil = this.time + 250;
+      this.enemies.push(f);
+      this.effects.push(new Shockwave(f.x, f.y, this.time, 42));
+    }
+    audio.play('explosion', 0.4, e.x);
+  }
+
   spawnWedge() {
     const mk = () => new Enemy(this.app.images, this.level, 'basic', this.time, false);
     const bx = W - randInt(70, 100);
@@ -311,10 +329,11 @@ export class GameState extends BaseWorld {
     if (L >= 5 && r < 8) return 'carrier';
     if (L >= 5 && r < 20) return 'strafer';
     if (L >= 4 && r < 30) return 'sniper';
-    if (L >= 3 && r < 42) return 'shieldbearer';
-    if (L >= 4 && r < 56) return 'tank';
-    if (L >= 3 && r < 74) return 'hunter';
-    if (L >= 2 && r < (L >= 5 ? 92 : 82)) return 'weaver';
+    if (L >= 3 && r < 40) return 'brood';
+    if (L >= 3 && r < 50) return 'shieldbearer';
+    if (L >= 4 && r < 62) return 'tank';
+    if (L >= 3 && r < 78) return 'hunter';
+    if (L >= 2 && r < (L >= 5 ? 92 : 84)) return 'weaver';
     return 'basic';
   }
 
@@ -830,6 +849,7 @@ export class GameState extends BaseWorld {
         e._shattered = true;
         shatterSprite(this, e.img, e.x, e.y, e.w, { vx: e.vx * 0.5 });
         if (e.elite) this.dropPowerup(e.x, e.y);
+        if (e.type === 'brood' && !e._split) this.spawnSplit(e); // bursts into fragments
       }
     }
 
@@ -958,7 +978,7 @@ export class GameState extends BaseWorld {
             this.killBoss(enemy);
           } else {
             if (enemy.type === 'tank' && rand(0, 1) < 0.4) this.dropPowerup(enemy.x, enemy.y);
-            if (rand(0, 1) < 0.45) {
+            if (enemy.type !== 'brood' && rand(0, 1) < 0.45) {
               // disabled, not destroyed: sparks, smoke, tumbles off-screen
               enemy.startDying();
               this.wreckCount = (this.wreckCount || 0) + 1; // for online sfx streaming

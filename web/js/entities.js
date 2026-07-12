@@ -1129,9 +1129,10 @@ const ENEMY_TINT = {
   carrier: 'rgba(255,170,60,0.4)',
   shieldbearer: 'rgba(90,230,255,0.4)',
   strafer: 'rgba(255,70,110,0.42)',
+  brood: 'rgba(160,220,60,0.4)',
 };
-const ENEMY_POINTS = { basic: 10, weaver: 15, hunter: 20, tank: 30, sniper: 25, carrier: 35, shieldbearer: 30, strafer: 28 };
-const ENEMY_SIZE = { tank: [66, 40], sniper: [54, 24], carrier: [72, 44], shieldbearer: [52, 32], strafer: [62, 34] };
+const ENEMY_POINTS = { basic: 10, weaver: 15, hunter: 20, tank: 30, sniper: 25, carrier: 35, shieldbearer: 30, strafer: 28, brood: 22 };
+const ENEMY_SIZE = { tank: [66, 40], sniper: [54, 24], carrier: [72, 44], shieldbearer: [52, 32], strafer: [62, 34], brood: [56, 34] };
 
 export class Enemy {
   constructor(images, level, type, time, moveRandomly = false) {
@@ -1154,6 +1155,7 @@ export class Enemy {
     else if (type === 'carrier') this.health = 4 + Math.floor(level / 3);
     else if (type === 'shieldbearer') this.health = 2;
     else if (type === 'strafer') this.health = level >= 6 ? 3 : 2;
+    else if (type === 'brood') this.health = level >= 6 ? 3 : 2;
     else this.health = 1;
     if (type === 'shieldbearer') this.shieldHp = 2; // own hex bubble, absorbs hits first
     this.points = ENEMY_POINTS[type];
@@ -1202,6 +1204,10 @@ export class Enemy {
       this.holdX = W - randInt(180, 300);  // parks mid-field, ahead of the sniper line
       this.shootDelay = Infinity;          // fires aimed spreads via its own timer
       this.strafeDelay = Math.max(650, randInt(1300, 2100) - level * 60);
+    } else if (type === 'brood') {
+      this.vx = -(1.6 + level * 0.12);     // slow drift; the threat is the split
+      this.vy = moveRandomly ? randInt(-1, 1) : 0;
+      this.shootDelay = Math.max(800, randInt(2400, 3800) - level * 100);
     } else {
       this.vx = randInt(-3, -1) - (level - 1);      // faster with level
       this.vy = moveRandomly ? randInt(-2, 2) : 0;

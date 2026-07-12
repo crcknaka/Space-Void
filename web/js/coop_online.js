@@ -16,7 +16,7 @@ import { savedName } from './lb.js';
 import { progress } from './progress.js';
 import { makeSpaceBackdrop } from './bggen.js';
 
-const ETYPE = { basic: 0, weaver: 1, hunter: 2, tank: 3, sniper: 5, carrier: 6, shieldbearer: 7 };
+const ETYPE = { basic: 0, weaver: 1, hunter: 2, tank: 3, sniper: 5, carrier: 6, shieldbearer: 7, strafer: 8, brood: 9 };
 const ETINT = ['', 'rgba(0,230,190,0.35)', 'rgba(255,60,60,0.4)', 'rgba(190,110,255,0.42)'];
 const PU_TYPES = ['shooting', 'slow_motion', 'kill_all', 'rocket', 'spread', 'shield', 'laser'];
 const PU_IMG = { shooting: 'powerup', slow_motion: 'slow_motion_powerup', kill_all: 'kill_all_powerup', rocket: 'rocket_powerup', spread: 'spread_powerup' };
@@ -433,7 +433,7 @@ export class CoopGuest extends BaseWorld {
   tint(type, img) {
     if (type === 4) return img; // boss
     // per-family generated sprites (same indices the host encodes)
-    const gen = this.app.images[`enemy_${['basic', 'weaver', 'hunter', 'tank', 'boss', 'sniper', 'carrier', 'shieldbearer'][type]}`];
+    const gen = this.app.images[`enemy_${['basic', 'weaver', 'hunter', 'tank', 'boss', 'sniper', 'carrier', 'shieldbearer', 'strafer', 'brood'][type]}`];
     if (gen) return gen;
     if (type === 0) return img;
     const key = `enemy_${type}`;
