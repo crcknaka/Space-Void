@@ -342,6 +342,7 @@ export class Player {
     this.defaultSpeed = 5;
     this.fastSpeed = 8;
     this.shootDelay = 500;
+    this.baseShootDelay = 500; // fire rate to restore when a shooting power-up ends
     this.lastShot = 0;
     this.poweredUp = false;
     this.powerEnd = 0;
@@ -408,7 +409,7 @@ export class Player {
       this.thrFrame = (this.thrFrame + 1) % this.thrusters.length;
     }
     if (this.poweredUp && world.time > this.powerEnd) {
-      this.shootDelay = 500;
+      this.shootDelay = this.baseShootDelay;
       this.poweredUp = false;
     }
   }

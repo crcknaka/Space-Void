@@ -5,6 +5,7 @@
 // mirror the PNGs, so every drawImage call site keeps working untouched.
 // Everything is seeded/fixed → host and guest bake identical sprites.
 import { genShip } from './shipgen.js';
+import { SHIPS, shipOverrides } from './ships.js';
 import { bossStaticMesh, BOSS_VIEW } from './bossgen.js';
 import {
   renderMesh, fitTransform, projectPoint, VIEW, makeRng,
@@ -500,6 +501,15 @@ export function generateSprites(images) {
   const p2 = genShip(SEEDS.player2, 'player', { hue: [300, 322], accHue: [298, 315] });
   images.player2_ship = bakeInto(p2, 100, 60);
   images.player2_ship.bankFrames = bakeBankFrames(p2, 100, 60);
+
+  // selectable player ships (Phase 5) — one baked hull per roster entry
+  images.ships = {};
+  for (const s of SHIPS) {
+    const mesh = genShip(s.seed, 'player', shipOverrides(s));
+    const spr = bakeInto(mesh, 100, 60);
+    spr.bankFrames = bakeBankFrames(mesh, 100, 60);
+    images.ships[s.id] = spr;
+  }
 
   // enemy families — one distinct generated ship per type, facing left
   images.enemy_basic = bakeInto(genShip(SEEDS.basic, 'basic'), 100, 60, LEFT);

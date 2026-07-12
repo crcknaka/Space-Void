@@ -14,6 +14,7 @@ import { makeNebulaField, tinted } from './fx.js';
 import { askName, submitScore, savedName } from './lb.js';
 import { bumpStats, vibrate, settings } from './settings.js';
 import { progress, awardRun } from './progress.js';
+import { SHIP_BY_ID } from './ships.js';
 import { dailySeed, todayMod, useDailyAttempt, dailyAttemptsLeft, MODS } from './daily.js';
 import { makeSpaceBackdrop, sectorName, SECTOR_THEMES } from './bggen.js';
 
@@ -155,6 +156,10 @@ export class GameState extends BaseWorld {
 
     this._rtAt = -1; // per-frame cache key for rocketTargets()
 
+    // selected ship (offline non-daily only — daily/versus/online stay stock
+    // so their leaderboards and multiplayer sync are fair)
+    if (!this.daily && !this.online) this.applyShip(this.player1);
+
     // apply daily modifier to the players
     if (this.mod) {
       for (const p of this.players()) {
@@ -163,6 +168,24 @@ export class GameState extends BaseWorld {
         if (this.mod.playerBoost) p.fastSpeed += this.mod.playerBoost;
       }
     }
+  }
+
+  // Swap the local ship's hull + stats to the player's chosen ship. Cosmetic
+  // sprite plus a stat block over Player defaults; keeps daily/online stock.
+  applyShip(p) {
+    const ship = SHIP_BY_ID[progress.selectedShip] || SHIP_BY_ID.vanguard;
+    const spr = this.app.images.ships?.[ship.id];
+    if (spr) p.img = spr; // baked hull carries its own bankFrames
+    const s = ship.stats || {};
+    if (s.defaultSpeed != null) p.defaultSpeed = s.defaultSpeed;
+    if (s.fastSpeed != null) p.fastSpeed = s.fastSpeed;
+    if (s.shootDelay != null) p.shootDelay = p.baseShootDelay = s.shootDelay;
+    if (s.rockets != null) p.rockets = s.rockets;
+    if (s.lasers != null) p.lasers = s.lasers;
+    if (s.lives != null) p.lives = s.lives;
+    if (s.w != null) p.w = s.w;
+    if (s.h != null) p.h = s.h;
+    if (s.startShield) p.shield = true;
   }
 
   players() {

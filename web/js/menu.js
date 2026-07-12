@@ -10,6 +10,7 @@ import { VersusState } from './versus.js';
 import { ScoresState } from './scores.js';
 import { OptionsState } from './options.js';
 import { OnlineState } from './online.js';
+import { HangarState } from './hangar.js';
 import { todayMod, dailyAttemptsLeft, timeToNextDaily } from './daily.js';
 import { progress } from './progress.js';
 
@@ -57,16 +58,18 @@ export class MenuState {
         new Button('BACK', W / 2, cy + dy + 20, 200, 54, 'rgb(255,0,0)', 'back'),
       ]);
     } else {
-      let y = H / 2 - dy * 2.5;
-      const online = new Button('ONLINE', W / 2, 0, 220, 58, 'rgb(0,220,255)', 'online');
+      const dym = 64; // tighter step to fit the 7th (HANGAR) entry
+      let y = H / 2 - dym * 3;
+      const online = new Button('ONLINE', W / 2, 0, 220, 54, 'rgb(0,220,255)', 'online');
       online.accent = true; // permanently highlighted
       this.menu = new ButtonGroup([
-        new Button('SINGLE', W / 2, y, 220, 58, 'rgb(0,255,0)', 'single'),
-        new Button('LOCAL 2P', W / 2, y += dy, 220, 58, 'rgb(0,120,255)', 'local'),
-        Object.assign(online, { cy: (y += dy) }),
-        new Button('DAILY', W / 2, y += dy, 220, 58, 'rgb(255,210,0)', 'daily'),
-        new Button('SCORES', W / 2, y += dy, 220, 58, 'rgb(200,120,255)', 'scores'),
-        new Button('SETTINGS', W / 2, y += dy, 220, 58, 'rgb(255,0,0)', 'settings'),
+        new Button('SINGLE', W / 2, y, 220, 54, 'rgb(0,255,0)', 'single'),
+        new Button('HANGAR', W / 2, y += dym, 220, 54, 'rgb(120,220,255)', 'hangar'),
+        new Button('LOCAL 2P', W / 2, y += dym, 220, 54, 'rgb(0,120,255)', 'local'),
+        Object.assign(online, { cy: (y += dym) }),
+        new Button('DAILY', W / 2, y += dym, 220, 54, 'rgb(255,210,0)', 'daily'),
+        new Button('SCORES', W / 2, y += dym, 220, 54, 'rgb(200,120,255)', 'scores'),
+        new Button('SETTINGS', W / 2, y += dym, 220, 54, 'rgb(255,0,0)', 'settings'),
       ]);
     }
   }
@@ -109,6 +112,7 @@ export class MenuState {
       return;
     }
     if (action === 'single') this.app.setState(new GameState(this.app, false));
+    else if (action === 'hangar') this.app.setState(new HangarState(this.app));
     else if (action === 'local') this.goPage('local');
     else if (action === 'online') this.app.setState(new OnlineState(this.app));
     else if (action === 'daily') {
