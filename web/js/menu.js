@@ -11,6 +11,7 @@ import { ScoresState } from './scores.js';
 import { OptionsState } from './options.js';
 import { OnlineState } from './online.js';
 import { todayMod, dailyAttemptsLeft, timeToNextDaily } from './daily.js';
+import { progress } from './progress.js';
 
 export class MenuState {
   constructor(app) {
@@ -156,6 +157,10 @@ export class MenuState {
     drawText(g, 'v1.2 web', W / 2, H / 2 - 275, 19, 'rgb(150,150,150)');
     if (this.app.highScore > 0) {
       drawText(g, `BEST: ${this.app.highScore}`, W / 2, H / 2 - 243, 22, 'rgb(255,210,80)');
+    }
+    // credits wallet, top-right corner
+    if (progress.credits > 0) {
+      drawText(g, `◆ ${progress.credits} CR`, W - 14, 26, 17, 'rgb(120,220,255)', 'right');
     }
 
     if (this.page === 'local') {

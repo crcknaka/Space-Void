@@ -13,6 +13,7 @@ import {
 import { makeNebulaField, tinted } from './fx.js';
 import { askName, submitScore, savedName } from './lb.js';
 import { bumpStats, vibrate, settings } from './settings.js';
+import { progress, awardRun } from './progress.js';
 import { dailySeed, todayMod, useDailyAttempt, dailyAttemptsLeft, MODS } from './daily.js';
 import { makeSpaceBackdrop, sectorName, SECTOR_THEMES } from './bggen.js';
 
@@ -505,6 +506,7 @@ export class GameState extends BaseWorld {
     this.logEvent('LEVELUP (boss killed)');
     audio.playSynth('fanfare');
     vibrate(80);
+    this.bossKillCount = (this.bossKillCount || 0) + 1; // per-run, funds credits
     this.pushToasts(bumpStats({ bossKills: 1, maxLevel: this.level }));
   }
 
@@ -814,6 +816,9 @@ export class GameState extends BaseWorld {
       this.newBest = this.score > 0 && this.score > this.app.highScore; // capture before saveHigh
       if (this.newBest && !this.online) audio.playSynth('fanfare');
       this.app.saveHigh(this.score);
+      // credits reward for the run (host-driven online runs award per client
+      // through their own flow, so skip here)
+      if (!this.online) this.reward = awardRun({ score: this.score, bossKills: this.bossKillCount || 0, newBest: this.newBest });
       this.pushToasts(bumpStats({ bestScore: this.score }));
     }
   }
@@ -1622,20 +1627,24 @@ export class GameState extends BaseWorld {
       }
       if (this.overMenu) {
         drawText(g, 'GAME OVER', W / 2, H / 2 - 100, 56, 'rgb(255,0,0)');
-        drawText(g, `LOST IN ${sectorName(this.level)}`, W / 2, H / 2 - 62, 14, 'rgba(160,190,220,0.8)');
-        drawText(g, `Score: ${this.score}`, W / 2, H / 2 - 32, 30);
+        drawText(g, `LOST IN ${sectorName(this.level)}`, W / 2, H / 2 - 64, 14, 'rgba(160,190,220,0.8)');
+        drawText(g, `Score: ${this.score}`, W / 2, H / 2 - 38, 30);
         if (this.newBest) {
           const pulse = 0.72 + 0.28 * Math.sin(this.time / 170);
           g.globalAlpha = pulse;
-          drawText(g, '★ NEW BEST! ★', W / 2, H / 2 + 3, 25, 'rgb(255,215,80)');
+          drawText(g, '★ NEW BEST! ★', W / 2, H / 2 - 11, 25, 'rgb(255,215,80)');
           g.globalAlpha = 1;
         } else {
-          drawText(g, `Best: ${this.app.highScore}`, W / 2, H / 2 + 2, 24, 'rgb(180,180,180)');
+          drawText(g, `Best: ${this.app.highScore}`, W / 2, H / 2 - 12, 24, 'rgb(180,180,180)');
+        }
+        // credits earned this run + running balance
+        if (this.reward && this.reward.total > 0) {
+          drawText(g, `+${this.reward.total} CR  ·  ${progress.credits} total`, W / 2, H / 2 + 14, 20, 'rgb(255,205,70)');
         }
         if (this.daily) {
           const left = dailyAttemptsLeft();
           drawText(g, left > 0 ? `DAILY ATTEMPTS LEFT: ${left}` : 'NO DAILY ATTEMPTS LEFT TODAY',
-            W / 2, H / 2 + 32, 17, left > 0 ? 'rgb(255,210,60)' : 'rgb(255,110,110)');
+            W / 2, H / 2 + 38, 16, left > 0 ? 'rgb(255,210,60)' : 'rgb(255,110,110)');
         }
         this.overMenu.draw(g);
 
