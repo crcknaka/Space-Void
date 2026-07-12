@@ -13,6 +13,7 @@ import { tinted, glowBullet, glowEnemyBullet, glowEngine, glowElite, drawGlow, d
 import { renderMesh, fitTransform, projectPoint } from './mesh3d.js';
 import { genBoss, genBossCore, BOSS_VIEW, aimYaw } from './bossgen.js';
 import { savedName } from './lb.js';
+import { progress } from './progress.js';
 import { makeSpaceBackdrop } from './bggen.js';
 
 const ETYPE = { basic: 0, weaver: 1, hunter: 2, tank: 3, sniper: 5, carrier: 6, shieldbearer: 7 };
@@ -40,6 +41,7 @@ export class CoopHost {
     this.inputs = new Map();  // slot -> {x,y}
     this.names = [savedName() || 'HOST']; // player index -> name
     this.guestNames = new Map(); // slot -> name (received before/at start)
+    this.guestShips = new Map(); // slot -> chosen ship id (cosmetic hull)
     this.sendAcc = 0;
     this.hub.onMessage = (slot, m) => this.onMessage(slot, m);
     this.hub.onGuestLeave = (slot) => this.onLeave(slot);
@@ -50,8 +52,23 @@ export class CoopHost {
 
   rebuildNames() {
     this.names = [savedName() || 'HOST'];
-    for (const slot of this.slotOrder) this.names[this.playerIndexOf(slot)] = this.guestNames.get(slot) || `P${this.playerIndexOf(slot) + 1}`;
-    this.hub.broadcast({ k: 'nm', names: this.names });
+    this.ships = [progress.selectedShip]; // index 0 = host's hull
+    for (const slot of this.slotOrder) {
+      const idx = this.playerIndexOf(slot);
+      this.names[idx] = this.guestNames.get(slot) || `P${idx + 1}`;
+      this.ships[idx] = this.guestShips.get(slot) || 'vanguard';
+    }
+    this.applyHulls();
+    this.hub.broadcast({ k: 'nm', names: this.names, ships: this.ships });
+  }
+
+  // swap each player ship's sprite to its chosen hull (cosmetic; stats stay
+  // stock in online). Defensive: an unknown id falls back to the default hull.
+  applyHulls() {
+    const { images } = this.app;
+    for (let i = 0; i < this.g.playerList.length; i++) {
+      this.g.playerList[i].img = playerShip(images, i, true, this.ships?.[i]);
+    }
   }
 
   playerIndexOf(slot) { return this.slotOrder.indexOf(slot) + 1; } // host is 0
@@ -87,7 +104,12 @@ export class CoopHost {
   }
 
   onMessage(slot, m) {
-    if (m.k === 'hi') { this.guestNames.set(slot, String(m.name || '').slice(0, 14)); this.rebuildNames(); return; }
+    if (m.k === 'hi') {
+      this.guestNames.set(slot, String(m.name || '').slice(0, 14));
+      if (m.ship) this.guestShips.set(slot, String(m.ship).slice(0, 24));
+      this.rebuildNames();
+      return;
+    }
     const idx = this.playerIndexOf(slot);
     if (idx < 1) return;
     const p = this.g.playerList[idx];
@@ -273,7 +295,7 @@ export class CoopGuest extends BaseWorld {
       else if (s === 'reconnecting') this.reconnecting = true;
       else if (s === 'open') this.reconnecting = false;
     };
-    this.net.send({ k: 'hi', name: savedName() || 'PILOT' });
+    this.net.send({ k: 'hi', name: savedName() || 'PILOT', ship: progress.selectedShip });
   }
 
   resetRound() {
@@ -322,7 +344,12 @@ export class CoopGuest extends BaseWorld {
   onMessage(m) {
     if (m.k === 'restart') { this.resetRound(); }
     else if (m.k === 'go') { if (typeof m.n === 'number') this.total = m.n; if (typeof m.me === 'number') this.meIndex = m.me; }
-    else if (m.k === 'nm') { this.names = m.names || []; }
+    else if (m.k === 'nm') {
+      this.names = m.names || [];
+      if (m.ships && this.shipImg) { // rebuild each hull to its owner's chosen ship (cosmetic)
+        for (let i = 0; i < 4; i++) this.shipImg[i] = playerShip(this.app.images, i, true, m.ships[i]);
+      }
+    }
     else if (m.k === 'bye') this.disconnected = true;
     else if (m.k === 'ev') {
       // one-shot events arrive reliably — never lost even if snapshots drop
@@ -421,7 +448,7 @@ export class CoopGuest extends BaseWorld {
     this.updateBackdrop(dt);
 
     // re-announce our name shortly after connect (robust against any race)
-    if (!this._hiDone && this.time > 600) { this._hiDone = true; this.net.send({ k: 'hi', name: savedName() || 'PILOT' }); }
+    if (!this._hiDone && this.time > 600) { this._hiDone = true; this.net.send({ k: 'hi', name: savedName() || 'PILOT', ship: progress.selectedShip }); }
 
     if (input.pressed.has('Escape')) { this.leave(); return; }
     if (this.disconnected) { if (input.pressed.size || input.pointer.justDown) this.leave(); return; }

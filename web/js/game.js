@@ -34,11 +34,14 @@ const PLAYER_TINTS = [null, 'rgba(90,255,140,0.45)', 'rgba(255,150,40,0.55)', 'r
 
 // Colored ship sprite for player index i. Local modes keep the original
 // player1/player2 art; online (colored) tints every ship a distinct hue.
-export function playerShip(images, i, colored) {
-  if (!colored) return i === 1 ? images.player2_ship : images.player1_ship;
+// shipId (online co-op cosmetic) swaps in that player's chosen hull; index 0
+// stays untinted so its natural colours (and bank frames) show through.
+export function playerShip(images, i, colored, shipId) {
+  const custom = shipId && images.ships && images.ships[shipId];
+  const base = custom || (i === 1 ? images.player2_ship : images.player1_ship);
+  if (!colored) return base;
   const tint = PLAYER_TINTS[i % PLAYER_TINTS.length];
-  const base = i === 1 ? images.player2_ship : images.player1_ship;
-  return tint ? tinted(base, tint, `ship_${i}`) : base;
+  return tint ? tinted(base, tint, `hull_${i}_${shipId || 'def'}`) : base;
 }
 
 export function spawnY(i, total) {
