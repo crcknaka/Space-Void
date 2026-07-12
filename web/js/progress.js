@@ -10,7 +10,7 @@ const DEFAULTS = {
   credits: 0,
   selectedShip: 'vanguard',
   unlockedShips: ['vanguard'],
-  upgrades: { hull: 0, thrusters: 0, reactor: 0, arsenal: 0, shield: 0 },
+  upgrades: { hull: 0, thrusters: 0, reactor: 0, arsenal: 0, deflector: 0 },
 };
 
 function fresh() {
@@ -44,6 +44,35 @@ export function saveProgress() {
 // Credits earned for a finished run. Score is the main driver; bosses and a
 // fresh personal best add flat bonuses. Returns the breakdown so the game-over
 // screen can show where the reward came from.
+// Permanent meta-upgrades, applied on top of the chosen ship's stats
+// (game.js applyUpgrades). Each level costs base * (currentLevel + 1).
+export const UPGRADES = [
+  { id: 'hull', name: 'HULL PLATING', max: 2, cost: 300, desc: '+1 life per level' },
+  { id: 'thrusters', name: 'THRUSTERS', max: 3, cost: 200, desc: '+0.4 speed per level' },
+  { id: 'reactor', name: 'REACTOR', max: 3, cost: 250, desc: '-6% fire delay per level' },
+  { id: 'arsenal', name: 'ARSENAL', max: 3, cost: 150, desc: '+1 start rocket per level' },
+  { id: 'deflector', name: 'DEFLECTOR', max: 1, cost: 500, desc: 'Start every run shielded' },
+];
+export const UPGRADE_BY_ID = Object.fromEntries(UPGRADES.map((u) => [u.id, u]));
+
+export function upgradeLevel(id) { return progress.upgrades[id] || 0; }
+export function upgradeCost(id) {
+  const u = UPGRADE_BY_ID[id];
+  return u ? u.cost * (upgradeLevel(id) + 1) : 0;
+}
+export function buyUpgrade(id) {
+  const u = UPGRADE_BY_ID[id];
+  if (!u) return false;
+  const lvl = upgradeLevel(id);
+  if (lvl >= u.max) return false;
+  const cost = u.cost * (lvl + 1);
+  if (progress.credits < cost) return false;
+  progress.credits -= cost;
+  progress.upgrades[id] = lvl + 1;
+  saveProgress();
+  return true;
+}
+
 export function awardRun({ score = 0, bossKills = 0, newBest = false } = {}) {
   const base = Math.max(0, Math.floor(score / 100));
   const boss = Math.max(0, bossKills) * 15;

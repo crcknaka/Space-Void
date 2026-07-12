@@ -156,9 +156,9 @@ export class GameState extends BaseWorld {
 
     this._rtAt = -1; // per-frame cache key for rocketTargets()
 
-    // selected ship (offline non-daily only — daily/versus/online stay stock
-    // so their leaderboards and multiplayer sync are fair)
-    if (!this.daily && !this.online) this.applyShip(this.player1);
+    // selected ship + permanent upgrades (offline non-daily only — daily/
+    // versus/online stay stock so their leaderboards and sync are fair)
+    if (!this.daily && !this.online) { this.applyShip(this.player1); this.applyUpgrades(this.player1); }
 
     // apply daily modifier to the players
     if (this.mod) {
@@ -186,6 +186,16 @@ export class GameState extends BaseWorld {
     if (s.w != null) p.w = s.w;
     if (s.h != null) p.h = s.h;
     if (s.startShield) p.shield = true;
+  }
+
+  // Permanent meta-upgrades, stacked on top of the ship's stats.
+  applyUpgrades(p) {
+    const u = progress.upgrades || {};
+    if (u.hull) p.lives += u.hull;
+    if (u.thrusters) { p.defaultSpeed += 0.4 * u.thrusters; p.fastSpeed += 0.4 * u.thrusters; }
+    if (u.reactor) { const f = 1 - 0.06 * u.reactor; p.shootDelay *= f; p.baseShootDelay *= f; }
+    if (u.arsenal) p.rockets += u.arsenal;
+    if (u.deflector) p.shield = true;
   }
 
   players() {
