@@ -177,6 +177,10 @@ export function playSynth(name, x = null, gain = 1) {
     const p = 0.85 + Math.random() * 0.3;
     note(125 * p, t, 0.09, 'square', 0.32, -65);
     noiseHit(t, 0.09, 0.35, 850 * p, 280, 1.3);
+  } else if (name === 'empty') {
+    // dry-fire: dull mechanical click, no musical tone — reads as "out of ammo"
+    note(150, t, 0.035, 'square', 0.1, -70);
+    noiseHit(t, 0.05, 0.09, 760, 280, 1.3);
   } else if (name === 'plasma') {
     // x5 combo bolt: short hot sizzle layered over the gun sample
     note(1350, t, 0.09, 'sawtooth', 0.1, -850);

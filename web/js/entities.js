@@ -441,7 +441,14 @@ export class Player {
   }
 
   fireRocket(world) {
-    if (this.rockets <= 0 || world.time - this.lastRocket <= this.rocketDelay) return;
+    if (this.rockets <= 0) { // out of ammo: dry-fire click + HUD flash (rate-limited)
+      if (world.time - (this.rkEmptyAt || 0) > 400) {
+        this.rkEmptyAt = this.rkEmptyFlash = world.time;
+        audio.playSynth('empty', this.x);
+      }
+      return;
+    }
+    if (world.time - this.lastRocket <= this.rocketDelay) return; // on cooldown: silent
     world.rockets.push(new Rocket(this.x, this.y, this.rocketImg));
     this.lastRocket = world.time;
     this.rockets--;
@@ -450,7 +457,14 @@ export class Player {
 
   fireLaser(world) {
     if (!world.laserBlast) return;
-    if (this.lasers <= 0 || world.time - this.lastLaser <= this.laserDelay) return;
+    if (this.lasers <= 0) { // out of charges: dry-fire click + HUD flash (rate-limited)
+      if (world.time - (this.lzEmptyAt || 0) > 400) {
+        this.lzEmptyAt = this.lzEmptyFlash = world.time;
+        audio.playSynth('empty', this.x);
+      }
+      return;
+    }
+    if (world.time - this.lastLaser <= this.laserDelay) return; // on cooldown: silent
     this.lastLaser = world.time;
     this.lasers--;
     world.laserBlast(this); // world resolves the hitscan + visuals + sfx

@@ -801,6 +801,8 @@ export class GameState extends BaseWorld {
     if (this.players().every((p) => !p.alive && p.lives <= 0)) {
       this.over = true;
       this.overAlpha = 0;
+      this.newBest = this.score > 0 && this.score > this.app.highScore; // capture before saveHigh
+      if (this.newBest && !this.online) audio.playSynth('fanfare');
       this.app.saveHigh(this.score);
       this.pushToasts(bumpStats({ bestScore: this.score }));
     }
@@ -1511,8 +1513,11 @@ export class GameState extends BaseWorld {
       const y = 58 + i * (many ? 26 : 32);
       drawText(g, `P${p.slot + 1}`, 10, y, fs, p.color, 'left');
       drawText(g, '♥'.repeat(Math.max(0, p.lives)), 44, y, fs, 'rgb(255,80,90)', 'left');
-      drawText(g, `🚀${p.rockets}`, many ? 108 : 124, y, fs, '#fff', 'left');
-      drawText(g, `⚡${p.lasers}`, many ? 168 : 192, y, fs, 'rgb(120,220,255)', 'left');
+      // out-of-ammo dry-fire briefly flashes the counter red
+      const rkCol = this.time - (p.rkEmptyFlash || 0) < 300 ? 'rgb(255,80,80)' : '#fff';
+      const lzCol = this.time - (p.lzEmptyFlash || 0) < 300 ? 'rgb(255,80,80)' : 'rgb(120,220,255)';
+      drawText(g, `🚀${p.rockets}`, many ? 108 : 124, y, fs, rkCol, 'left');
+      drawText(g, `⚡${p.lasers}`, many ? 168 : 192, y, fs, lzCol, 'left');
     });
     if (this.speedMul < 1) drawText(g, 'SLOW-MO', W / 2, 24, 24, 'rgb(120,200,255)');
 
@@ -1609,7 +1614,14 @@ export class GameState extends BaseWorld {
         drawText(g, 'GAME OVER', W / 2, H / 2 - 100, 56, 'rgb(255,0,0)');
         drawText(g, `LOST IN ${sectorName(this.level)}`, W / 2, H / 2 - 62, 14, 'rgba(160,190,220,0.8)');
         drawText(g, `Score: ${this.score}`, W / 2, H / 2 - 32, 30);
-        drawText(g, `Best: ${this.app.highScore}`, W / 2, H / 2 + 2, 24, 'rgb(180,180,180)');
+        if (this.newBest) {
+          const pulse = 0.72 + 0.28 * Math.sin(this.time / 170);
+          g.globalAlpha = pulse;
+          drawText(g, '★ NEW BEST! ★', W / 2, H / 2 + 3, 25, 'rgb(255,215,80)');
+          g.globalAlpha = 1;
+        } else {
+          drawText(g, `Best: ${this.app.highScore}`, W / 2, H / 2 + 2, 24, 'rgb(180,180,180)');
+        }
         if (this.daily) {
           const left = dailyAttemptsLeft();
           drawText(g, left > 0 ? `DAILY ATTEMPTS LEFT: ${left}` : 'NO DAILY ATTEMPTS LEFT TODAY',
