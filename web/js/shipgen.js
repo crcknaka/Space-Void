@@ -58,6 +58,11 @@ export const FAMILIES = {
     hullR: [10, 13], flat: [0.68, 0.8], span: [16, 22], sweep: [4, 10],
     engines: [2, 2], finTwin: 0.3, wings2: 0, twinHull: 0, greeble: 0.5,
   },
+  strafer: { // wide crimson gunship — parks in a lane and rakes aimed fire
+    hue: [340, 356], accHue: [20, 40], sat: [26, 40], lit: [42, 54],
+    hullR: [11, 14], flat: [0.5, 0.6], span: [32, 44], sweep: [-10, 2],
+    engines: [2, 3], finTwin: 0.6, wings2: 0.5, twinHull: 0.5, greeble: 0.85,
+  },
   boss: { // hulking dreadnought base — per-level tinting happens in-game
     hue: [340, 20], accHue: [350, 10], sat: [12, 20], lit: [46, 56],
     hullR: [16, 20], flat: [0.6, 0.72], span: [20, 30], sweep: [6, 16],
@@ -65,7 +70,7 @@ export const FAMILIES = {
   },
 };
 
-const FAM_SALT = { player: 0x50, basic: 0xB0, weaver: 0x77, hunter: 0x44, tank: 0x7A, boss: 0xB055, sniper: 0x51, carrier: 0xCA, shieldbearer: 0x5B };
+const FAM_SALT = { player: 0x50, basic: 0xB0, weaver: 0x77, hunter: 0x44, tank: 0x7A, boss: 0xB055, sniper: 0x51, carrier: 0xCA, shieldbearer: 0x5B, strafer: 0x5F };
 
 // `over` merges over the family ranges (e.g. a different palette for player 2)
 export function genShip(seed, family = 'basic', over = null) {

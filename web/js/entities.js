@@ -1127,9 +1127,10 @@ const ENEMY_TINT = {
   sniper: 'rgba(90,110,255,0.4)',
   carrier: 'rgba(255,170,60,0.4)',
   shieldbearer: 'rgba(90,230,255,0.4)',
+  strafer: 'rgba(255,70,110,0.42)',
 };
-const ENEMY_POINTS = { basic: 10, weaver: 15, hunter: 20, tank: 30, sniper: 25, carrier: 35, shieldbearer: 30 };
-const ENEMY_SIZE = { tank: [66, 40], sniper: [54, 24], carrier: [72, 44], shieldbearer: [52, 32] };
+const ENEMY_POINTS = { basic: 10, weaver: 15, hunter: 20, tank: 30, sniper: 25, carrier: 35, shieldbearer: 30, strafer: 28 };
+const ENEMY_SIZE = { tank: [66, 40], sniper: [54, 24], carrier: [72, 44], shieldbearer: [52, 32], strafer: [62, 34] };
 
 export class Enemy {
   constructor(images, level, type, time, moveRandomly = false) {
@@ -1151,6 +1152,7 @@ export class Enemy {
     else if (type === 'sniper') this.health = 2;
     else if (type === 'carrier') this.health = 4 + Math.floor(level / 3);
     else if (type === 'shieldbearer') this.health = 2;
+    else if (type === 'strafer') this.health = level >= 6 ? 3 : 2;
     else this.health = 1;
     if (type === 'shieldbearer') this.shieldHp = 2; // own hex bubble, absorbs hits first
     this.points = ENEMY_POINTS[type];
@@ -1193,6 +1195,12 @@ export class Enemy {
       this.vx = -(1.7 + level * 0.18);
       this.vy = moveRandomly ? randInt(-1, 1) : 0;
       this.shootDelay = Math.max(600, randInt(1900, 3200) - level * 100);
+    } else if (type === 'strafer') {
+      this.vx = -(2.2 + level * 0.14);
+      this.vy = 0;
+      this.holdX = W - randInt(180, 300);  // parks mid-field, ahead of the sniper line
+      this.shootDelay = Infinity;          // fires aimed spreads via its own timer
+      this.strafeDelay = Math.max(650, randInt(1300, 2100) - level * 60);
     } else {
       this.vx = randInt(-3, -1) - (level - 1);      // faster with level
       this.vy = moveRandomly ? randInt(-2, 2) : 0;
@@ -1206,7 +1214,7 @@ export class Enemy {
     this.level = level;
     this.nextMineAt = time + randInt(4000, 7000); // tank minelaying (level 6+)
     // afterburner dashes (hunters always lunge; light ships sometimes; tanks never)
-    this.canDash = level >= 2 && (type === 'hunter' || (type !== 'tank' && randInt(1, 100) <= 45));
+    this.canDash = level >= 2 && (type === 'hunter' || (type !== 'tank' && type !== 'strafer' && randInt(1, 100) <= 45));
     this.boosting = false;
     this.dashUntil = 0;
     this.nextDashAt = time + randInt(2000, 5000);
@@ -1303,16 +1311,17 @@ export class Enemy {
 
     const m = world.speedMul * world.k * (this.boosting ? 1.9 : 1);
     this._t = world.time;
-    // snipers stop at their perch instead of flying across
-    if (this.type === 'sniper' && this.x <= this.holdX) {
-      // hold position; drift toward the nearest player's y
+    // snipers and strafers stop at their perch instead of flying across
+    if ((this.type === 'sniper' || this.type === 'strafer') && this.x <= this.holdX) {
+      // hold position; drift toward the nearest player's y (strafers track hard)
       let tgt = null, md = Infinity;
       for (const p of world.players()) {
         if (!p.alive) continue;
         const d = Math.abs(p.y - this.y);
         if (d < md) { md = d; tgt = p; }
       }
-      if (tgt && !this.aim) this.y += clamp(tgt.y - this.y, -1.1, 1.1) * m;
+      const trackSp = this.type === 'strafer' ? 2.4 : 1.1;
+      if (tgt && !this.aim) this.y += clamp(tgt.y - this.y, -trackSp, trackSp) * m;
     } else {
       this.x += this.vx * m;
     }
@@ -1369,6 +1378,26 @@ export class Enemy {
         world.enemies.push(d);
         world.effects.push(new Shockwave(d.x, d.y, world.time, 42));
       }
+    }
+
+    // strafer: once parked, rakes an aimed 3-shot spread at the nearest player
+    if (this.type === 'strafer' && !warping && !stormOut && this.x <= this.holdX + 4
+        && world.time - this.lastShot > this.strafeDelay) {
+      this.lastShot = world.time;
+      let tgt = null, md = Infinity;
+      for (const p of world.players()) {
+        if (!p.alive) continue;
+        const d = Math.hypot(p.x - this.x, p.y - this.y);
+        if (d < md) { md = d; tgt = p; }
+      }
+      const bx = this.x - this.w / 2;
+      const baseA = tgt ? Math.atan2(tgt.y - this.y, tgt.x - bx) : Math.PI; // toward the player
+      const sp = 6.5;
+      for (const off of [-0.17, 0, 0.17]) {
+        const a = baseA + off;
+        world.enemyBullets.push(new EnemyBullet(bx, this.y, this.bulletImg, Math.cos(a) * sp, Math.sin(a) * sp));
+      }
+      audio.play('gun', 0.16, this.x);
     }
 
     if (!warping && !stormOut && world.time - this.lastShot > this.shootDelay) {

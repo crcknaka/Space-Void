@@ -14,7 +14,7 @@ import { makeNebulaField, tinted } from './fx.js';
 import { askName, submitScore, savedName } from './lb.js';
 import { bumpStats, vibrate, settings } from './settings.js';
 import { dailySeed, todayMod, useDailyAttempt, dailyAttemptsLeft, MODS } from './daily.js';
-import { makeSpaceBackdrop, sectorName } from './bggen.js';
+import { makeSpaceBackdrop, sectorName, SECTOR_THEMES } from './bggen.js';
 
 const P1_CONTROLS = {
   up: 'KeyW', down: 'KeyS', left: 'KeyA', right: 'KeyD',
@@ -63,10 +63,11 @@ export class GameState extends BaseWorld {
     this._dailyCharged = false; // an attempt is spent only once the run is committed
     if (this.daily) this.pushToasts(bumpStats({ dailyRuns: 1 }));
 
+    this.level = 1;
+    this.nebulaHue = this.sectorTheme().hue; // themed nebula from the first sector
     this.initBackdrop();
     this.score = 0;
-    this.level = 1;
-    if (!this.app.debugNoBg) this.bgOverride = makeSpaceBackdrop(this.app.debugBg || this.level); // per-level procedural scene
+    if (!this.app.debugNoBg) this.bgOverride = makeSpaceBackdrop(this.app.debugBg || this.level, this.sectorTheme()); // per-level themed scene
     this.nextBossScore = 100;
     this.bossSpawned = false;
     this.slowMoEnd = 0;
@@ -203,6 +204,11 @@ export class GameState extends BaseWorld {
     if (this.overMenu) this.overMenu = this.buildOverMenu();
   }
 
+  // visual biome for the current sector (cycles as levels climb)
+  sectorTheme() {
+    return SECTOR_THEMES[(this.level - 1) % SECTOR_THEMES.length];
+  }
+
   logEvent(name) {
     // debug timeline (enabled with ?log)
     window.__svlog?.push(`${(this.time / 1000).toFixed(1)}s L${this.level} score=${this.score} ${name}`);
@@ -261,14 +267,17 @@ export class GameState extends BaseWorld {
 
   pickEnemyType() {
     const r = rand(0, 100);
+    const L = this.level;
     if (this.mod?.tankBias && r < 35) return 'tank';               // HEAVY ARMOR day
     if (this.mod?.lightOnly) return r < 45 ? 'weaver' : 'basic';   // THE SWARM day
-    if (this.level >= 5 && r < 6) return 'carrier';
-    if (this.level >= 4 && r < 14) return 'sniper';
-    if (this.level >= 3 && r < 24) return 'shieldbearer';
-    if (this.level >= 4 && r < 36) return 'tank';
-    if (this.level >= 3 && r < 56) return 'hunter';
-    if (this.level >= 2 && r < 78) return 'weaver';
+    // deeper sectors thin out the fodder and lean on the specialist roster
+    if (L >= 5 && r < 8) return 'carrier';
+    if (L >= 5 && r < 20) return 'strafer';
+    if (L >= 4 && r < 30) return 'sniper';
+    if (L >= 3 && r < 42) return 'shieldbearer';
+    if (L >= 4 && r < 56) return 'tank';
+    if (L >= 3 && r < 74) return 'hunter';
+    if (L >= 2 && r < (L >= 5 ? 92 : 82)) return 'weaver';
     return 'basic';
   }
 
@@ -485,7 +494,7 @@ export class GameState extends BaseWorld {
     // fresh scene for the new level arrives via a hyperspace hop (after the
     // slow-mo): accelerate → swap the backdrop at peak speed → brake. The
     // heavy canvas generation lands mid-streak where a hitch can't be seen.
-    this.nebulaHue = (170 + (this.level - 1) * 47) % 360;
+    this.nebulaHue = this.sectorTheme().hue;
     this.warpAt = this.time + 1500;
     this.bgZoomTarget = 1 + ((this.level - 1) % 4) * 0.05;
     // celebration: shockwave + smooth slow-mo dip + soft flash + banner
@@ -542,7 +551,7 @@ export class GameState extends BaseWorld {
         this.warpMul = 1 + 27 * env * env * (3 - 2 * env);               // smoothstep edges
         if (!this.warp.swapped && p >= 0.45) {
           this.warp.swapped = true;
-          if (!this.app.debugNoBg) this.bgOverride = makeSpaceBackdrop(this.app.debugBg || this.level);
+          if (!this.app.debugNoBg) this.bgOverride = makeSpaceBackdrop(this.app.debugBg || this.level, this.sectorTheme());
           this.nebulae = makeNebulaField(3, this.nebulaHue);
           this.killFlash = Math.max(this.killFlash || 0, 0.45); // soft blink at the jump
         }
@@ -563,7 +572,8 @@ export class GameState extends BaseWorld {
         const chance = Math.min(10 + (this.level - 1) * 5, 100);
         const moveRandomly = randInt(1, 100) <= chance;
         const e = new Enemy(this.app.images, this.level, this.pickEnemyType(), this.time, moveRandomly);
-        if (this.level >= 2 && randInt(1, 100) <= 6) this.makeElite(e);
+        // elites grow more common as the run deepens (6% → ~18% by level 8)
+        if (this.level >= 2 && randInt(1, 100) <= Math.min(18, 4 + this.level * 2)) this.makeElite(e);
         this.introEnemy(e);
       }
     }

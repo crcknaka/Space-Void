@@ -8,26 +8,48 @@
 // the seam (stars, smudges) or keeps a safe margin from it (planets, rings).
 import { makeRng } from './mesh3d.js';
 
-export function makeSpaceBackdrop(seed, w = 2400, h = 1100) {
+// Sector biomes — distinct visual regions the run travels through. Each tunes
+// the backdrop's colour, nebula density and star field so successive sectors
+// read as different places. game.js picks one per level; the menu passes none
+// (random hue, original look).
+export const SECTOR_THEMES = [
+  { name: 'nebula',  hue: 268, hueJit: 40, sat: 46, smudge: 6, smudgeA: 1.5, stars: 700, starBright: 1.0 },
+  { name: 'void',    hue: 222, hueJit: 20, sat: 26, smudge: 2, smudgeA: 0.4, stars: 360, starBright: 0.75 },
+  { name: 'ember',   hue: 16,  hueJit: 22, sat: 52, smudge: 6, smudgeA: 1.4, stars: 540, starBright: 0.9 },
+  { name: 'ion',     hue: 196, hueJit: 24, sat: 56, smudge: 5, smudgeA: 1.35, stars: 840, starBright: 1.2 },
+  { name: 'verdant', hue: 138, hueJit: 28, sat: 44, smudge: 5, smudgeA: 1.2, stars: 620, starBright: 1.0 },
+  { name: 'crimson', hue: 350, hueJit: 18, sat: 54, smudge: 5, smudgeA: 1.5, stars: 500, starBright: 0.85 },
+  { name: 'amber',   hue: 42,  hueJit: 24, sat: 48, smudge: 5, smudgeA: 1.3, stars: 640, starBright: 1.05 },
+  { name: 'frost',   hue: 206, hueJit: 20, sat: 24, smudge: 4, smudgeA: 0.9, stars: 920, starBright: 1.25 },
+];
+
+export function makeSpaceBackdrop(seed, theme = null, w = 2400, h = 1100) {
   const R = makeRng((seed * 40503 + 9601) >>> 0);
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
   const g = c.getContext('2d');
 
-  const hue = (R() * 360) | 0;
+  const hue = theme ? (theme.hue + ((R() - 0.5) * theme.hueJit) + 360) % 360 : (R() * 360) | 0;
+  const bgSat = theme ? theme.sat : 42;
+  const smSat = theme ? Math.min(80, theme.sat + 14) : 60;
+  const smA = theme ? theme.smudgeA : 1;
+  const nSm = theme ? theme.smudge : 5;
+  const nStars = theme ? theme.stars : 700;
+  const starB = theme ? theme.starBright : 1;
+
   const bg = g.createLinearGradient(0, 0, 0, h);
   bg.addColorStop(0, '#03040a');
-  bg.addColorStop(0.55, `hsl(${hue}, 42%, ${5 + R() * 4}%)`);
+  bg.addColorStop(0.55, `hsl(${hue}, ${bgSat}%, ${5 + R() * 4}%)`);
   bg.addColorStop(1, '#04050c');
   g.fillStyle = bg;
   g.fillRect(0, 0, w, h);
 
   // faint galactic smudges — drawn wrapped so the seam stays invisible
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < nSm; i++) {
     const gx = R() * w, gy = R() * h, gr = 120 + R() * 260;
     for (const ox of [0, -w, w]) {
       const sm = g.createRadialGradient(gx + ox, gy, 0, gx + ox, gy, gr);
-      sm.addColorStop(0, `hsla(${(hue + R() * 80) % 360}, 60%, 55%, ${0.03 + R() * 0.04})`);
+      sm.addColorStop(0, `hsla(${(hue + (R() - 0.5) * 70 + 360) % 360}, ${smSat}%, 55%, ${(0.03 + R() * 0.04) * smA})`);
       sm.addColorStop(1, 'rgba(0,0,0,0)');
       g.fillStyle = sm;
       g.beginPath(); g.arc(gx + ox, gy, gr, 0, Math.PI * 2); g.fill();
@@ -35,10 +57,10 @@ export function makeSpaceBackdrop(seed, w = 2400, h = 1100) {
   }
 
   // star dust, wrapped across the seam
-  for (let i = 0; i < 700; i++) {
+  for (let i = 0; i < nStars; i++) {
     const x = R() * w, y = R() * h;
     const s = R() < 0.85 ? 1 : 2;
-    g.fillStyle = `rgba(255,255,255,${0.15 + R() * 0.5})`;
+    g.fillStyle = `rgba(255,255,255,${Math.min(1, (0.15 + R() * 0.5) * starB)})`;
     g.fillRect(x, y, s, s);
     if (x < 4) g.fillRect(x + w, y, s, s);
     if (x > w - 4) g.fillRect(x - w, y, s, s);
