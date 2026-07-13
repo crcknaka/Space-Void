@@ -11,10 +11,17 @@ const DEFAULTS = {
   selectedShip: 'vanguard',
   unlockedShips: ['vanguard'],
   upgrades: { hull: 0, thrusters: 0, reactor: 0, arsenal: 0, deflector: 0 },
+  secondary: 'none',
+  unlockedWeapons: ['none'],
 };
 
 function fresh() {
-  return { ...DEFAULTS, upgrades: { ...DEFAULTS.upgrades }, unlockedShips: [...DEFAULTS.unlockedShips] };
+  return {
+    ...DEFAULTS,
+    upgrades: { ...DEFAULTS.upgrades },
+    unlockedShips: [...DEFAULTS.unlockedShips],
+    unlockedWeapons: [...DEFAULTS.unlockedWeapons],
+  };
 }
 
 function load() {
@@ -29,6 +36,8 @@ function load() {
       upgrades: { ...DEFAULTS.upgrades, ...(raw.upgrades || {}) },
       unlockedShips: Array.isArray(raw.unlockedShips) && raw.unlockedShips.length
         ? raw.unlockedShips : [...DEFAULTS.unlockedShips],
+      unlockedWeapons: Array.isArray(raw.unlockedWeapons) && raw.unlockedWeapons.length
+        ? [...new Set(['none', ...raw.unlockedWeapons])] : [...DEFAULTS.unlockedWeapons],
     };
   } catch {
     return fresh();
@@ -59,6 +68,8 @@ export function importCode(code) {
       upgrades: { ...DEFAULTS.upgrades, ...(raw.upgrades || {}) },
       unlockedShips: Array.isArray(raw.unlockedShips) && raw.unlockedShips.length
         ? [...new Set(['vanguard', ...raw.unlockedShips])] : [...DEFAULTS.unlockedShips],
+      unlockedWeapons: Array.isArray(raw.unlockedWeapons) && raw.unlockedWeapons.length
+        ? [...new Set(['none', ...raw.unlockedWeapons])] : [...DEFAULTS.unlockedWeapons],
     };
     for (const k of Object.keys(progress)) delete progress[k];
     Object.assign(progress, clean);

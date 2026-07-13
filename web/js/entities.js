@@ -428,16 +428,18 @@ export class Player {
 
   shoot(world) {
     if (world.ionStorm?.phase === 'active') return; // ion storm: guns are dead
-    if (world.time - this.lastShot <= this.shootDelay) return;
+    const over = world.overUntil && world.time < world.overUntil; // OVERDRIVE window
+    if (world.time - this.lastShot <= (over ? 115 : this.shootDelay)) return;
     const vx = this.facingLeft ? -10 : 10;
     const edgeX = this.facingLeft ? this.x - this.w / 2 : this.x + this.w / 2;
     const spreadAngle = 10;
-    const start = -((this.spread - 1) * spreadAngle) / 2;
-    // combo heat: hotter, larger bolts at x3+, plasma at x5
-    const tier = (world.mult || 1) >= 5 ? 3 : (world.mult || 1) >= 3 ? 2 : 1;
+    const spread = over ? Math.max(3, this.spread) : this.spread; // wider fan during overdrive
+    const start = -((spread - 1) * spreadAngle) / 2;
+    // combo heat: hotter, larger bolts at x3+, plasma at x5 (always hot in overdrive)
+    const tier = over ? 3 : (world.mult || 1) >= 5 ? 3 : (world.mult || 1) >= 3 ? 2 : 1;
     const img = tier === 3 ? this.images.bullet3 || this.bulletImg
       : tier === 2 ? this.images.bullet2 || this.bulletImg : this.bulletImg;
-    for (let i = 0; i < this.spread; i++) {
+    for (let i = 0; i < spread; i++) {
       const b = new Bullet(edgeX, this.y, img, vx, start + i * spreadAngle);
       b.tier = tier;
       if (tier > 1) { b.w = tier === 3 ? 14 : 12; b.h = tier === 3 ? 7 : 6; }

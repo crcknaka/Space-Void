@@ -6,6 +6,7 @@ import * as audio from './audio.js';
 import { Button, drawText } from './ui.js';
 import { Star } from './entities.js';
 import { SHIPS } from './ships.js';
+import { WEAPONS } from './weapons.js';
 import {
   progress, saveProgress, UPGRADES, upgradeLevel, upgradeCost, buyUpgrade,
   exportCode, importCode,
@@ -37,10 +38,13 @@ export class HangarState {
     this.tab = 'ships';
     this.idx = Math.max(0, SHIPS.findIndex((s) => s.id === progress.selectedShip));
     this.upIdx = 0;
+    this.wIdx = Math.max(0, WEAPONS.findIndex((w) => w.id === progress.secondary));
   }
   enter() { this.layout(); }
   onResize() { this.layout(); }
   owned(id) { return progress.unlockedShips.includes(id); }
+
+  ownedWeapon(id) { return progress.unlockedWeapons.includes(id); }
 
   // the primary (Enter) action for the current tab
   primaryAction() {
@@ -50,6 +54,13 @@ export class HangarState {
       if (this.owned(ship.id)) return { label: 'SELECT', action: 'select', color: 'rgb(0,220,130)' };
       if (progress.credits >= ship.cost) return { label: `BUY · ${ship.cost} CR`, action: 'buy', color: 'rgb(255,205,70)' };
       return { label: `${ship.cost} CR — NOT ENOUGH`, action: 'none', color: 'rgb(120,90,60)' };
+    }
+    if (this.tab === 'weapons') {
+      const wp = WEAPONS[this.wIdx];
+      if (progress.secondary === wp.id) return { label: 'EQUIPPED', action: 'none', color: 'rgb(90,90,90)' };
+      if (this.ownedWeapon(wp.id)) return { label: 'EQUIP', action: 'equip', color: 'rgb(0,220,130)' };
+      if (progress.credits >= wp.cost) return { label: `BUY · ${wp.cost} CR`, action: 'buyw', color: 'rgb(255,205,70)' };
+      return { label: `${wp.cost} CR — NOT ENOUGH`, action: 'none', color: 'rgb(120,90,60)' };
     }
     const u = UPGRADES[this.upIdx];
     const lvl = upgradeLevel(u.id);
@@ -64,8 +75,10 @@ export class HangarState {
     for (let i = 0; i < 60; i++) {
       this.stars.push(new Star(randInt(0, W), randInt(0, H), rand(0.1, 0.4), randInt(1, 3), randInt(50, 200)));
     }
-    this.tabShips = new Button('SHIPS', W / 2 - 92, 128, 168, 46, 'rgb(120,220,255)', 'tab_ships');
-    this.tabUpg = new Button('UPGRADES', W / 2 + 92, 128, 168, 46, 'rgb(255,205,70)', 'tab_upgrades');
+    const tw = Math.min(148, (W - 30) / 3), ts = tw + 6;
+    this.tabShips = new Button('SHIPS', W / 2 - ts, 128, tw, 46, 'rgb(120,220,255)', 'tab_ships');
+    this.tabWeap = new Button('WEAPONS', W / 2, 128, tw, 46, 'rgb(255,120,90)', 'tab_weapons');
+    this.tabUpg = new Button('UPGRADES', W / 2 + ts, 128, tw, 46, 'rgb(255,205,70)', 'tab_upgrades');
     const pa = this.primaryAction();
     this.actionBtn = new Button(pa.label, W / 2, H - 166, 340, 56, pa.color, pa.action);
     this.actionBtn.selected = true; // primary CTA always shows its state colour
@@ -83,8 +96,9 @@ export class HangarState {
     audio.play('hover', 0.4);
     this.layout();
   }
-  moveUp(d) {
-    this.upIdx = (this.upIdx + d + UPGRADES.length) % UPGRADES.length;
+  moveList(d) {
+    if (this.tab === 'weapons') this.wIdx = (this.wIdx + d + WEAPONS.length) % WEAPONS.length;
+    else this.upIdx = (this.upIdx + d + UPGRADES.length) % UPGRADES.length;
     audio.play('hover', 0.4);
     this.layout();
   }
@@ -113,6 +127,21 @@ export class HangarState {
       this.layout();
     } else if (action === 'upgrade') {
       if (buyUpgrade(UPGRADES[this.upIdx].id)) { audio.playSynth('fanfare'); this.layout(); }
+    } else if (action === 'equip') {
+      progress.secondary = WEAPONS[this.wIdx].id;
+      saveProgress();
+      audio.play('click', 0.5);
+      this.layout();
+    } else if (action === 'buyw') {
+      const wp = WEAPONS[this.wIdx];
+      if (progress.credits >= wp.cost && !this.ownedWeapon(wp.id)) {
+        progress.credits -= wp.cost;
+        progress.unlockedWeapons.push(wp.id);
+        progress.secondary = wp.id;
+        saveProgress();
+        audio.playSynth('fanfare');
+        this.layout();
+      }
     } else if (action === 'back') {
       this.app.goMenu();
     } else if (action === 'export') {
@@ -139,8 +168,11 @@ export class HangarState {
     for (const s of this.stars) s.update(k);
     const p = input.pointer;
 
-    // tab switch: keys + clicks
-    if (input.pressed.has('Tab') || input.pressed.has('KeyQ')) this.setTab(this.tab === 'ships' ? 'upgrades' : 'ships');
+    // tab switch: keys + clicks (cycles SHIPS → WEAPONS → UPGRADES)
+    if (input.pressed.has('Tab') || input.pressed.has('KeyQ')) {
+      const order = ['ships', 'weapons', 'upgrades'];
+      this.setTab(order[(order.indexOf(this.tab) + 1) % order.length]);
+    }
 
     if (this.tab === 'ships') {
       if (input.pressed.has('ArrowLeft') || input.pressed.has('KeyA')) this.cycle(-1);
@@ -150,26 +182,29 @@ export class HangarState {
         if (Math.hypot(p.x - (W / 2 + 250), p.y - H * 0.4) < 44) return this.cycle(1);
       }
     } else {
-      if (input.pressed.has('ArrowDown') || input.pressed.has('KeyS')) this.moveUp(1);
-      if (input.pressed.has('ArrowUp') || input.pressed.has('KeyW')) this.moveUp(-1);
-      // click a row to select it (bands match the drawn highlight: 190 + i*52)
-      if (p.justDown && p.y > 190 && p.y < 190 + UPGRADES.length * 52) {
+      const list = this.tab === 'weapons' ? WEAPONS : UPGRADES;
+      if (input.pressed.has('ArrowDown') || input.pressed.has('KeyS')) this.moveList(1);
+      if (input.pressed.has('ArrowUp') || input.pressed.has('KeyW')) this.moveList(-1);
+      if (p.justDown && p.y > 190 && p.y < 190 + list.length * 52) {
         const row = Math.floor((p.y - 190) / 52);
-        if (row >= 0 && row < UPGRADES.length && row !== this.upIdx) { this.upIdx = row; this.layout(); }
+        const key = this.tab === 'weapons' ? 'wIdx' : 'upIdx';
+        if (row >= 0 && row < list.length && row !== this[key]) { this[key] = row; this.layout(); }
       }
     }
 
     // hover + clicks on the fixed buttons
-    for (const b of [this.tabShips, this.tabUpg, this.actionBtn, this.backBtn, this.exportBtn, this.importBtn]) {
+    for (const b of [this.tabShips, this.tabWeap, this.tabUpg, this.actionBtn, this.backBtn, this.exportBtn, this.importBtn]) {
       b.hovered = b.contains(p.x, p.y);
     }
     this.tabShips.selected = this.tab === 'ships';
+    this.tabWeap.selected = this.tab === 'weapons';
     this.tabUpg.selected = this.tab === 'upgrades';
 
     if (input.pressed.has('Enter') || input.pressed.has('NumpadEnter')) { audio.play('click', 0.55); return this.doAction(this.actionBtn.action); }
     if (input.pressed.has('Escape')) return this.app.goMenu();
     if (p.justDown) {
       if (this.tabShips.contains(p.x, p.y)) return this.setTab('ships');
+      if (this.tabWeap.contains(p.x, p.y)) return this.setTab('weapons');
       if (this.tabUpg.contains(p.x, p.y)) return this.setTab('upgrades');
       if (this.actionBtn.contains(p.x, p.y)) { audio.play('click', 0.55); return this.doAction(this.actionBtn.action); }
       if (this.exportBtn.contains(p.x, p.y)) { audio.play('click', 0.5); return this.doAction('export'); }
@@ -227,14 +262,33 @@ export class HangarState {
     });
   }
 
+  drawWeapons(g) {
+    drawText(g, 'SECONDARY WEAPON — auto-fires beside your cannon', W / 2, 178, 14, 'rgb(200,150,140)');
+    let y = 210;
+    WEAPONS.forEach((wp, i) => {
+      const owned = this.ownedWeapon(wp.id);
+      const equipped = progress.secondary === wp.id;
+      const sel = i === this.wIdx;
+      const ry = y + i * 52;
+      if (sel) { g.fillStyle = 'rgba(255,150,110,0.12)'; g.fillRect(W / 2 - 320, ry - 20, 640, 46); }
+      drawText(g, wp.name, W / 2 - 300, ry, 20, equipped ? 'rgb(0,255,140)' : sel ? '#fff' : 'rgb(200,210,225)', 'left');
+      drawText(g, wp.desc, W / 2 - 300, ry + 20, 12, 'rgb(150,150,165)', 'left');
+      const right = equipped ? 'EQUIPPED' : owned ? 'OWNED' : `${wp.cost} CR`;
+      drawText(g, right, W / 2 + 300, ry, 15, equipped ? 'rgb(0,255,140)' : owned ? 'rgb(160,200,255)' : 'rgb(255,205,70)', 'right');
+    });
+  }
+
   draw(g) {
     g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
     for (const s of this.stars) s.draw(g);
     drawText(g, 'HANGAR', W / 2, 74, 38);
     drawText(g, `◆ ${progress.credits} CR`, W - 14, 26, 17, 'rgb(120,220,255)', 'right');
     this.tabShips.draw(g);
+    this.tabWeap.draw(g);
     this.tabUpg.draw(g);
-    if (this.tab === 'ships') this.drawShips(g); else this.drawUpgrades(g);
+    if (this.tab === 'ships') this.drawShips(g);
+    else if (this.tab === 'weapons') this.drawWeapons(g);
+    else this.drawUpgrades(g);
     this.actionBtn.draw(g);
     this.backBtn.draw(g);
     this.exportBtn.draw(g);

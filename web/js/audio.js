@@ -181,6 +181,12 @@ export function playSynth(name, x = null, gain = 1) {
     // dry-fire: dull mechanical click, no musical tone — reads as "out of ammo"
     note(150, t, 0.035, 'square', 0.1, -70);
     noiseHit(t, 0.05, 0.09, 760, 280, 1.3);
+  } else if (name === 'overdrive') {
+    // OVERDRIVE unleashed: a rising power surge + a big shimmering chord
+    note(200, t, 0.5, 'sawtooth', 0.18, 900);
+    note(120, t, 0.55, 'square', 0.12, 500);
+    [523, 659, 784, 1046].forEach((f, i) => note(f, t + 0.1 + i * 0.03, 0.5, 'triangle', 0.14, 60));
+    noiseHit(t, 0.5, 0.18, 600, 3400, 1);
   } else if (name === 'plasma') {
     // x5 combo bolt: short hot sizzle layered over the gun sample
     note(1350, t, 0.09, 'sawtooth', 0.1, -850);
@@ -206,8 +212,10 @@ export function playSynth(name, x = null, gain = 1) {
 
 const musicEls = {};
 const musicGains = {};
+const musicFilters = {};
 let currentTrack = null;
 let currentBaseVol = 0.45;
+let musicIntensity = 0; // 0 = calm exploration, 1 = boss/overdrive peak
 
 function musicEl(track) {
   let el = musicEls[track];
@@ -220,9 +228,14 @@ function musicEl(track) {
     // read-only on iOS, so this is the only reliable volume control.
     try {
       const src = actx.createMediaElementSource(el);
+      // reactive low-pass: mellow while calm, opens up as the action heats up
+      const filter = actx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.value = 20000;
       const gain = actx.createGain();
-      src.connect(gain).connect(actx.destination);
+      src.connect(filter).connect(gain).connect(actx.destination);
       musicGains[track] = gain;
+      musicFilters[track] = filter;
     } catch { /* fall back to element volume below */ }
   }
   return el;
@@ -241,8 +254,23 @@ export function playMusic(track, volume = 0.45) {
   currentBaseVol = volume;
   const el = musicEl(track);
   setTrackVolume(track, volume * settings.music);
+  musicIntensity = 0; // start calm/open; the game feeds intensity per frame
+  if (musicFilters[track]) musicFilters[track].frequency.value = 20000;
   try { el.currentTime = 0; } catch {}
   if (settings.music > 0) el.play().catch(() => {}); // if blocked, the unlock handler retries
+}
+
+// Reactive music: the game feeds a 0..1 intensity (boss / combo / overdrive)
+// and the current track swells in volume and brightens (filter opens). Smooth
+// ramps keep it musical; safe to call every frame.
+export function setMusicIntensity(x) {
+  musicIntensity = Math.max(0, Math.min(1, x || 0));
+  if (!currentTrack) return;
+  const t = actx.currentTime;
+  const g = musicGains[currentTrack];
+  const f = musicFilters[currentTrack];
+  if (g) g.gain.setTargetAtTime(currentBaseVol * settings.music * (1 + 0.45 * musicIntensity), t, 0.5);
+  if (f) f.frequency.setTargetAtTime(7000 + 13000 * musicIntensity, t, 0.5); // slight mellow → full presence
 }
 
 // live-apply the music volume setting (called from the settings screen)

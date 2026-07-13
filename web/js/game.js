@@ -5,7 +5,7 @@ import * as audio from './audio.js';
 import { Button, ButtonGroup, drawText } from './ui.js';
 import { BaseWorld } from './world.js';
 import {
-  Player, Enemy, Boss, Asteroid, PowerUp, Explosion, Spark, Shockwave,
+  Player, Enemy, Boss, Asteroid, PowerUp, Explosion, Spark, Shockwave, Bullet, Rocket,
   Mine, MeshDebris, shatterSprite, RockDust, HeatRing, LightBurst, Comet, DistantConvoy, DistantRocks, Freighter, Skirmish, SpaceBattle, WarpStreak, Lightning,
   LaserBeam, ScorePopup,
   POWERUP_TYPES, POWERUP_IMG,
@@ -15,6 +15,7 @@ import { askName, submitScore, savedName } from './lb.js';
 import { bumpStats, vibrate, settings } from './settings.js';
 import { progress, awardRun } from './progress.js';
 import { SHIP_BY_ID } from './ships.js';
+import { WEAPON_BY_ID } from './weapons.js';
 import { dailySeed, todayMod, useDailyAttempt, dailyAttemptsLeft, MODS } from './daily.js';
 import { makeSpaceBackdrop, sectorName, SECTOR_THEMES } from './bggen.js';
 
@@ -226,6 +227,135 @@ export class GameState extends BaseWorld {
 
   pauseBtn() {
     return { x: W - 34, y: 72, r: 24 }; // touch pause, under the Level text
+  }
+
+  overdriveBtn() {
+    return { x: W / 2, y: H - 56, r: 44 }; // appears bottom-centre only when ready
+  }
+
+  overdriveReady() {
+    return !this.online && (this.overdrive || 0) >= 1 && !(this.overUntil && this.time < this.overUntil);
+  }
+
+  // OVERDRIVE: a super meter that fills with kills; when full the player
+  // unleashes a ~5s window of rapid, hot, wide fire that also burns incoming
+  // enemy fire near the ship. Key F / gamepad Y / on-screen button.
+  updateOverdrive() {
+    if (this.online) return;
+    const active = this.overUntil && this.time < this.overUntil;
+    const pad = input.pads[0];
+    const trig = input.pressed.has('KeyF') || (pad && pad.fire3) || this._overTouch;
+    this._overTouch = false;
+    if (!active && (this.overdrive || 0) >= 1 && trig) {
+      this.overUntil = this.time + 5000;
+      this.overdrive = 0;
+      audio.playSynth('overdrive');
+      this.shake = Math.min(12, this.shake + 6);
+      this.impactFx = Math.max(this.impactFx || 0, 0.7);
+      for (const p of this.players()) if (p.alive) this.effects.push(new Shockwave(p.x, p.y, this.time, 130, 'rgb(255,210,80)'));
+      vibrate([30, 40, 30]);
+    }
+    if (active) { // aura: melt enemy fire that comes close
+      for (const p of this.players()) {
+        if (!p.alive) continue;
+        for (const b of this.enemyBullets) {
+          if (!b.dead && (b.x - p.x) ** 2 + (b.y - p.y) ** 2 < 74 * 74) { b.dead = true; this.spawnSparks(b.x, b.y, 2); }
+        }
+      }
+    }
+  }
+
+  // secondary weapon module: auto-fires on its own cadence beside the main gun
+  fireSecondary() {
+    if (this.online || this.daily) return;
+    const w = WEAPON_BY_ID[progress.secondary];
+    if (!w || !w.cadence) return;
+    const p = this.player1;
+    if (!p || !p.alive || this.ionStorm?.phase === 'active') return;
+    if (this.time - (this.secAt || 0) < w.cadence) return;
+    this.secAt = this.time;
+    const edgeX = p.x + p.w / 2;
+    const imgs = this.app.images;
+    if (w.id === 'scatter') {
+      for (const ang of [-26, -13, 0, 13, 26]) {
+        this.bullets.push(new Bullet(edgeX, p.y, imgs.bullet2 || imgs.bullet, 10, ang));
+      }
+      audio.play('gun', 0.24, p.x, 0.8);
+    } else if (w.id === 'seeker') {
+      const rk = new Rocket(p.x, p.y, imgs.rocket);
+      rk.w = 30; rk.h = 15;
+      this.rockets.push(rk);
+      audio.play('rocket', 0.4, p.x);
+    } else if (w.id === 'pulse') {
+      const R = 100;
+      this.effects.push(new Shockwave(p.x, p.y, this.time, R, 'rgb(120,220,255)'));
+      this.effects.push(new LightBurst(p.x, p.y, this.time, 120, '120,220,255'));
+      for (const e of this.enemies) {
+        if (e.dead || e.dying || e.isBoss) continue;
+        if ((e.x - p.x) ** 2 + (e.y - p.y) ** 2 < R * R && (e.health || 1) <= 1) {
+          e.dead = true; this.explode(e.x, e.y, false); this.addKill(e.points || 10, e.x, e.y);
+        }
+      }
+      for (const b of this.enemyBullets) if (!b.dead && (b.x - p.x) ** 2 + (b.y - p.y) ** 2 < R * R) b.dead = true;
+      audio.playSynth('shield_pop', p.x);
+    }
+  }
+
+  // glowing gold aura around each ship during OVERDRIVE (world space)
+  drawOverdriveAura(g) {
+    const rem = Math.min(1, (this.overUntil - this.time) / 1600); // fade out near the end
+    const prev = g.globalCompositeOperation;
+    g.globalCompositeOperation = 'lighter';
+    for (const p of this.players()) {
+      if (!p.alive) continue;
+      const pulse = 0.6 + 0.4 * Math.sin(this.time / 70);
+      const r = 40 + 6 * Math.sin(this.time / 90);
+      const gr = g.createRadialGradient(p.x, p.y, r * 0.4, p.x, p.y, r * 1.3);
+      gr.addColorStop(0, `rgba(255,210,90,${0.26 * pulse * rem})`);
+      gr.addColorStop(1, 'rgba(255,180,40,0)');
+      g.fillStyle = gr; g.beginPath(); g.arc(p.x, p.y, r * 1.3, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = `rgba(255,220,120,${0.5 * pulse * rem})`;
+      g.lineWidth = 2;
+      g.beginPath(); g.arc(p.x, p.y, r, 0, Math.PI * 2); g.stroke();
+    }
+    g.globalCompositeOperation = prev;
+  }
+
+  // OVERDRIVE meter + ready prompt / touch button (screen space)
+  drawOverdriveHUD(g) {
+    if (this.online) return;
+    const active = this.overUntil && this.time < this.overUntil;
+    const bw = 240, bx = W / 2 - bw / 2, by = H - 30, m = this.overdrive || 0;
+    if (active) {
+      const rem = (this.overUntil - this.time) / 5000;
+      // gold edge vignette
+      const vg = g.createRadialGradient(W / 2, H / 2, H * 0.34, W / 2, H / 2, H * 0.74);
+      vg.addColorStop(0, 'rgba(255,190,40,0)');
+      vg.addColorStop(1, `rgba(255,190,40,${0.09 * (0.6 + 0.4 * Math.sin(this.time / 60))})`);
+      g.fillStyle = vg; g.fillRect(0, 0, W, H);
+      drawText(g, 'OVERDRIVE', W / 2, by - 12, 15, 'rgb(255,215,90)');
+      g.fillStyle = 'rgba(255,255,255,0.15)'; g.fillRect(bx, by, bw, 7);
+      g.fillStyle = 'rgb(255,205,70)'; g.fillRect(bx, by, bw * rem, 7);
+      return;
+    }
+    // charging bar (hidden until it starts filling)
+    if (m > 0 || this.overdriveReady()) {
+      g.fillStyle = 'rgba(255,255,255,0.12)'; g.fillRect(bx, by, bw, 7);
+      g.fillStyle = m >= 1 ? 'rgb(255,215,80)' : 'rgb(150,200,255)';
+      g.fillRect(bx, by, bw * m, 7);
+      if (this.overdriveReady()) {
+        const pulse = 0.6 + 0.4 * Math.sin(this.time / 110);
+        g.globalAlpha = pulse;
+        if (input.isTouch) {
+          const ob = this.overdriveBtn();
+          g.fillStyle = 'rgba(255,205,70,0.35)'; g.beginPath(); g.arc(ob.x, ob.y, ob.r, 0, Math.PI * 2); g.fill();
+          drawText(g, 'OD', ob.x, ob.y, 22, '#000');
+        } else {
+          drawText(g, 'OVERDRIVE READY — press F', W / 2, by - 12, 14, 'rgb(255,215,90)');
+        }
+        g.globalAlpha = 1;
+      }
+    }
   }
 
   buildOverMenu() {
@@ -527,6 +657,7 @@ export class GameState extends BaseWorld {
 
   // combo: consecutive kills raise the score multiplier (up to x5); resets on hit or 4s idle
   addKill(points, x, y) {
+    if (!this.online) this.overdrive = Math.min(1, (this.overdrive || 0) + 0.045); // fuel the OVERDRIVE meter
     this.combo += 1;
     this.comboEnd = this.time + 4000;
     const tier = Math.min(5, 1 + Math.floor(this.combo / 5));
@@ -573,6 +704,7 @@ export class GameState extends BaseWorld {
     audio.playSynth('fanfare');
     vibrate(80);
     this.bossKillCount = (this.bossKillCount || 0) + 1; // per-run, funds credits
+    if (!this.online) this.overdrive = Math.min(1, (this.overdrive || 0) + 0.25);
     this.pushToasts(bumpStats({ bossKills: 1, maxLevel: this.level }));
   }
 
@@ -816,6 +948,17 @@ export class GameState extends BaseWorld {
       }
     }
 
+    // --- reactive music: boss / combo / overdrive swell the soundtrack ---
+    if (!this.online && this.time - (this._musAt || 0) > 150) {
+      this._musAt = this.time;
+      const bossUp = this.enemies.some((e) => e.isBoss && !e.deathSeq);
+      let inten = bossUp ? 0.6 : 0;
+      inten += Math.min(0.4, (this.mult - 1) * 0.1);
+      if (this.overUntil && this.time < this.overUntil) inten += 0.4;
+      if (this.ionStorm?.phase === 'active') inten += 0.15;
+      audio.setMusicIntensity(Math.min(1, inten));
+    }
+
     // --- backdrop + shake + combo/banner timers ---
     this.updateBackdrop(dt);
     this.shake *= Math.pow(0.88, this.k);
@@ -831,6 +974,8 @@ export class GameState extends BaseWorld {
     this.parallaxOffY = (this.parallaxOffY || 0) + (ptgt - (this.parallaxOffY || 0)) * Math.min(1, 0.06 * this.k);
     this.updateCamera();
     this.handleTouch();
+    this.updateOverdrive();
+    this.fireSecondary();
     // lasers stay hot for a while — keep burning whatever crosses the line
     if (this.beams.length) {
       this.beams = this.beams.filter((b) => this.time < b.until);
@@ -936,11 +1081,14 @@ export class GameState extends BaseWorld {
     const btn = this.rocketBtn();
     const lbtn = this.laserBtn();
     const pbtn = this.pauseBtn();
+    const obtn = this.overdriveBtn();
     // multi-touch: any new finger on the rocket/laser buttons fires; the pause
     // button pauses; the first other finger owns the movement drag
     for (const [id, pt] of input.pointers) {
       if (!pt.justDown) continue;
-      if (Math.hypot(pt.x - btn.x, pt.y - btn.y) <= btn.r) {
+      if (this.overdriveReady() && Math.hypot(pt.x - obtn.x, pt.y - obtn.y) <= obtn.r) {
+        this._overTouch = true;
+      } else if (Math.hypot(pt.x - btn.x, pt.y - btn.y) <= btn.r) {
         p.fireRocket(this);
       } else if (Math.hypot(pt.x - lbtn.x, pt.y - lbtn.y) <= lbtn.r) {
         p.fireLaser(this);
@@ -1489,6 +1637,7 @@ export class GameState extends BaseWorld {
     for (const fx of this.effects) fx.draw(g, this);
     for (const r of this.rockets) r.draw(g);
     for (const r of this.enemyRockets) r.draw(g);
+    if (this.overUntil && this.time < this.overUntil) this.drawOverdriveAura(g); // behind the ships
     for (const p of this.players()) p.draw(g, this);
     g.restore();
 
@@ -1497,6 +1646,7 @@ export class GameState extends BaseWorld {
       g.fillStyle = 'rgba(80,150,255,0.08)';
       g.fillRect(0, 0, W, H);
     }
+    if (!this.over) this.drawOverdriveHUD(g);
 
     // ion storm: blue static tint, glitch slices, banner
     if (this.ionStorm) {
