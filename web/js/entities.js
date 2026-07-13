@@ -360,6 +360,7 @@ export class Player {
     this.tilt = 0;           // visual tilt when moving vertically
     this.padIndex = opts.padIndex ?? null; // gamepad slot (0 = P1, 1 = P2)
     this.lives = 3;
+    this.maxLives = 3; // for progressive damage (game.js resets after ship/upgrades)
     this.shield = false;      // absorbs one hit
     this.invulnUntil = 0;     // respawn / shield-pop grace period
     this.respawnAt = 0;
@@ -413,6 +414,15 @@ export class Player {
     if (this.poweredUp && world.time > this.powerEnd) {
       this.shootDelay = this.baseShootDelay;
       this.poweredUp = false;
+    }
+
+    // battle damage: a beaten-up hull trails smoke (and sparks near destruction)
+    const sev = this.maxLives ? clamp(1 - this.lives / this.maxLives, 0, 1) : 0;
+    if (sev > 0.3 && world.effects && world.time - (this.lastDmgSmoke || 0) > (sev > 0.6 ? 120 : 280)) {
+      this.lastDmgSmoke = world.time;
+      const rx = this.facingLeft ? this.x + this.w / 2 : this.x - this.w / 2;
+      world.effects.push(new SmokeParticle(rx, this.y + rand(-6, 6), world.time));
+      if (sev > 0.6 && Math.random() < 0.5) world.effects.push(new Spark(rx, this.y, world.time, this.facingLeft ? 0 : Math.PI));
     }
   }
 
@@ -506,6 +516,30 @@ export class Player {
     // or riding a hyperspace jump)
     drawFlames(g, this.img, thr, vw, vh, { boost: this.boosting || (world?.warpMul || 1) > 4 });
     g.drawImage(img, -vw / 2, -vh / 2, vw, vh);
+    // progressive battle damage: soot smudges scorched onto the hull + a
+    // flickering ember where it's breached (heavier the fewer lives are left)
+    const sev = this.maxLives ? Math.max(0, Math.min(1, 1 - this.lives / this.maxLives)) : 0;
+    if (sev > 0.3) {
+      g.globalAlpha = invuln ? 0.5 : 1;
+      g.fillStyle = 'rgba(10,7,4,0.6)';
+      const spots = [[-vw * 0.14, -vh * 0.06], [vw * 0.06, vh * 0.1], [-vw * 0.02, vh * 0.16]];
+      const n = sev > 0.6 ? 3 : 1;
+      for (let i = 0; i < n; i++) {
+        g.beginPath(); g.arc(spots[i][0], spots[i][1], 3 + sev * 5, 0, Math.PI * 2); g.fill();
+      }
+      g.globalAlpha = 1;
+      if (sev > 0.6) { // ember glow at the breach
+        const fl = 0.5 + 0.5 * Math.sin(t / 55);
+        const ex = -vw * 0.14, ey = -vh * 0.06;
+        const gr = g.createRadialGradient(ex, ey, 0, ex, ey, 10);
+        gr.addColorStop(0, `rgba(255,150,55,${0.85 * fl})`);
+        gr.addColorStop(0.5, `rgba(255,90,30,${0.35 * fl})`);
+        gr.addColorStop(1, 'rgba(0,0,0,0)');
+        const prev = g.globalCompositeOperation; g.globalCompositeOperation = 'lighter';
+        g.fillStyle = gr; g.beginPath(); g.arc(ex, ey, 10, 0, Math.PI * 2); g.fill();
+        g.globalCompositeOperation = prev;
+      }
+    }
     g.restore();
     g.globalAlpha = 1;
 
@@ -696,8 +730,18 @@ export class Comet {
       const r = (t.img.planetR || t.img.height / 2.7) * 0.85;
       if (Math.hypot(this.x - cx, this.y - cy) < r) {
         this.dead = true;
-        world.effects.push(new ImpactFlash(this.x, this.y, world.time));
-        if (world.effects) world.effects.push(new Shockwave(this.x, this.y, world.time, 60, 'rgb(255,230,170)'));
+        // a proper planetary impact: big bloom, shock ring, and ejecta spat
+        // back off the planet's face along the impact normal
+        world.effects.push(new ImpactFlash(this.x, this.y, world.time, 3.4));
+        world.effects.push(new Shockwave(this.x, this.y, world.time, 150, 'rgb(255,230,170)'));
+        const nx = (this.x - cx) / (Math.hypot(this.x - cx, this.y - cy) || 1);
+        const ny = (this.y - cy) / (Math.hypot(this.x - cx, this.y - cy) || 1);
+        const back = Math.atan2(ny, nx);
+        for (let i = 0; i < 16; i++) {
+          const sp = new Spark(this.x, this.y, world.time, back);
+          sp.vx *= 1.6; sp.vy *= 1.6; sp.life *= 1.5;
+          world.effects.push(sp);
+        }
       }
     }
     if (this.y > H + 60 || this.x < -160) this.dead = true;
@@ -722,11 +766,14 @@ export class Comet {
 }
 
 // Bright bloom where a comet strikes a planet — a background wow-moment.
+// scale 1 = a small convoy casualty; larger = a full planetary comet impact
+// with a hot core and a couple of expanding shock rings.
 export class ImpactFlash {
-  constructor(x, y, time) {
+  constructor(x, y, time, scale = 1) {
     this.x = x; this.y = y;
     this.spawn = time;
-    this.life = 900;
+    this.scale = scale;
+    this.life = 700 + 500 * scale;
     this.dead = false;
   }
   update(world) {
@@ -734,15 +781,31 @@ export class ImpactFlash {
   }
   draw(g, world) {
     const t = (world.time - this.spawn) / this.life;
-    const r = 6 + 26 * t;
+    const s = this.scale;
     const prev = g.globalCompositeOperation;
     g.globalCompositeOperation = 'lighter';
+    // hot bloom core
+    const r = (6 + 26 * t) * s;
     const grad = g.createRadialGradient(this.x, this.y, 0, this.x, this.y, r);
-    grad.addColorStop(0, `rgba(255,245,220,${0.9 * (1 - t)})`);
+    grad.addColorStop(0, `rgba(255,248,225,${0.9 * (1 - t)})`);
     grad.addColorStop(0.5, `rgba(255,190,110,${0.5 * (1 - t)})`);
     grad.addColorStop(1, 'rgba(0,0,0,0)');
     g.fillStyle = grad;
     g.beginPath(); g.arc(this.x, this.y, r, 0, Math.PI * 2); g.fill();
+    // expanding shock rings (only for a real impact)
+    if (s > 1.5) {
+      for (const [delay, maxR] of [[0, 70 * s], [0.18, 46 * s]]) {
+        const rt = (t - delay) / (1 - delay);
+        if (rt <= 0 || rt >= 1) continue;
+        g.globalAlpha = (1 - rt) * 0.8;
+        g.lineWidth = (5 * (1 - rt) + 1) * Math.min(2, s);
+        g.strokeStyle = 'rgb(255,214,150)';
+        g.beginPath();
+        g.arc(this.x, this.y, (1 - Math.pow(1 - rt, 2)) * maxR, 0, Math.PI * 2);
+        g.stroke();
+      }
+      g.globalAlpha = 1;
+    }
     g.globalCompositeOperation = prev;
   }
 }
@@ -803,6 +866,111 @@ export class Skirmish {
       g.moveTo(tr[0], tr[1]);
       g.lineTo(tr[0] + tr[2], tr[1]);
       g.stroke();
+    }
+    g.globalCompositeOperation = prev;
+  }
+}
+
+// Distant war: a capital ship swarmed by fighters, tracers crisscrossing, its
+// hull chipping away chunk by chunk until it goes up in a big blast. Silhouette
+// scale in the parallax depth — pure theatre, never touches gameplay.
+export class SpaceBattle {
+  constructor(images, time) {
+    this.capital = tinted(images.enemy_carrier, 'rgba(30,35,50,0.96)', 'capital_silhouette');
+    this.fighter = tinted(images.enemy_basic, 'rgba(26,32,46,0.96)', 'battle_fighter');
+    this.raider = tinted(images.enemy_hunter, 'rgba(48,22,26,0.96)', 'battle_raider');
+    this.x = W + 130;
+    this.y = 60 + Math.random() * (H * 0.5);
+    this.v = 0.26 + Math.random() * 0.18;
+    this.capW = 150 + Math.random() * 60;
+    this.capH = this.capW * (this.capital.height / this.capital.width);
+    this.hp = 7;
+    this.dying = false; this.deathAt = 0; this._faded = false;
+    this.tracers = [];  // [x1,y1,x2,y2, born, hue]
+    this.chunks = [];   // broken hull [x,y,vx,vy,rot,rv]
+    this.lastShot = 0;
+    this.nextHit = time + 2200 + Math.random() * 2200;
+    this.fighters = [];
+    for (let i = 0; i < 5; i++) {
+      this.fighters.push({
+        ox: (Math.random() < 0.5 ? -1 : 1) * (this.capW * 0.55 + Math.random() * 90),
+        oy: (Math.random() - 0.5) * 100, ph: Math.random() * 6, raider: Math.random() < 0.5,
+      });
+    }
+    this.dead = false;
+  }
+  fx(f, world) { return { x: this.x + f.ox, y: this.y + f.oy + Math.sin(world.time / 500 + f.ph) * 10 }; }
+  update(world) {
+    const wm = world.warpMul || 1;
+    this.x -= this.v * world.k * wm;
+    for (const f of this.fighters) f.ox -= this.v * 0.15 * world.k; // slow relative drift
+
+    if (!this._faded && world.time - this.lastShot > 200 + Math.random() * 240) {
+      this.lastShot = world.time;
+      const f = this.fighters[(Math.random() * this.fighters.length) | 0];
+      const fp = this.fx(f, world);
+      const toCap = Math.random() < 0.62; // fighters mostly pound the capital
+      const cap = { x: this.x + (Math.random() - 0.5) * this.capW * 0.5, y: this.y + (Math.random() - 0.5) * this.capH * 0.4 };
+      const a = toCap ? [fp.x, fp.y, cap.x, cap.y] : [cap.x, cap.y, fp.x, fp.y];
+      this.tracers.push([a[0], a[1], a[2], a[3], world.time, f.raider ? '255,120,90' : '150,210,255']);
+    }
+    this.tracers = this.tracers.filter((tr) => world.time - tr[4] < 240);
+
+    if (!this.dying && world.time > this.nextHit) {
+      this.nextHit = world.time + 1600 + Math.random() * 1600;
+      this.hp -= 1;
+      const hx = this.x + (Math.random() - 0.5) * this.capW * 0.7;
+      const hy = this.y + (Math.random() - 0.5) * this.capH * 0.6;
+      world.effects.push(new ImpactFlash(hx, hy, world.time, 1.3));
+      world.effects.push(new SmokeParticle(hx, hy, world.time));
+      if (this.hp <= 4) this.chunks.push([hx, hy, (Math.random() - 0.5) * 1.4 - 0.4, (Math.random() - 0.5) * 1.1, Math.random() * 6, (Math.random() - 0.5) * 0.2]);
+      if (this.hp <= 0) {
+        this.dying = true; this.deathAt = world.time;
+        world.effects.push(new ImpactFlash(this.x, this.y, world.time, 3));
+        world.effects.push(new Shockwave(this.x, this.y, world.time, 130, 'rgb(255,220,160)'));
+        for (let i = 0; i < 8; i++) this.chunks.push([this.x + (Math.random() - 0.5) * this.capW, this.y + (Math.random() - 0.5) * this.capH, (Math.random() - 0.5) * 2 - 0.3, (Math.random() - 0.5) * 1.6, Math.random() * 6, (Math.random() - 0.5) * 0.3]);
+      }
+    }
+    if (this.dying && world.time - this.deathAt > 900 && world.time - (this._smokeAt || 0) > 120) {
+      this._smokeAt = world.time;
+      world.effects.push(new SmokeParticle(this.x + (Math.random() - 0.5) * this.capW * 0.6, this.y, world.time));
+    }
+    for (const c of this.chunks) { c[0] += c[2] * world.k; c[1] += c[3] * world.k; c[4] += c[5] * world.k; }
+    if (this.dying && world.time - this.deathAt > 2800) this._faded = true;
+    if (this.x + this.capW < -100) this.dead = true;
+  }
+  draw(g, world) {
+    // capital hull (fades out after the killing blow)
+    const fade = this.dying ? Math.max(0, 1 - (world.time - this.deathAt) / 2800) : 1;
+    if (!this._faded) {
+      g.globalAlpha = 0.9 * fade;
+      g.drawImage(this.capital, this.x - this.capW / 2, this.y - this.capH / 2, this.capW, this.capH);
+    }
+    // fighters
+    if (!this._faded) {
+      g.globalAlpha = 0.9;
+      for (const f of this.fighters) {
+        const fp = this.fx(f, world);
+        const spr = f.raider ? this.raider : this.fighter;
+        g.drawImage(spr, fp.x - 8, fp.y - 5, 16, 10);
+      }
+    }
+    // broken chunks
+    g.globalAlpha = 0.85;
+    for (const c of this.chunks) {
+      g.save(); g.translate(c[0], c[1]); g.rotate(c[4]);
+      g.fillStyle = 'rgb(32,37,52)'; g.fillRect(-5, -3, 10, 6);
+      g.restore();
+    }
+    g.globalAlpha = 1;
+    // tracer fire (additive)
+    const prev = g.globalCompositeOperation;
+    g.globalCompositeOperation = 'lighter';
+    for (const tr of this.tracers) {
+      const a = 1 - (world.time - tr[4]) / 240;
+      g.strokeStyle = `rgba(${tr[5]},${0.75 * a})`;
+      g.lineWidth = 1.2;
+      g.beginPath(); g.moveTo(tr[0], tr[1]); g.lineTo(tr[2], tr[3]); g.stroke();
     }
     g.globalCompositeOperation = prev;
   }
@@ -2256,6 +2424,63 @@ export class MuzzleFlash {
 }
 
 /* -------------------------------- shockwave --------------------------------- */
+
+// A brief additive light flash — drawn over the scene so an explosion (or
+// muzzle) momentarily brightens the ships and rocks near it.
+export class LightBurst {
+  constructor(x, y, time, r = 80, color = '255,214,150') {
+    this.x = x; this.y = y;
+    this.spawn = time;
+    this.r = r; this.color = color;
+    this.life = 200;
+    this.dead = false;
+  }
+  update(world) {
+    if (world.time - this.spawn > this.life) this.dead = true;
+  }
+  draw(g, world) {
+    const t = (world.time - this.spawn) / this.life;
+    const a = 1 - t;
+    const r = this.r * (0.7 + 0.5 * t);
+    const prev = g.globalCompositeOperation;
+    g.globalCompositeOperation = 'lighter';
+    const gr = g.createRadialGradient(this.x, this.y, 0, this.x, this.y, r);
+    gr.addColorStop(0, `rgba(${this.color},${0.5 * a})`);
+    gr.addColorStop(0.5, `rgba(${this.color},${0.18 * a})`);
+    gr.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = gr;
+    g.beginPath(); g.arc(this.x, this.y, r, 0, Math.PI * 2); g.fill();
+    g.globalCompositeOperation = prev;
+  }
+}
+
+// Refraction shimmer for a big blast: an expanding bright/dark ring pair drawn
+// with 'overlay' so it warps whatever's behind it — a cheap heat-haze look.
+export class HeatRing {
+  constructor(x, y, time, maxR = 90) {
+    this.x = x; this.y = y;
+    this.spawn = time;
+    this.maxR = maxR;
+    this.life = 360;
+    this.dead = false;
+  }
+  update(world) {
+    if (world.time - this.spawn > this.life) this.dead = true;
+  }
+  draw(g, world) {
+    const t = Math.min(1, (world.time - this.spawn) / this.life);
+    const r = (1 - Math.pow(1 - t, 2)) * this.maxR;
+    const a = 1 - t;
+    const prev = g.globalCompositeOperation;
+    g.globalCompositeOperation = 'overlay';
+    g.lineWidth = 5 * a + 1;
+    g.strokeStyle = `rgba(255,255,255,${0.55 * a})`;
+    g.beginPath(); g.arc(this.x, this.y, r, 0, Math.PI * 2); g.stroke();
+    g.strokeStyle = `rgba(0,0,0,${0.4 * a})`;
+    g.beginPath(); g.arc(this.x, this.y, r + 3 + 2 * a, 0, Math.PI * 2); g.stroke();
+    g.globalCompositeOperation = prev;
+  }
+}
 
 export class Shockwave {
   constructor(x, y, time, maxR = 320, color = 'rgb(255,200,110)') {

@@ -6,7 +6,7 @@ import { Button, ButtonGroup, drawText } from './ui.js';
 import { BaseWorld } from './world.js';
 import {
   Player, Enemy, Boss, Asteroid, PowerUp, Explosion, Spark, Shockwave,
-  Mine, MeshDebris, shatterSprite, RockDust, Comet, DistantConvoy, DistantRocks, Freighter, Skirmish, WarpStreak, Lightning,
+  Mine, MeshDebris, shatterSprite, RockDust, HeatRing, LightBurst, Comet, DistantConvoy, DistantRocks, Freighter, Skirmish, SpaceBattle, WarpStreak, Lightning,
   LaserBeam, ScorePopup,
   POWERUP_TYPES, POWERUP_IMG,
 } from './entities.js';
@@ -162,6 +162,7 @@ export class GameState extends BaseWorld {
     // selected ship + permanent upgrades (offline non-daily only — daily/
     // versus/online stay stock so their leaderboards and sync are fair)
     if (!this.daily && !this.online) { this.applyShip(this.player1); this.applyUpgrades(this.player1); }
+    for (const p of this.players()) p.maxLives = p.lives; // baseline for damage visuals
 
     // apply daily modifier to the players
     if (this.mod) {
@@ -244,6 +245,13 @@ export class GameState extends BaseWorld {
   // visual biome for the current sector (cycles as levels climb)
   sectorTheme() {
     return SECTOR_THEMES[(this.level - 1) % SECTOR_THEMES.length];
+  }
+
+  // a hero planet currently on screen (comet impact target); null if none
+  visiblePlanet() {
+    const cands = (this.planets || []).filter((pl) =>
+      pl.x + pl.img.width > W * 0.12 && pl.x < W * 0.88);
+    return cands.length ? cands[randInt(0, cands.length - 1)] : null;
   }
 
   logEvent(name) {
@@ -475,7 +483,10 @@ export class GameState extends BaseWorld {
 
   explode(x, y, sound = true, scale = 1) {
     this.effects.push(new Explosion(x, y, this.app.images.explosion_spritesheet, this.time, scale));
+    this.effects.push(new LightBurst(x, y, this.time, 46 + 42 * scale)); // lights nearby ships/rocks
     this.shake = Math.min(12, this.shake + 3 * scale);
+    if (scale >= 1.7) this.effects.push(new HeatRing(x, y, this.time, 40 * scale)); // refraction shimmer
+    if (scale >= 1.4) this.impactFx = Math.min(1, Math.max(this.impactFx || 0, scale / 2.4)); // screen punch
     if (sound) audio.play('explosion', 0.5, x);
   }
 
@@ -757,17 +768,53 @@ export class GameState extends BaseWorld {
       } else {
         this.nextAmbientAt = this.time + 18000 + Math.random() * 26000;
         const roll = Math.random();
-        if (roll < 0.28) {
-          // a quarter of comets are on a collision course with the planet
-          const target = Math.random() < 0.25 ? this.planets?.[0] : null;
+        if (roll < 0.26) {
+          // many comets are now on a collision course with a visible planet
+          const target = Math.random() < 0.4 ? this.visiblePlanet() : null;
           this.ambient.push(new Comet(this.time, target));
-        } else if (roll < 0.5) this.ambient.push(new DistantConvoy(this.app.images, this.time));
-        else if (roll < 0.72) this.ambient.push(new Freighter(this.time));
-        else if (roll < 0.86) this.ambient.push(new Skirmish(this.app.images, this.time));
+        } else if (roll < 0.44) this.ambient.push(new DistantConvoy(this.app.images, this.time));
+        else if (roll < 0.6) this.ambient.push(new Freighter(this.time));
+        else if (roll < 0.74) this.ambient.push(new Skirmish(this.app.images, this.time));
+        else if (roll < 0.86) this.ambient.push(new SpaceBattle(this.app.images, this.time));
         else this.ambient.push(new DistantRocks(this.app.images, this.time));
       }
     }
     for (const a of this.ambient) a.update(this);
+
+    // --- eclipse: rarely a planet slides through the sector's light and the
+    // scene dims while a corona flares around its limb (backdrop-only dim) ---
+    this.nextEclipseAt ??= this.time + 60000 + randInt(0, 60000);
+    if (!this.eclipse && this.time > this.nextEclipseAt && !this.bossSpawned && !this.bossWarnStart && !this.warp) {
+      const pl = this.visiblePlanet();
+      if (pl) this.eclipse = { start: this.time, dur: 6500, planet: pl };
+      else this.nextEclipseAt = this.time + 12000; // no planet up — try again soon
+    }
+    if (this.eclipse && this.time - this.eclipse.start > this.eclipse.dur) {
+      this.eclipse = null;
+      this.nextEclipseAt = this.time + 80000 + randInt(0, 70000);
+    }
+
+    // --- gravity well: a rare singularity that bends fire, flings rocks and
+    // sucks in power-ups; a gentle (dodgeable) tug on the ship, lethal core ---
+    this.nextSingAt ??= this.time + 90000 + randInt(0, 70000);
+    if (!this.singularity && this.time > this.nextSingAt && spawningAllowed &&
+        !this.bossSpawned && !this.bossWarnStart && !this.warp && !this.ionStorm && !this.shower) {
+      this.singularity = { x: W * (0.55 + Math.random() * 0.2), y: H * (0.3 + Math.random() * 0.4), start: this.time, dur: 10000, coreR: 0, env: 0 };
+      audio.playSynth('storm');
+      this.logEvent('SINGULARITY');
+      vibrate([40, 60, 40]);
+    }
+    if (this.singularity) {
+      const s = this.singularity;
+      const t = (this.time - s.start) / s.dur;
+      if (t >= 1) { this.singularity = null; this.nextSingAt = this.time + 120000 + randInt(0, 90000); }
+      else {
+        s.env = t < 0.15 ? t / 0.15 : t > 0.82 ? (1 - t) / 0.18 : 1; // grow / hold / collapse
+        s.coreR = 26 * s.env;
+        s.x -= 0.12 * this.speedMul * this.k; // drifts left with the world
+        this.applySingularity();
+      }
+    }
 
     // --- backdrop + shake + combo/banner timers ---
     this.updateBackdrop(dt);
@@ -775,6 +822,7 @@ export class GameState extends BaseWorld {
     if (this.combo > 0 && this.time > this.comboEnd) this.resetCombo();
     if (this.levelBanner && this.time - this.levelBanner.start >= 2200) this.levelBanner = null;
     if (this.dmgFlash > 0) this.dmgFlash = Math.max(0, this.dmgFlash - 0.03 * this.k);
+    if (this.impactFx > 0) this.impactFx = Math.max(0, this.impactFx - 0.07 * this.k);
 
     // --- updates ---
     for (const p of this.players()) p.update(this);
@@ -1429,6 +1477,8 @@ export class GameState extends BaseWorld {
 
     this.drawBackdrop(g);
     for (const a of this.ambient) a.draw(g, this);
+    if (this.eclipse) this.drawEclipse(g);
+    if (this.singularity) this.drawSingularity(g);
 
     for (const pu of this.powerups) pu.draw(g, this);
     for (const a of this.asteroids) a.draw(g);
@@ -1741,6 +1791,110 @@ export class GameState extends BaseWorld {
         }
       }
     }
+
+    // big-hit / boss-phase screen punch: additive ghosts of the frame offset
+    // left+right for a chromatic-split impact (device pixels, motion off)
+    if (this.impactFx > 0.03 && settings.motionFx) {
+      const cv = g.canvas, off = Math.round(this.impactFx * cv.width * 0.004);
+      g.save();
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      g.globalCompositeOperation = 'lighter';
+      g.globalAlpha = 0.28 * this.impactFx;
+      g.drawImage(cv, -off, 0);
+      g.drawImage(cv, off, 0);
+      g.restore();
+    }
+  }
+
+  // gravity well physics: inverse-square pull on projectiles, rocks, power-ups
+  // and the ship; anything reaching the core is consumed (the ship dies).
+  applySingularity() {
+    const s = this.singularity;
+    const G = 32000 * s.env, MIN = 46, k = this.k;
+    const pull = (ox, oy) => {
+      const dx = s.x - ox, dy = s.y - oy;
+      const d2 = Math.max(MIN * MIN, dx * dx + dy * dy);
+      const d = Math.sqrt(d2);
+      const f = (G / d2) * k;
+      return { fx: (dx / d) * f, fy: (dy / d) * f, d };
+    };
+    for (const a of this.asteroids) { // rocks get flung, then swallowed
+      if (a.dead) continue;
+      const p = pull(a.x, a.y);
+      a.vx -= p.fx; a.vy += p.fy; // a.vx is leftward speed → subtract to add screen vx
+      if (p.d < s.coreR + a.w * 0.3) { a.dead = true; this.spawnRockDust(a.x, a.y, a.w); }
+    }
+    for (const arr of [this.bullets, this.enemyBullets]) {
+      for (const b of arr) {
+        if (b.dead) continue;
+        const p = pull(b.x, b.y);
+        b.vx += p.fx; b.vy += p.fy;
+        if (p.d < s.coreR) b.dead = true;
+      }
+    }
+    for (const pu of this.powerups) { // drawn in
+      if (pu.dead) continue;
+      const p = pull(pu.x, pu.baseY);
+      pu.vx += p.fx * 0.8;
+      pu.baseY += clamp(p.fy, -1.6, 1.6);
+      if (p.d < s.coreR + 8) pu.dead = true;
+    }
+    for (const pl of this.players()) { // a gentle, fightable tug; lethal core
+      if (!pl.alive) continue;
+      const p = pull(pl.x, pl.y);
+      pl.x = clamp(pl.x + clamp(p.fx, -1.7, 1.7), pl.w / 2, W - pl.w / 2);
+      pl.y = clamp(pl.y + clamp(p.fy, -1.7, 1.7), pl.h / 2, H - pl.h / 2);
+      if (p.d < s.coreR + pl.h * 0.35) this.killPlayer(pl, s.x, s.y);
+    }
+  }
+
+  // gravity well visual: accretion glow + rotating arcs + black event horizon
+  drawSingularity(g) {
+    const s = this.singularity;
+    const R = Math.max(1, s.coreR), t = this.time - s.start;
+    const prev = g.globalCompositeOperation;
+    g.globalCompositeOperation = 'lighter';
+    const glow = g.createRadialGradient(s.x, s.y, R * 0.85, s.x, s.y, R * 3.4);
+    glow.addColorStop(0, `rgba(180,120,255,${0.55 * s.env})`);
+    glow.addColorStop(0.4, `rgba(90,60,200,${0.22 * s.env})`);
+    glow.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = glow;
+    g.beginPath(); g.arc(s.x, s.y, R * 3.4, 0, Math.PI * 2); g.fill();
+    for (let i = 0; i < 2; i++) { // rotating accretion arcs
+      g.strokeStyle = `rgba(215,175,255,${0.5 * s.env})`;
+      g.lineWidth = 2;
+      const a0 = t / 260 + i * Math.PI;
+      g.beginPath(); g.arc(s.x, s.y, R * 1.7, a0, a0 + Math.PI * 0.85); g.stroke();
+    }
+    g.globalCompositeOperation = prev;
+    g.fillStyle = '#000';
+    g.beginPath(); g.arc(s.x, s.y, R, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = `rgba(150,110,220,${0.75 * s.env})`;
+    g.lineWidth = 2;
+    g.beginPath(); g.arc(s.x, s.y, R, 0, Math.PI * 2); g.stroke();
+  }
+
+  // eclipse: dim the backdrop and flare a corona around the eclipsing planet
+  drawEclipse(g) {
+    const e = this.eclipse;
+    const t = (this.time - e.start) / e.dur;
+    const env = t < 0.2 ? t / 0.2 : t > 0.7 ? (1 - t) / 0.3 : 1; // fade in / hold / out
+    g.fillStyle = `rgba(4,6,14,${0.5 * env})`;
+    g.fillRect(0, 0, W, H);
+    const pl = e.planet;
+    const cx = pl.x + pl.img.width / 2, cy = pl.y + pl.img.height / 2;
+    const r = pl.img.planetR || pl.img.height / 2.7;
+    const prev = g.globalCompositeOperation;
+    g.globalCompositeOperation = 'lighter';
+    g.globalAlpha = env * (0.5 + 0.14 * Math.sin(this.time / 130));
+    const cor = g.createRadialGradient(cx, cy, r * 0.92, cx, cy, r * 1.4);
+    cor.addColorStop(0, 'rgba(0,0,0,0)');
+    cor.addColorStop(0.45, 'rgba(255,240,210,0.55)');
+    cor.addColorStop(1, 'rgba(255,240,210,0)');
+    g.fillStyle = cor;
+    g.beginPath(); g.arc(cx, cy, r * 1.4, 0, Math.PI * 2); g.fill();
+    g.globalAlpha = 1;
+    g.globalCompositeOperation = prev;
   }
 
   // pause overlay + this run's stats above the base menu
