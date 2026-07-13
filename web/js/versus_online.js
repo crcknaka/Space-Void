@@ -10,6 +10,7 @@ import { Button, ButtonGroup, drawText } from './ui.js';
 import { BaseWorld } from './world.js';
 import { Player, Bullet, Explosion, BoostParticle, Rocket, LaserBeam } from './entities.js';
 import { savedName } from './lb.js';
+import { VsArena, applyVsPod } from './versus_arena.js';
 
 const SCORE_LIMIT = 10;
 const SEND_MS = 33; // ~30Hz ship state
@@ -62,6 +63,12 @@ export class VersusOnline extends BaseWorld {
     this.remoteBullets = [];  // opponent's — I check these vs myself
     this.localRockets = [];   // mine — cosmetic, home toward the opponent
     this.remoteRockets = [];  // incoming — home toward me, checked vs me
+    // hazards + pods: the host decides spawns and mirrors them; both peers
+    // simulate the same objects, and I still only judge hits on MY ship
+    this.arena = new VsArena(images, {
+      authority: this.net.isHost,
+      send: (e) => this.net.send({ k: 'hz', ...e }),
+    });
     this.resetAmmo();
 
     this.myName = savedName() || 'PILOT';
@@ -85,9 +92,19 @@ export class VersusOnline extends BaseWorld {
     p.rockets = 2; p.lasers = 1;
     p.rkRegenAt = 0; p.lzRegenAt = 0;
     p.lastRk = -9999; p.lastLz = -9999;
+    p.shield = false; p.spreadUntil = 0;
   }
 
-  localDie() {
+  localDie(hx, hy) {
+    if (this.time < (this.local.invulnUntil || 0)) return; // spawn / shield-pop grace
+    if (this.local.shield) { // shield pod absorbs one hit of anything
+      const p = this.local;
+      p.shield = false;
+      p.shieldRipple = { a: hx !== undefined ? Math.atan2(hy - p.y, hx - p.x) : Math.PI, start: this.time };
+      p.invulnUntil = this.time + 800;
+      audio.playSynth('shield_pop', p.x);
+      return;
+    }
     this.local.alive = false;
     this.localRespawn = this.time + 1000;
     this.effects.push(new Explosion(this.local.x, this.local.y, this.app.images.explosion_spritesheet, this.time));
@@ -103,6 +120,7 @@ export class VersusOnline extends BaseWorld {
     this.rematchMe = false; this.rematchThem = false;
     this.localBullets = []; this.remoteBullets = [];
     this.localRockets = []; this.remoteRockets = [];
+    this.arena.reset(this.time);
     this.resetAmmo();
     this.spawnLocal();
     this.remote.alive = true;
@@ -147,13 +165,15 @@ export class VersusOnline extends BaseWorld {
   onMessage(m) {
     if (m.k === 'go' && this.phase === 'wait') { this.phase = 'countdown'; this.countdown = 3000; }
     else if (m.k === 'hi') { this.oppName = String(m.name || 'OPPONENT').slice(0, 14); }
-    else if (m.k === 's') { this.remote.tx = m.x; this.remote.ty = m.y; this.remote.alive = !!m.a; }
+    else if (m.k === 's') { this.remote.tx = m.x; this.remote.ty = m.y; this.remote.alive = !!m.a; this.remote.shield = !!m.sh; }
     else if (m.k === 'f') {
       // Bullet auto-flips its sprite from the sign of vx, so left-moving
       // opponent shots render correctly with no extra handling.
-      this.remoteBullets.push(new Bullet(m.x, m.y, this.app.images.bullet, m.vx));
+      this.remoteBullets.push(new Bullet(m.x, m.y, this.app.images.bullet, m.vx, m.a || 0));
       audio.play('gun', 0.22, m.x, 0.95 + Math.random() * 0.1);
     }
+    else if (m.k === 'hz') { this.arena.apply(this, m); }         // host-spawned hazard/pod
+    else if (m.k === 'pt') { this.arena.removePod(m.id); }        // opponent claimed a pod
     else if (m.k === 'rf') {
       // incoming rocket homes toward MY ship; I check it against myself
       const angle = this.remoteId === 1 ? 0 : 180;
@@ -166,7 +186,7 @@ export class VersusOnline extends BaseWorld {
       audio.playSynth('plaser', m.x0);
       if (this.local.alive && this.time > (this.local.invulnUntil || 0) &&
           Math.abs(this.local.y - m.y) < LZ_BAND && (m.dir > 0 ? this.local.x > m.x0 : this.local.x < m.x0)) {
-        this.localDie();
+        this.localDie(m.x0, m.y);
       }
     }
     // The victim is authoritative for the score after its own death and sends
@@ -215,8 +235,12 @@ export class VersusOnline extends BaseWorld {
     // shoot — auto-fire on touch (no room for a fire button while dragging)
     const firing = input.isTouch || k.has('Space') || k.has('Enter') || k.has('NumpadEnter') || (pad && pad.fire);
     if (firing && this.time - p.lastShot > p.shootDelay) {
-      this.localBullets.push(new Bullet(edgeX, p.y, this.app.images.bullet, vx));
-      this.net.send({ k: 'f', x: edgeX, y: p.y, vx });
+      const n = p.spreadUntil > this.time ? 3 : 1; // spread pod: 3-bolt fan
+      for (let i = 0; i < n; i++) {
+        const a = (i - (n - 1) / 2) * 8;
+        this.localBullets.push(new Bullet(edgeX, p.y, this.app.images.bullet, vx, a));
+        this.net.send({ k: 'f', x: edgeX, y: p.y, vx, a });
+      }
       p.lastShot = this.time;
       audio.play('gun', 0.22, edgeX, 0.95 + Math.random() * 0.1);
     }
@@ -332,17 +356,32 @@ export class VersusOnline extends BaseWorld {
       for (const r of this.localRockets) r.update(this);
       for (const r of this.remoteRockets) r.update(this);
 
+      // arena hazards: spawn (host) / advance, bend fire near the well,
+      // soak shots on rocks; only MY ship is judged here (I own my death)
+      this.arena.update(this);
+      this.arena.applyGravity(this, [this.localBullets, this.remoteBullets], [this.local],
+        () => this.localDie(this.arena.sing.x, this.arena.sing.y));
+      this.arena.collideBullets(this, [this.localBullets, this.remoteBullets, this.localRockets, this.remoteRockets]);
+      if (this.local.alive) {
+        const hit = this.arena.hazardHit(this, this.local);
+        if (hit) this.localDie(hit.x, hit.y);
+      }
+      if (this.local.alive) {
+        const pod = this.arena.tryPickup(this, this.local);
+        if (pod) { applyVsPod(this.local, pod.type, this.time); this.net.send({ k: 'pt', id: pod.id }); }
+      }
+
       // remote bullets & rockets vs local ship — I own my death
       if (this.local.alive && this.time > (this.local.invulnUntil || 0)) {
         for (const b of this.remoteBullets) {
           if (b.dead) continue;
           if (Math.abs(b.x - this.local.x) < (b.w + this.local.w * 0.8) / 2 &&
               Math.abs(b.y - this.local.y) < (b.h + this.local.h * 0.8) / 2) {
-            b.dead = true; this.localDie(); break;
+            b.dead = true; this.localDie(b.x, b.y); break;
           }
         }
         for (const r of this.remoteRockets) {
-          if (!r.dead && overlap(this.local, r, 0.9)) { r.dead = true; this.localDie(); break; }
+          if (!r.dead && overlap(this.local, r, 0.9)) { r.dead = true; this.localDie(r.x, r.y); break; }
         }
       }
 
@@ -350,7 +389,7 @@ export class VersusOnline extends BaseWorld {
       this.sendAcc += dt;
       if (this.sendAcc >= SEND_MS) {
         this.sendAcc = 0;
-        this.net.send({ k: 's', x: Math.round(this.local.x), y: Math.round(this.local.y), a: this.local.alive ? 1 : 0 });
+        this.net.send({ k: 's', x: Math.round(this.local.x), y: Math.round(this.local.y), a: this.local.alive ? 1 : 0, sh: this.local.shield ? 1 : 0 });
       }
     }
 
@@ -370,6 +409,7 @@ export class VersusOnline extends BaseWorld {
 
   draw(g) {
     this.drawBackdrop(g);
+    this.arena.draw(g, this);
 
     for (const b of this.localBullets) b.draw(g);
     for (const b of this.remoteBullets) b.draw(g);

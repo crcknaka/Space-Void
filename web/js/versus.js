@@ -6,6 +6,7 @@ import * as audio from './audio.js';
 import { Button, ButtonGroup, drawText } from './ui.js';
 import { BaseWorld } from './world.js';
 import { Player, Bullet, Explosion, Rocket, LaserBeam } from './entities.js';
+import { VsArena, applyVsPod } from './versus_arena.js';
 
 const SCORE_LIMIT = 10;
 const RK_MAX = 3, RK_REGEN = 3500, RK_CD = 700;   // rockets: 3 max, refill every 3.5s
@@ -66,7 +67,9 @@ export class VersusState extends BaseWorld {
       p.rockets = 2; p.lasers = 1;       // starting secondary ammo
       p.rkRegenAt = 0; p.lzRegenAt = 0;
       p.lastRk = -9999; p.lastLz = -9999;
+      p.spreadUntil = 0;
     }
+    this.arena = new VsArena(images); // hazards + pods; local play is always authority
     this.respawn1 = 0;
     this.respawn2 = 0;
     this.spawn(this.player1, 1);
@@ -103,7 +106,7 @@ export class VersusState extends BaseWorld {
     this.shake = Math.min(12, (this.shake || 0) + 3);
     // instant hit if the opponent is on the beam's path and side
     if (opponent.alive && Math.abs(opponent.y - p.y) < LZ_BAND && (dir > 0 ? opponent.x > x0 : opponent.x < x0)) {
-      this.kill(opponent, id);
+      this.kill(opponent, id, x0, p.y);
     }
   }
 
@@ -115,6 +118,7 @@ export class VersusState extends BaseWorld {
     p.y = randInt(50, H - 50);
     p.x = side === 1 ? randInt(50, W / 2 - 50) + p.w / 2 : randInt(W / 2 + 50, W - 50) - p.w / 2;
     p.alive = true;
+    p.invulnUntil = this.time + 1500; // grace blink, same as online
   }
 
   buildWinMenu() {
@@ -138,7 +142,8 @@ export class VersusState extends BaseWorld {
     if (this.time - p.lastShot <= p.shootDelay) return;
     const vx = p.facingLeft ? -10 : 10;
     const edgeX = p.facingLeft ? p.x - p.w / 2 : p.x + p.w / 2;
-    bullets.push(new Bullet(edgeX, p.y, this.app.images.bullet, vx));
+    const n = p.spreadUntil > this.time ? 3 : 1; // spread pod: 3-bolt fan
+    for (let i = 0; i < n; i++) bullets.push(new Bullet(edgeX, p.y, this.app.images.bullet, vx, (i - (n - 1) / 2) * 8));
     p.lastShot = this.time;
     audio.play('gun', 0.22, p.x, 0.95 + Math.random() * 0.1);
   }
@@ -171,28 +176,44 @@ export class VersusState extends BaseWorld {
     for (const r of this.rockets) r.update(this);
     for (const fx of this.effects) fx.update(this);
 
+    // arena hazards: spawn/advance, bend fire near the well, soak shots on rocks
+    this.arena.update(this);
+    this.arena.applyGravity(this, [this.bullets1, this.bullets2], [this.player1, this.player2],
+      (pl) => this.kill(pl, pl === this.player1 ? 2 : 1, this.arena.sing.x, this.arena.sing.y, true));
+    this.arena.collideBullets(this, [this.bullets1, this.bullets2, this.rockets]);
+    for (const [p, other] of [[this.player1, 2], [this.player2, 1]]) {
+      if (p.alive) {
+        const hit = this.arena.hazardHit(this, p);
+        if (hit) this.kill(p, other, hit.x, hit.y, true);
+      }
+      if (p.alive) {
+        const pod = this.arena.tryPickup(this, p);
+        if (pod) applyVsPod(p, pod.type, this.time);
+      }
+    }
+
     // rockets vs the opponent
     for (const r of this.rockets) {
       if (r.dead) continue;
       const foe = r.ownerId === 1 ? this.player2 : this.player1;
-      if (foe.alive && overlap(foe, r, 0.9)) { r.dead = true; this.kill(foe, r.ownerId); }
+      if (foe.alive && this.time > (foe.invulnUntil || 0) && overlap(foe, r, 0.9)) { r.dead = true; this.kill(foe, r.ownerId, r.x, r.y); }
     }
 
     // hits
-    if (this.player1.alive) {
+    if (this.player1.alive && this.time > (this.player1.invulnUntil || 0)) {
       for (const b of this.bullets2) {
         if (!b.dead && overlap(this.player1, b, 0.8)) {
           b.dead = true;
-          this.kill(this.player1, 2);
+          this.kill(this.player1, 2, b.x, b.y);
           break;
         }
       }
     }
-    if (this.player2.alive) {
+    if (this.player2.alive && this.time > (this.player2.invulnUntil || 0)) {
       for (const b of this.bullets1) {
         if (!b.dead && overlap(this.player2, b, 0.8)) {
           b.dead = true;
-          this.kill(this.player2, 1);
+          this.kill(this.player2, 1, b.x, b.y);
           break;
         }
       }
@@ -220,10 +241,19 @@ export class VersusState extends BaseWorld {
     }
   }
 
-  kill(p, byPlayer) {
+  // hazard=true: environmental death (opponent still scores, no kill voice)
+  kill(p, byPlayer, hx, hy, hazard) {
+    if (this.time < (p.invulnUntil || 0)) return; // spawn / shield-pop grace
+    if (p.shield) { // shield pod absorbs one hit of anything
+      p.shield = false;
+      p.shieldRipple = { a: hx !== undefined ? Math.atan2(hy - p.y, hx - p.x) : Math.PI, start: this.time };
+      p.invulnUntil = this.time + 800;
+      audio.playSynth('shield_pop', p.x);
+      return;
+    }
     this.effects.push(new Explosion(p.x, p.y, this.app.images.explosion_spritesheet, this.time));
     audio.play('explosion', 0.5);
-    audio.play(byPlayer === 1 ? 'player1_kill' : 'player2_kill', 0.7);
+    if (!hazard) audio.play(byPlayer === 1 ? 'player1_kill' : 'player2_kill', 0.7);
     p.alive = false;
     if (byPlayer === 1) { this.score1 += 1; this.respawn2 = this.time + 1000; }
     else { this.score2 += 1; this.respawn1 = this.time + 1000; }
@@ -231,6 +261,7 @@ export class VersusState extends BaseWorld {
 
   draw(g) {
     this.drawBackdrop(g);
+    this.arena.draw(g, this);
 
     for (const b of this.bullets1) b.draw(g);
     for (const b of this.bullets2) b.draw(g);
