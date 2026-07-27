@@ -134,7 +134,13 @@ def game_loop(cooperative=False):
     asteroid_spawn_interval = 5000  # Initial spawn interval for asteroids
 
     pygame.time.set_timer(ADDENEMY, enemy_spawn_interval)
-    pygame.time.set_timer(ADDPOWERUP, 1000)  # Spawn power-up every 10 seconds
+
+    def schedule_powerup_spawn():
+        """Schedule the next power-up spawn with a random delay."""
+        powerup_interval = random.randint(4000, 15000)
+        pygame.time.set_timer(ADDPOWERUP, powerup_interval)
+
+    schedule_powerup_spawn()
     pygame.time.set_timer(ADDASTEROID, asteroid_spawn_interval)
 
     # Background image
@@ -165,22 +171,24 @@ def game_loop(cooperative=False):
                 all_sprites.add(enemy)
                 enemies.add(enemy)
                 combined_targets.add(enemy)
-            if event.type == ADDPOWERUP and not paused:
-                powerup_type = random.choice(['shooting', 'slow_motion', 'kill_all', 'rocket', 'spread', ])
-                if powerup_type == 'shooting':
-                    powerup_image = assets['powerup_img']
-                elif powerup_type == 'slow_motion':
-                    powerup_image = assets['slow_motion_powerup_img']
-                elif powerup_type == 'kill_all':
-                    powerup_image = assets['kill_all_powerup_img']
-                elif powerup_type == 'rocket':
-                    powerup_image = assets['rocket_powerup_img']   
-                elif powerup_type == 'spread':  # Add new power-up
-                    powerup_image = assets['spread_powerup_img']  # Add this to your assets
-                
-                powerup = PowerUp(powerup_image, powerup_type)
-                all_sprites.add(powerup)
-                powerups.add(powerup)
+            if event.type == ADDPOWERUP:
+                schedule_powerup_spawn()
+                if not paused:
+                    powerup_type = random.choice(['shooting', 'slow_motion', 'kill_all', 'rocket', 'spread', ])
+                    if powerup_type == 'shooting':
+                        powerup_image = assets['powerup_img']
+                    elif powerup_type == 'slow_motion':
+                        powerup_image = assets['slow_motion_powerup_img']
+                    elif powerup_type == 'kill_all':
+                        powerup_image = assets['kill_all_powerup_img']
+                    elif powerup_type == 'rocket':
+                        powerup_image = assets['rocket_powerup_img']
+                    elif powerup_type == 'spread':  # Add new power-up
+                        powerup_image = assets['spread_powerup_img']  # Add this to your assets
+
+                    powerup = PowerUp(powerup_image, powerup_type)
+                    all_sprites.add(powerup)
+                    powerups.add(powerup)
                 
             if event.type == ADDASTEROID and not paused:
                 asteroid = Asteroid(assets['asteroid_img'], 'large')
