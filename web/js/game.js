@@ -29,6 +29,10 @@ const P2_CONTROLS = {
   laser: 'Numpad1', laserAlt: 'Slash',
 };
 
+// 3D chase camera looks down +x, so the keys rotate with it: A/D strafe, W/S fore/aft
+const P1_CHASE_CONTROLS = { ...P1_CONTROLS, up: 'KeyA', down: 'KeyD', left: 'KeyS', right: 'KeyW' };
+const P2_CHASE_CONTROLS = { ...P2_CONTROLS, up: 'ArrowLeft', down: 'ArrowRight', left: 'ArrowDown', right: 'ArrowUp' };
+
 // Distinct per-player identity: HUD colour + ship tint (null = keep art as-is)
 export const PLAYER_COLORS = ['rgb(90,200,255)', 'rgb(90,255,140)', 'rgb(255,170,60)', 'rgb(230,120,255)'];
 const PLAYER_TINTS = [null, 'rgba(90,255,140,0.45)', 'rgba(255,150,40,0.55)', 'rgba(220,90,255,0.5)'];
@@ -178,7 +182,7 @@ export class GameState extends BaseWorld {
   // Swap the local ship's hull + stats to the player's chosen ship. Cosmetic
   // sprite plus a stat block over Player defaults; keeps daily/online stock.
   applyShip(p) {
-    const ship = SHIP_BY_ID[progress.selectedShip] || SHIP_BY_ID.vanguard;
+    const ship = SHIP_BY_ID[this.app.debugShip] || SHIP_BY_ID[progress.selectedShip] || SHIP_BY_ID.vanguard;
     const spr = this.app.images.ships?.[ship.id];
     if (spr) p.img = spr; // baked hull carries its own bankFrames
     const s = ship.stats || {};
@@ -227,6 +231,10 @@ export class GameState extends BaseWorld {
 
   pauseBtn() {
     return { x: W - 34, y: 72, r: 24 }; // touch pause, under the Level text
+  }
+
+  camBtn() {
+    return { x: W - 88, y: 72, r: 22 }; // touch: next 3D camera (left of pause)
   }
 
   overdriveBtn() {
@@ -719,6 +727,30 @@ export class GameState extends BaseWorld {
     }
     this.k = dt / STEP;
 
+    // 3D renderer: V cycles the camera (top → tilt → chase), G swaps to the
+    // classic canvas graphics and back (offline; online keeps the fixed field)
+    const v3 = this.online ? null : this.app.view3d;
+    if (v3 && input.pressed.has('KeyV')) v3.cycle();
+    if (v3 && input.pressed.has('KeyG')) v3.setEnabled(!v3.enabled);
+    const chase = !!(v3?.active && v3.mode === 'chase');
+    this.player1.controls = chase ? P1_CHASE_CONTROLS : P1_CONTROLS;
+    this.player1.chase = chase;
+    if (this.player2 && !this.online) {
+      this.player2.controls = chase ? P2_CHASE_CONTROLS : P2_CONTROLS;
+      this.player2.chase = chase;
+    }
+
+    if (this.app.debugFreezeAt && this.time >= this.app.debugFreezeAt) return; // debug still frame
+    if (this.app.debugAutoFire && this.time - (this._dbgFire || 0) > 1600) { // debug: exercise laser + rockets
+      this._dbgFire = this.time;
+      this.player1.lasers = Math.max(this.player1.lasers, 1); this.player1.rockets = Math.max(this.player1.rockets, 2);
+      this.player1.fireLaser(this); this.player1.fireRocket(this);
+    }
+    if (this.app.debugBossDie && this.time >= this.app.debugBossDie) {
+      const b = this.enemies.find((e) => e.isBoss && !e.deathSeq);
+      if (b) { b.health = Math.min(b.health, 1); b.shieldUntil = 0; b.shieldBreaks = []; }
+    }
+
     if (!this.over && this.handlePause()) return;
 
     if (this.over) {
@@ -1092,6 +1124,9 @@ export class GameState extends BaseWorld {
         p.fireRocket(this);
       } else if (Math.hypot(pt.x - lbtn.x, pt.y - lbtn.y) <= lbtn.r) {
         p.fireLaser(this);
+      } else if (!this.online && this.app.view3d?.active && Math.hypot(pt.x - this.camBtn().x, pt.y - this.camBtn().y) <= this.camBtn().r) {
+        this.app.view3d.cycle();
+        this.drag = null; // the drag axes rotate with the camera
       } else if (Math.hypot(pt.x - pbtn.x, pt.y - pbtn.y) <= pbtn.r) {
         // top-right button: leave in online, pause otherwise
         if (this.online) this.requestLeave = true;
@@ -1113,8 +1148,11 @@ export class GameState extends BaseWorld {
     if (this.drag) {
       const pt = input.pointers.get(this.drag.id);
       if (pt) {
-        p.x = clamp(this.drag.ox + (pt.x - this.drag.px) * 1.25, p.w / 2, W - p.w / 2);
-        p.y = clamp(this.drag.oy + (pt.y - this.drag.py) * 1.25, p.h / 2, H - p.h / 2);
+        // chase camera: dragging up flies forward (+x), dragging right strafes (+y)
+        const ddx = p.chase ? -(pt.y - this.drag.py) : pt.x - this.drag.px;
+        const ddy = p.chase ? pt.x - this.drag.px : pt.y - this.drag.py;
+        p.x = clamp(this.drag.ox + ddx * 1.25, p.w / 2, W - p.w / 2);
+        p.y = clamp(this.drag.oy + ddy * 1.25, p.h / 2, H - p.h / 2);
       } else {
         this.drag = null; // finger lifted
       }
@@ -1611,6 +1649,8 @@ export class GameState extends BaseWorld {
   draw(g) {
     const { images } = this.app;
 
+    const v3 = !this.online && this.app.view3d?.active ? this.app.view3d : null;
+    if (v3) this.draw3D(g, v3); else {
     g.save();
     // cinematic camera (uniform → collisions stay honest) + screen shake
     const z = this.camZoom || 1;
@@ -1640,6 +1680,10 @@ export class GameState extends BaseWorld {
     if (this.overUntil && this.time < this.overUntil) this.drawOverdriveAura(g); // behind the ships
     for (const p of this.players()) p.draw(g, this);
     g.restore();
+    // 3D was asked for but is not (yet) drawing: say why instead of silently showing classic
+    const v3c = this.online ? null : this.app.view3d;
+    if (v3c?.enabled && (v3c.loading || v3c.failed)) drawText(g, v3c.label, 10, H - 14, 12, 'rgba(150,200,255,0.6)', 'left');
+    }
 
     // slow-motion tint
     if (this.speedMul < 1) {
@@ -1681,7 +1725,7 @@ export class GameState extends BaseWorld {
 
     // boss-kill soft white flash, fading through the slow-mo
     if (this.killFlash > 0) {
-      g.fillStyle = `rgba(255,240,205,${0.28 * this.killFlash})`;
+      g.fillStyle = `rgba(255,240,205,${(v3 ? 0.07 : 0.28) * this.killFlash})`; // 3D already blooms: a hint is enough
       g.fillRect(0, 0, W, H);
       this.killFlash = Math.max(0, this.killFlash - 0.022 * this.k);
     }
@@ -1733,7 +1777,7 @@ export class GameState extends BaseWorld {
       const t = (this.time - this.levelBanner.start) / 2200;
       if (t < 1) {
         if (t < 0.12) {
-          g.fillStyle = `rgba(255,255,255,${0.18 * (1 - t / 0.12)})`;
+          g.fillStyle = `rgba(255,255,255,${(v3 ? 0.05 : 0.18) * (1 - t / 0.12)})`;
           g.fillRect(0, 0, W, H);
         }
         const pop = Math.min(1, t * 6);
@@ -1858,6 +1902,13 @@ export class GameState extends BaseWorld {
       drawText(g, '⚡', lb.x, lb.y - 4, 26, '#000');
       drawText(g, `${p1.lasers}`, lb.x, lb.y + 18, 20, '#000');
 
+      if (!this.online && this.app.view3d?.active) { // camera button
+        const cb = this.camBtn();
+        g.globalAlpha = 0.3; g.fillStyle = '#fff';
+        g.beginPath(); g.arc(cb.x, cb.y, cb.r - 4, 0, Math.PI * 2); g.fill();
+        g.globalAlpha = 0.85;
+        drawText(g, 'CAM', cb.x, cb.y + 1, 11, '#000');
+      }
       const pb = this.pauseBtn();
       g.globalAlpha = 0.3;
       g.fillStyle = '#fff';
@@ -1954,6 +2005,42 @@ export class GameState extends BaseWorld {
       g.drawImage(cv, off, 0);
       g.restore();
     }
+  }
+
+  // 3D view: the WebGL layer under this canvas draws the world; here only
+  // clear to transparent and add the bits Boss.draw used to paint in 2D
+  draw3D(g, v3) {
+    g.clearRect(0, 0, W, H);
+    try { v3.render(this); } catch (e) { // never leave a dead frame: classic takes over from the next one
+      console.error('3D view failed, falling back to classic graphics:', e);
+      window.__svlog?.push(`ERR 3D render: ${e.message} | ${(e.stack || '').split('\n')[1] || ''}`);
+      v3.failed = true;
+    }
+    // HUD backing: the sky can be bright (sun glare, nebulae) — keep the top row legible
+    const hb = g.createLinearGradient(0, 0, 0, 96);
+    hb.addColorStop(0, 'rgba(0,0,0,0.42)');
+    hb.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = hb;
+    g.fillRect(0, 0, W, 96);
+    const boss = this.enemies.find((e) => e.isBoss && !e.dead);
+    if (boss) {
+      const bw = Math.min(360, W * 0.4), bx = W / 2 - bw / 2, by = 62;
+      g.fillStyle = 'rgba(255,255,255,0.2)';
+      g.fillRect(bx, by, bw, 8);
+      g.fillStyle = boss.shieldUntil > this.time ? 'rgb(90,220,255)' : boss.flash > 0.05 ? '#fff' : '#f33';
+      g.fillRect(bx, by, (bw * Math.max(0, boss.health)) / boss.maxHealth, 8);
+    }
+    // score popups live in sim space — pin them to where that point lands on screen
+    for (const fx of this.effects) {
+      if (!(fx instanceof ScorePopup) || fx.dead) continue;
+      const sp = v3.toScreen(fx.x, fx.y);
+      if (!sp) continue;
+      const t = (this.time - fx.spawn) / fx.life;
+      g.globalAlpha = t < 0.7 ? 1 : Math.max(0, 1 - (t - 0.7) / 0.3);
+      drawText(g, fx.text, sp.x, sp.y - 18 - t * 30, 16, fx.color);
+      g.globalAlpha = 1;
+    }
+    if (!input.isTouch) drawText(g, `${v3.label}  ·  V — next   G — classic graphics`, 10, H - 14, 12, 'rgba(150,200,255,0.6)', 'left');
   }
 
   // gravity well physics: inverse-square pull on projectiles, rocks, power-ups

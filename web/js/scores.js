@@ -75,9 +75,12 @@ export class ScoresState {
   }
 
   draw(g) {
-    g.fillStyle = '#000';
-    g.fillRect(0, 0, W, H);
-    for (const s of this.stars) s.draw(g);
+    if (this.app.view3d?.backdrop(g)) { g.fillStyle = 'rgba(0,0,0,0.5)'; g.fillRect(0, 0, W, H); }
+    else {
+      g.fillStyle = '#000';
+      g.fillRect(0, 0, W, H);
+      for (const s of this.stars) s.draw(g);
+    }
 
     drawText(g, this.mode === 'daily' ? 'DAILY TOP 10' : 'GLOBAL TOP 10', W / 2, 100, 38, 'rgb(255,210,80)');
     for (const b of this.tabButtons) b.draw(g);

@@ -124,6 +124,18 @@ export class MenuState {
   }
 
   draw(g) {
+    // 3D graphics: the menu floats over the live sky, with the equipped hull
+    // idling beside the buttons when there is room for it
+    if (this.app.view3d?.backdrop(g, W > 900
+      ? { ship: progress.selectedShip, x: W * 0.2, y: H * 0.6, size: Math.min(300, W * 0.2) }
+      : { ship: null })) {
+      // dim the centre column a touch so the buttons and text stay crisp
+      const dim = g.createRadialGradient(W / 2, H / 2, 60, W / 2, H / 2, Math.max(360, H * 0.6));
+      dim.addColorStop(0, 'rgba(0,0,0,0.42)');
+      dim.addColorStop(1, 'rgba(0,0,0,0)');
+      g.fillStyle = dim;
+      g.fillRect(0, 0, W, H);
+    } else {
     g.fillStyle = '#000';
     g.fillRect(0, 0, W, H);
 
@@ -156,9 +168,10 @@ export class MenuState {
 
     for (const s of this.staticStars) s.draw(g);
     for (const s of this.stars) s.draw(g);
+    }
 
     drawText(g, 'SPACE VOID', W / 2, H / 2 - 315, 58);
-    drawText(g, 'v1.2 web', W / 2, H / 2 - 275, 19, 'rgb(150,150,150)');
+    drawText(g, 'v2.0', W / 2, H / 2 - 275, 19, 'rgb(150,150,150)');
     if (this.app.highScore > 0) {
       drawText(g, `BEST: ${this.app.highScore}`, W / 2, H / 2 - 243, 22, 'rgb(255,210,80)');
     }

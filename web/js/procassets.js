@@ -9,8 +9,7 @@ import { SHIPS, shipOverrides } from './ships.js';
 import { bossStaticMesh, BOSS_VIEW } from './bossgen.js';
 import {
   renderMesh, fitTransform, projectPoint, VIEW, makeRng,
-  newMesh, addLathe, addPlateY, addPlateZ,
-} from './mesh3d.js';
+  newMesh, addLathe, addPlateY, addPlateZ, withDetail } from './mesh3d.js';
 
 const SEEDS = { player1: 4, player2: 2, basic: 3, weaver: 2, hunter: 1, tank: 5, boss: 7, sniper: 6, carrier: 2, shieldbearer: 4, strafer: 8, brood: 12 };
 const LEFT = { ...VIEW, ry: Math.PI }; // enemies fly (and are drawn) facing left
@@ -493,34 +492,44 @@ function makeFlames(inner, outer) {
 
 /* --------------------------------- main ----------------------------------- */
 
+// mesh + a thunk that regenerates the same model at high tessellation for the
+// WebGL view (view3d.js calls mesh.hi3d() lazily, the first time it is shown)
+const HI = 3;
+function hiMesh(make) {
+  const m = make();
+  m.hi3d = () => withDetail(HI, make);
+  return m;
+}
+const ship = (seed, family, over) => hiMesh(() => genShip(seed, family, over));
+
 export function generateSprites(images) {
   // player ships (+ 3D bank frames used by Player.draw via img.bankFrames)
-  const p1 = genShip(SEEDS.player1, 'player');
+  const p1 = ship(SEEDS.player1, 'player');
   images.player1_ship = bakeInto(p1, 100, 60);
   images.player1_ship.bankFrames = bakeBankFrames(p1, 100, 60);
-  const p2 = genShip(SEEDS.player2, 'player', { hue: [300, 322], accHue: [298, 315] });
+  const p2 = ship(SEEDS.player2, 'player', { hue: [300, 322], accHue: [298, 315] });
   images.player2_ship = bakeInto(p2, 100, 60);
   images.player2_ship.bankFrames = bakeBankFrames(p2, 100, 60);
 
   // selectable player ships (Phase 5) — one baked hull per roster entry
   images.ships = {};
   for (const s of SHIPS) {
-    const mesh = genShip(s.seed, 'player', shipOverrides(s));
+    const mesh = ship(s.seed, 'player', shipOverrides(s));
     const spr = bakeInto(mesh, 100, 60);
     spr.bankFrames = bakeBankFrames(mesh, 100, 60);
     images.ships[s.id] = spr;
   }
 
   // enemy families — one distinct generated ship per type, facing left
-  images.enemy_basic = bakeInto(genShip(SEEDS.basic, 'basic'), 100, 60, LEFT);
-  images.enemy_weaver = bakeInto(genShip(SEEDS.weaver, 'weaver'), 100, 60, LEFT);
-  images.enemy_hunter = bakeInto(genShip(SEEDS.hunter, 'hunter'), 100, 60, LEFT);
-  images.enemy_tank = bakeInto(genShip(SEEDS.tank, 'tank'), 132, 80, LEFT);
-  images.enemy_sniper = bakeInto(genShip(SEEDS.sniper, 'sniper'), 108, 48, LEFT);
-  images.enemy_carrier = bakeInto(genShip(SEEDS.carrier, 'carrier'), 144, 88, LEFT);
-  images.enemy_shieldbearer = bakeInto(genShip(SEEDS.shieldbearer, 'shieldbearer'), 104, 64, LEFT);
-  images.enemy_strafer = bakeInto(genShip(SEEDS.strafer, 'strafer'), 124, 68, LEFT);
-  images.enemy_brood = bakeInto(genShip(SEEDS.brood, 'brood'), 112, 64, LEFT);
+  images.enemy_basic = bakeInto(ship(SEEDS.basic, 'basic'), 100, 60, LEFT);
+  images.enemy_weaver = bakeInto(ship(SEEDS.weaver, 'weaver'), 100, 60, LEFT);
+  images.enemy_hunter = bakeInto(ship(SEEDS.hunter, 'hunter'), 100, 60, LEFT);
+  images.enemy_tank = bakeInto(ship(SEEDS.tank, 'tank'), 132, 80, LEFT);
+  images.enemy_sniper = bakeInto(ship(SEEDS.sniper, 'sniper'), 108, 48, LEFT);
+  images.enemy_carrier = bakeInto(ship(SEEDS.carrier, 'carrier'), 144, 88, LEFT);
+  images.enemy_shieldbearer = bakeInto(ship(SEEDS.shieldbearer, 'shieldbearer'), 104, 64, LEFT);
+  images.enemy_strafer = bakeInto(ship(SEEDS.strafer, 'strafer'), 124, 68, LEFT);
+  images.enemy_brood = bakeInto(ship(SEEDS.brood, 'brood'), 112, 64, LEFT);
   images.enemy_ship = images.enemy_basic; // wreck tints & fallbacks
   // static level-1 boss (coop guests see this; the host renders bosses live)
   images.boss = bakeInto(bossStaticMesh(1), 300, 300, BOSS_VIEW, 0.94);
@@ -539,8 +548,8 @@ export function generateSprites(images) {
     images.asteroids.push(r);
   });
   images.asteroid = images.asteroids[0];
-  images.rocket = bakeInto(rocketMesh(), 48, 24, VIEW, 0.95);
-  images.enemy_rocket = bakeInto(rocketMesh([125, 62, 68], [255, 75, 60]), 48, 24, VIEW, 0.95);
+  images.rocket = bakeInto(hiMesh(() => rocketMesh()), 48, 24, VIEW, 0.95);
+  images.enemy_rocket = bakeInto(hiMesh(() => rocketMesh([125, 62, 68], [255, 75, 60])), 48, 24, VIEW, 0.95);
   images.bullet = makeBolt('rgb(255,225,120)', 'rgba(255,190,70,0.9)');
   // combo-tier bolts: hotter and bigger as the multiplier climbs
   images.bullet2 = makeBolt('rgb(255,190,80)', 'rgba(255,140,40,0.95)', 28, 14);

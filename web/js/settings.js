@@ -13,7 +13,11 @@ function save(key, val) {
 
 // motionFx: screen shake + the dynamic follow camera. Off = a calm, fixed
 // framing for players who find the motion distracting or nauseating.
-export const settings = load(S_KEY, { music: 0.6, sfx: 0.6, vibro: true, motionFx: true });
+// gfx3d: WebGL renderer (three cameras) vs the classic 2D canvas look. On by
+// default on desktop; phones start classic (lighter) and can opt in.
+// cam3d: last used 3D camera — 'top' (classic framing) | 'tilt' | 'chase'.
+const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+export const settings = load(S_KEY, { music: 0.6, sfx: 0.6, vibro: true, motionFx: true, gfx3d: !coarse, cam3d: 'top' });
 export function saveSettings() { save(S_KEY, settings); }
 
 export const stats = load(T_KEY, {

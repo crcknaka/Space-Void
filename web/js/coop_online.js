@@ -550,7 +550,7 @@ export class CoopGuest extends BaseWorld {
     for (const a of [ang, ang + Math.PI / 2]) {
       g.save();
       g.translate(cx, cy);
-      g.rotate(-a);
+      g.rotate(a); // matches the host hit test (was mirrored)
       if (tele) {
         g.globalAlpha = 0.35 + 0.3 * Math.sin(this.time / 55);
         g.strokeStyle = 'rgb(255,60,60)';

@@ -1,0 +1,299 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>rocks3d harness</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  #err { position: fixed; left: 0; top: 0; right: 0; max-height: 100%; overflow: hidden; color: #fff; background: rgba(160, 0, 0, .92);
+    font: 12px/1.35 monospace; white-space: pre-wrap; padding: 8px; display: none; z-index: 10; }
+  #info { position: fixed; left: 6px; bottom: 4px; right: 6px; color: #9ab; font: 11px/1.3 monospace; z-index: 5; text-shadow: 0 0 3px #000; white-space: pre-wrap; }
+  .lbl { position: fixed; color: #cde; font: 11px monospace; text-shadow: 0 0 3px #000, 0 0 3px #000; transform: translate(-50%, 0); z-index: 4; white-space: nowrap; }
+</style>
+<script type="importmap">{ "imports": { "three": "../vendor/three.module.min.js" } }</script>
+</head>
+<body>
+<div id="err"></div><div id="info"></div>
+<script>
+  /* rocks3d dev harness (same renderer / bloom / tone mapping / environment / lights as view3d.js)
+     single rock   ?variant=N&volcanic=1&size=120&view=beauty|top|tilt|chase&sun=<azimuth deg>&el=<elevation deg>&rot=<deg>&spin=1
+                   &dist=<n> (beauty camera distance in diameters)  &vs=1,2,V0,... (grid of beauty shots)  &lod=0..3 (force)  &n=2 (two orientations side by side)
+     contact sheet ?sheet=1[&rot=deg]            all 8 + 3 variants at 150, 60 and 30
+     game line-up  ?lineup=1&view=top|tilt|chase  sizes 30/60/110/200 of every variant at game scale
+     break         ?break=1&variant=N&size=140&t=<ms>[&chip=1][&volcanic=1][&fx=0][&view=...][&zoom=2]   deterministic timeline
+                   ?break=1&strip=1&variant=N&size=140   six ages (40/100/200/400/800/1400 ms) side by side
+     common        &zoom=<n>&cx=<x>&cz=<z> (game cameras) &bloom=0 &bg=0 &bright=0.82 &fx=0 &info=0 &seed=<n> &live=1 &tune=key:val,key:val &warm=1 (rocks.warmup) &async=1 (time-sliced builds, use with &live=1) */
+  const errBox = document.getElementById('err');
+  function showErr(m) { errBox.style.display = 'block'; errBox.textContent += m + '\n'; }
+  window.onerror = (m, s, l, c, e) => showErr(`${m} @ ${s}:${l}:${c}\n${e && e.stack || ''}`);
+  window.onunhandledrejection = (e) => showErr('REJECTION: ' + (e.reason && (e.reason.stack || e.reason.message) || e.reason));
+  {
+    const q = new URLSearchParams(location.search);
+    let a = (+q.get('seed') || 12345) >>> 0;
+    Math.random = () => { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from '../vendor/three-addons/postprocessing/EffectComposer.js';
+import { RenderPass } from '../vendor/three-addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from '../vendor/three-addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from '../vendor/three-addons/postprocessing/OutputPass.js';
+import { RoomEnvironment } from '../vendor/three-addons/environments/RoomEnvironment.js';
+const { Rocks3D } = await import('../js/rocks3d.js?v=' + Date.now());
+let Fx3D = null;
+const Q = new URLSearchParams(location.search);
+if (Q.get('fx') !== '0') { try { ({ Fx3D } = await import('../js/fx3d.js?v=' + Date.now())); } catch (e) { showErr('fx3d failed to load (continuing without): ' + e.message); } }
+
+const num = (k, d) => (Q.has(k) && Q.get(k) !== '' && isFinite(+Q.get(k)) ? +Q.get(k) : d);
+const W = 1400, H = 790, FOV = 50, CHASE_FOV = 40, DT = 16.67, MESH = 1.2;
+const vw = window.innerWidth, vh = window.innerHeight;
+const MODE = Q.get('sheet') ? 'sheet' : Q.get('lineup') ? 'lineup' : Q.get('break') ? 'break' : 'single';
+const VIEW = Q.get('view') || (MODE === 'single' ? 'beauty' : MODE === 'sheet' ? 'top' : 'tilt');
+
+const gl = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+document.body.appendChild(gl.domElement);
+gl.setPixelRatio(num('pr', 1));
+gl.setSize(vw, vh, false);
+gl.toneMapping = THREE.ACESFilmicToneMapping;
+gl.toneMappingExposure = 1.0;
+gl.debug.onShaderError = (g, prog, vs, fs) => {
+  showErr('SHADER ERROR\nprogram: ' + g.getProgramInfoLog(prog) + '\nVS: ' + g.getShaderInfoLog(vs) + '\nFS: ' + g.getShaderInfoLog(fs));
+};
+
+const scene = new THREE.Scene();
+if (Q.get('bg') === '0') scene.background = new THREE.Color(0x000000);
+else {
+  const c = document.createElement('canvas'); c.width = 512; c.height = 288;
+  const g = c.getContext('2d');
+  const gr = g.createLinearGradient(0, 0, 512, 288);
+  gr.addColorStop(0, '#0a1230'); gr.addColorStop(0.5, '#1a1038'); gr.addColorStop(1, '#06202a');
+  g.fillStyle = gr; g.fillRect(0, 0, 512, 288);
+  g.fillStyle = '#fff';
+  for (let i = 0; i < 260; i++) { g.globalAlpha = Math.random() * 0.8; g.fillRect(Math.random() * 512, Math.random() * 288, 1, 1); }
+  const tx = new THREE.CanvasTexture(c); tx.colorSpace = THREE.SRGBColorSpace;
+  scene.background = tx; scene.backgroundIntensity = 0.42;
+}
+const pmrem = new THREE.PMREMGenerator(gl);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environmentIntensity = 0.55;
+pmrem.dispose();
+const sun = new THREE.DirectionalLight(0xfff0dc, 2.7);
+sun.position.set(-0.45, 1, 0.55);
+if (Q.has('sun') || Q.has('el')) {
+  const az = (num('sun', 130) * Math.PI) / 180, el = (num('el', 40) * Math.PI) / 180;
+  sun.position.set(Math.cos(az) * Math.cos(el), Math.sin(el), Math.sin(az) * Math.cos(el));
+}
+scene.add(sun, new THREE.HemisphereLight(0x8fb8ff, 0x1a1420, 0.9));
+
+// ---- cameras (the three game framings, as in view3d.js) ----
+const cam = new THREE.PerspectiveCamera(FOV, vw / vh, 5, 30000);
+const hTop = (H / 2) / Math.tan((FOV * Math.PI) / 360);
+const zoom = num('zoom', 1), cx = num('cx', 0), cz = num('cz', 0);
+const PLAYER = { x: -420, z: 0 };
+function gameCam(view) {
+  cam.up.set(0, 1, 0); cam.fov = FOV;
+  if (view === 'top') {
+    cam.position.set(cx, hTop / zoom, cz + 0.01); cam.up.set(0, 0, -1); cam.lookAt(cx, 0, cz);
+  } else if (view === 'chase') {
+    cam.fov = CHASE_FOV / zoom;
+    cam.position.set(PLAYER.x - 540, 330, PLAYER.z * 0.84);
+    cam.lookAt(PLAYER.x + 470 + cx, 0, PLAYER.z * 0.84 * 0.92 + cz);
+  } else {
+    cam.position.set(cx - W * 0.04 / zoom, hTop * 0.74 / zoom, cz + hTop * 0.74 / zoom);
+    cam.lookAt(cx, 0, cz + H * 0.07 / zoom);
+  }
+  cam.updateProjectionMatrix(); cam.updateMatrixWorld();
+}
+
+const composer = new EffectComposer(gl, new THREE.WebGLRenderTarget(256, 256, { type: THREE.HalfFloatType, samples: 4 }));
+composer.setPixelRatio(num('pr', 1));
+composer.setSize(vw, vh);
+composer.addPass(new RenderPass(scene, cam));
+if (Q.get('bloom') !== '0') composer.addPass(new UnrealBloomPass(new THREE.Vector2(256, 256), 0.5, 0.8, 0.9));
+composer.addPass(new OutputPass());
+
+const fx = Fx3D ? new Fx3D(THREE, scene, { quality: 1 }) : null;
+const rocks = new Rocks3D(THREE, scene, { fx, sync: Q.get('async') !== '1' });
+if (Q.has('bright')) rocks.setBrightness(num('bright', 1));
+if (Q.get('tune')) {
+  const t = {};
+  for (const kv of Q.get('tune').split(',')) { const [k, v] = kv.split(':'); t[k] = +v; }
+  rocks.setTune(t);
+}
+if (Q.get('warm') === '1') rocks.warmup(gl, cam);
+window.rocks = rocks; window.fx = fx;
+
+const labels = [];
+function label(text, x, y, z) { labels.push({ text, p: new THREE.Vector3(x, y, z) }); }
+function placeLabels() {
+  for (const l of labels) {
+    const v = l.p.clone().project(cam);
+    const d = document.createElement('div'); d.className = 'lbl'; d.textContent = l.text;
+    d.style.left = ((v.x * 0.5 + 0.5) * vw) + 'px'; d.style.top = ((-v.y * 0.5 + 0.5) * vh) + 'px';
+    document.body.appendChild(d);
+  }
+}
+
+const live = []; // spinning rocks
+const AX = new THREE.Vector3();
+function addRock(variant, volcanic, size, x, z, rotDeg, y = 0) {
+  const lodForce = Q.has('lod') ? [20, 50, 100, 200][num('lod', 3)] : size;
+  const r = rocks.create(variant, volcanic, lodForce);
+  r.scale.setScalar(size * MESH);
+  r.position.set(x, y, z);
+  // deterministic tumble axis per rock
+  const s = variant * 12.9898 + (volcanic ? 40 : 0) + size * 0.37;
+  AX.set(Math.sin(s) * 0.7, 0.6 + 0.4 * Math.cos(s * 1.7), Math.cos(s * 2.3) * 0.7).normalize();
+  r.userData.axis = AX.clone();
+  r.userData.rot0 = rotDeg;
+  r.quaternion.setFromAxisAngle(r.userData.axis, (rotDeg * Math.PI) / 180);
+  scene.add(r);
+  live.push(r);
+  return r;
+}
+const NAMES = (vol) => (vol ? rocks.volcanicVariantNames : rocks.variantNames);
+const ALL = [];
+for (let i = 0; i < rocks.variantCount; i++) ALL.push([i, false]);
+for (let i = 0; i < rocks.volcanicVariantCount; i++) ALL.push([i, true]);
+
+let frame = 0, TEND = num('t', 0);
+const each = [];
+const variant = num('variant', 0), volcanic = Q.get('volcanic') === '1', size = num('size', 120), rot = num('rot', 30);
+
+if (MODE === 'single') {
+  const n = num('n', 1);
+  if (VIEW === 'beauty') {
+    const d = num('dist', 2.1) * size * MESH;
+    cam.fov = 30; cam.position.set(-d * 0.55, d * 0.42, d * 0.72); cam.lookAt(0, 0, 0);
+    cam.updateProjectionMatrix(); cam.updateMatrixWorld();
+    if (Q.get('vs')) {
+      // &vs=1,2,4,V0,7,5 → a grid of beauty shots (3 columns), camera pulled back to fit
+      const list = Q.get('vs').split(','), cols = Math.min(3, list.length), rows = Math.ceil(list.length / cols), sp = size * 1.55;
+      const dd = num('dist', 2.1) * size * MESH * Math.max(cols * 0.8, rows * 1.3);
+      cam.position.set(0, dd * 0.9, dd * 0.42); cam.lookAt(0, 0, 0); cam.updateMatrixWorld();
+      list.forEach((t, i) => {
+        const vol = t[0] === 'V', v = +(vol ? t.slice(1) : t);
+        addRock(v, vol, size, ((i % cols) - (cols - 1) / 2) * sp, (Math.floor(i / cols) - (rows - 1) / 2) * sp, rot);
+      });
+    } else
+    for (let i = 0; i < n; i++) addRock(variant, volcanic, size, (i - (n - 1) / 2) * size * 1.5, 0, rot + i * 140);
+  } else {
+    gameCam(VIEW);
+    for (let i = 0; i < n; i++) addRock(variant, volcanic, size, cx + (i - (n - 1) / 2) * size * 1.6, cz, rot + i * 140);
+  }
+} else if (MODE === 'sheet') {
+  gameCam(VIEW);
+  const cols = 6;
+  ALL.forEach(([v, vol], i) => {
+    const x = ((i % cols) - (cols - 1) / 2) * 215 - (i >= cols ? 0 : 0), z = -280 + Math.floor(i / cols) * 215;
+    addRock(v, vol, 150, x + (i >= cols ? 107 : 0), z, rot);
+    label((vol ? 'V' : '') + v + ' ' + NAMES(vol)[v], x + (i >= cols ? 107 : 0), 0, z + 104);
+  });
+  ALL.forEach(([v, vol], i) => {
+    addRock(v, vol, 60, (i - 5) * 112, 175, rot + 80);
+    addRock(v, vol, 30, (i - 5) * 112 - 22, 290, rot + 160);
+    addRock(v, vol, 30, (i - 5) * 112 + 22, 290, rot + 250);
+  });
+} else if (MODE === 'lineup') {
+  gameCam(VIEW);
+  // every variant at the four gameplay size classes, laid out across the play field
+  const sizes = [30, 60, 110, 200];
+  if (VIEW === 'chase') {
+    ALL.forEach(([v, vol], i) => {
+      const s = sizes[i % 4];
+      addRock(v, vol, s, -260 + (i % 6) * 190 + (i >= 6 ? 60 : 0), (i >= 6 ? 1 : -1) * (110 + (i % 3) * 60), rot + i * 37);
+    });
+    addRock(1, false, 200, -520, -210, rot); addRock(6, false, 110, -600, 150, rot + 50); addRock(0, true, 150, -330, 230, rot + 99);
+  } else {
+    ALL.forEach(([v, vol], i) => {
+      const x = -610 + i * 122;
+      addRock(v, vol, 200, x, -230 + (i & 1) * 40, rot + i * 37);
+      addRock(v, vol, 110, x, 0 + (i & 1) * 30, rot + i * 53);
+      addRock(v, vol, 60, x, 150, rot + i * 71);
+      addRock(v, vol, 30, x - 20, 240, rot + i * 91);
+      addRock(v, vol, 30, x + 24, 262, rot + i * 13);
+      label((vol ? 'V' : '') + v, x, 0, 300);
+    });
+  }
+} else if (MODE === 'break') {
+  gameCam(VIEW);
+  const q = new THREE.Quaternion();
+  const boom = (v, vol, s, x, z, delayMs, chip) => {
+    const r = addRock(v, vol, s, x, z, rot);
+    q.copy(r.quaternion);
+    let done = false, chips = 0;
+    each.push((T) => {
+      if (chip) {
+        // a giant soaking hits every 120 ms
+        while (chips * 120 + delayMs <= T) {
+          // the rock keeps turning between hits, so each one lands on a different face (hits=N limits their number)
+          if (chips >= num('hits', 99)) break;
+          r.quaternion.setFromAxisAngle(r.userData.axis, ((rot + chips * num('turn', 34)) * Math.PI) / 180);
+          chips++;
+          const o = { x: x - s * 0.45, y: 0, z, size: s, dirX: 1, dirZ: 0, volcanic: vol, variant: v };
+          // &face=1: say exactly where the hit landed (a world direction from the rock's centre) — here: towards the camera
+          if (Q.get('face') === '1') { const d = cam.position.clone().sub(r.position).normalize(); o.object = r; o.nx = d.x + (chips - 2) * 0.45; o.ny = d.y; o.nz = d.z + ((chips * 7) % 3 - 1) * 0.4; }
+          rocks.chip(o);
+        }
+        return;
+      }
+      if (done || T < delayMs) return;
+      done = true;
+      scene.remove(r);
+      rocks.shatter({ x, y: 0, z, size: s, variant: v, volcanic: vol, quaternion: q.clone(), vx: -0.06, vz: 0.01, byImpact: { dirX: 1, dirZ: 0 } });
+    });
+  };
+  if (Q.get('strip')) {
+    // one rock, six ages: every copy is shattered so that at the end it is exactly that old
+    const ages = [40, 100, 200, 400, 800, 1400];
+    TEND = 1400 + DT;
+    ages.forEach((a, i) => {
+      const x = -560 + i * 224 + cx, z = (i & 1 ? 90 : -90) + cz;
+      boom(variant, volcanic, size, x, z, TEND - a, false);
+      label(a + ' ms', x, 0, z + size * 1.1);
+    });
+  } else if (Q.get('multi')) {
+    ALL.forEach(([v, vol], i) => boom(v, vol, [140, 60, 200, 100][i % 4], -560 + (i % 6) * 220 + (i >= 6 ? 110 : 0), i >= 6 ? 150 : -150, DT, false));
+  } else boom(variant, volcanic, size, cx, cz, DT, Q.get('chip') === '1');
+}
+
+function step() {
+  frame++;
+  const T = frame * DT;
+  if (fx) fx.update(DT, cam, gl.domElement.height);
+  for (const f of each) f(T);
+  rocks.update(DT);
+  if (fx) fx.commit();
+}
+const info = document.getElementById('info');
+function draw() {
+  composer.render();
+  const s = rocks.stats();
+  let tris = 0;
+  for (const r of live) if (r.parent) tris += r.geometry.index.count / 3;
+  info.textContent = `${MODE} view=${VIEW} t=${Math.round(frame * DT)}ms | rocks ${live.filter((r) => r.parent).length} (${tris} tris) | debris ${s.fragments} bursts ${s.bursts} draws ${s.drawCalls} tris ${s.tris} | build ${rocks.buildMs.toFixed(0)}ms pending ${s.pendingBuilds} | gl calls ${gl.info.render.calls} tris ${gl.info.render.triangles}`
+    + (MODE === 'single' ? ` | ${(volcanic ? 'V' : '') + variant} ${NAMES(volcanic)[variant % NAMES(volcanic).length]} size ${size} lod ${live[0].userData.rock.lod}` : '');
+  if (Q.get('info') === '0') info.style.display = 'none';
+}
+rocks.flushBuilds();
+if (Q.get('live') === '1' || Q.get('spin') === '1') {
+  const spin = Q.get('spin') === '1';
+  const loop = () => {
+    step();
+    if (spin) for (const r of live) r.quaternion.setFromAxisAngle(r.userData.axis, ((r.userData.rot0 + frame * 0.35) * Math.PI) / 180);
+    draw();
+    requestAnimationFrame(loop);
+  };
+  loop();
+} else {
+  const N = Math.max(1, Math.round(TEND / DT));
+  for (let i = 0; i < N; i++) step();
+  draw(); draw();
+  placeLabels();
+  document.title = 'done';
+}
+</script>
+</body>
+</html>

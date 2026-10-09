@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>hull material harness</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font: 12px/1.35 ui-monospace, Menlo, monospace; color: #9fc0ff; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  #hud { position: absolute; left: 8px; bottom: 6px; white-space: pre; text-shadow: 0 1px 2px #000; pointer-events: none; }
+  #tags { position: absolute; inset: 0; pointer-events: none; }
+  #tags span { position: absolute; transform: translate(-50%, 0); color: #cfe0ff; text-shadow: 0 1px 2px #000; }
+  #err { position: absolute; left: 0; top: 0; right: 0; max-height: 100%; overflow: auto; white-space: pre-wrap; background: rgba(120,0,0,.92); color: #fff; padding: 8px; display: none; z-index: 9; font-size: 11px; }
+</style>
+<script type="importmap">{ "imports": { "three": "../vendor/three.module.min.js" } }</script>
+</head>
+<body>
+<div id="tags"></div>
+<div id="hud"></div>
+<div id="err"></div>
+<script>
+  // on-page error overlay: headless screenshots have no console
+  window.showErr = (m) => { const e = document.getElementById('err'); e.style.display = 'block'; e.textContent += m + '\n'; };
+  window.onerror = (m, src, line, col, e) => window.showErr(`${m}\n  ${src}:${line}:${col}\n${e && e.stack || ''}`);
+  window.addEventListener('unhandledrejection', (e) => window.showErr('unhandled: ' + (e.reason && (e.reason.stack || e.reason.message) || e.reason)));
+</script>
+<script type="module">
+// Harness for web/js/hullmat3d.js — same renderer / bloom / tone mapping / lights as view3d.js.
+//   ?view=lineup|boss|core|freighter|debris   what to show
+//   &cam=top|tilt|chase|beauty                camera (lineup: top; boss: beauty)
+//   &mat=hull|plain|split                     new material, the old plain one, or both side by side
+//   &flash= &dim= &damage= &heat= &warp= &opacity=   per-instance state knobs (0..1)
+//   &q=1|0.5  &level=1..  &zoom=1  &t=<ms, freezes time>  &spin=1  &anim=setDamage|setHeat|…  &scale=
+//   &n=<extra instances of every kind>  &mixop=1  &progs=1 (list programs)  &bench=<passes> (GPU ms in HUD + document.title)
+import * as THREE from 'three';
+import { EffectComposer } from '../vendor/three-addons/postprocessing/EffectComposer.js';
+import { RenderPass } from '../vendor/three-addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from '../vendor/three-addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from '../vendor/three-addons/postprocessing/OutputPass.js';
+import { RoomEnvironment } from '../vendor/three-addons/environments/RoomEnvironment.js';
+import { toCreasedNormals } from '../vendor/three-addons/utils/BufferGeometryUtils.js';
+import { genShip, genFreighter } from '../js/shipgen.js';
+import { genBoss, genBossCore } from '../js/bossgen.js';
+import { withDetail } from '../js/mesh3d.js';
+import { HullMaterials } from '../js/hullmat3d.js';
+
+const Q = new URLSearchParams(location.search);
+const num = (k, d) => (Q.has(k) ? parseFloat(Q.get(k)) : d);
+const VIEW = Q.get('view') || 'lineup';
+const MAT = Q.get('mat') || 'hull';
+const CAM = Q.get('cam') || (VIEW === 'lineup' ? 'top' : 'beauty');
+const ZOOM = num('zoom', 1);
+const HI = 3;
+const WH = 880; // world units across the screen height in the game's top view
+
+const hud = document.getElementById('hud'), tags = document.getElementById('tags');
+const cv = document.createElement('canvas');
+document.body.prepend(cv);
+const gl = new THREE.WebGLRenderer({ canvas: cv, antialias: true, powerPreference: 'high-performance' });
+const pr = num('pr', Math.min(window.devicePixelRatio || 1, 2));
+gl.setPixelRatio(pr);
+gl.toneMapping = THREE.ACESFilmicToneMapping;
+gl.toneMappingExposure = 1.0;
+gl.debug.onShaderError = (g, program, vs, fs) => {
+  const log = (sh, name) => {
+    const info = g.getShaderInfoLog(sh);
+    if (!info) return '';
+    const src = g.getShaderSource(sh).split('\n');
+    const lines = [...info.matchAll(/ERROR: \d+:(\d+)/g)].map((m) => +m[1]);
+    return `${name}: ${info}\n` + [...new Set(lines)].slice(0, 6).map((l) => `  ${l}: ${src[l - 1]}`).join('\n');
+  };
+  window.showErr('SHADER ERROR\n' + g.getProgramInfoLog(program) + '\n' + log(vs, 'VERTEX') + '\n' + log(fs, 'FRAGMENT'));
+};
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x04060b);
+const cam = new THREE.PerspectiveCamera(50, 1, 5, 30000);
+const pmrem = new THREE.PMREMGenerator(gl);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environmentIntensity = 0.55;
+pmrem.dispose();
+const sun = new THREE.DirectionalLight(0xfff0dc, 2.7);
+sun.position.set(-0.45, 1, 0.55);
+scene.add(sun, new THREE.HemisphereLight(0x8fb8ff, 0x1a1420, 0.9));
+const composer = new EffectComposer(gl);
+composer.setPixelRatio(pr);
+composer.addPass(new RenderPass(scene, cam));
+const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.55, 0.42, 0.9);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+
+const hull = new HullMaterials(THREE, { quality: num('q', 1) });
+const litMat = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, metalness: 0.55, roughness: 0.42 });
+const unlitMat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
+unlitMat.color.setScalar(2.2);
+
+// copy of view3d.js buildGeo()
+function buildGeo(mesh) {
+  const col = new THREE.Color();
+  const bins = { lit: { p: [], c: [] }, unlit: { p: [], c: [] } };
+  for (const f of mesh.faces) {
+    const b = f.e >= 0.5 ? bins.unlit : bins.lit;
+    col.setRGB(f.c[0] / 255, f.c[1] / 255, f.c[2] / 255, THREE.SRGBColorSpace);
+    for (let i = 1; i < f.v.length - 1; i++) {
+      for (const vi of [f.v[0], f.v[i], f.v[i + 1]]) {
+        const v = mesh.verts[vi];
+        b.p.push(v[0], v[1], v[2]);
+        b.c.push(col.r, col.g, col.b);
+      }
+    }
+  }
+  const mk = (b, lit) => {
+    if (!b.p.length) return null;
+    let g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(b.p), 3));
+    g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(b.c), 3));
+    if (lit) {
+      g.computeVertexNormals();
+      g = toCreasedNormals(g, 0.62);
+    }
+    return g;
+  };
+  return { lit: mk(bins.lit, true), unlit: mk(bins.unlit, false) };
+}
+
+const knobs = { flash: num('flash', 0), dim: num('dim', 1), damage: num('damage', 0), heat: num('heat', 0), warp: num('warp', 0), opacity: num('opacity', 1) };
+const hullMats = [];
+function applyKnobs(m) {
+  const u = m.userData;
+  u.setFlash(knobs.flash); u.setDim(knobs.dim); u.setDamage(knobs.damage);
+  u.setHeat(knobs.heat); u.setWarp(knobs.warp); u.setOpacity(knobs.opacity);
+}
+// the equivalent of view3d.js model(): plain = today's look, otherwise HullMaterials
+function model(mesh, { plain = false, kind = 'fighter', scale = 1, seed = 0 } = {}) {
+  const geo = buildGeo(mesh);
+  const grp = new THREE.Group();
+  if (plain) {
+    const mat = litMat.clone();
+    mat.emissive.setScalar(knobs.flash * 0.9);
+    mat.color.setScalar(knobs.dim);
+    if (geo.lit) grp.add(new THREE.Mesh(geo.lit, mat));
+    if (geo.unlit) grp.add(new THREE.Mesh(geo.unlit, unlitMat));
+  } else {
+    const mat = hull.create({ kind, scale, seed });
+    const glow = hull.emissive({ kind, seed });
+    applyKnobs(mat); applyKnobs(glow);
+    hullMats.push(mat, glow);
+    if (geo.lit) grp.add(new THREE.Mesh(geo.lit, mat));
+    if (geo.unlit) grp.add(new THREE.Mesh(geo.unlit, glow));
+  }
+  grp.scale.setScalar(scale);
+  return grp;
+}
+const labels = [];
+function tag(text, x, y, z) { const s = document.createElement('span'); s.textContent = text; tags.appendChild(s); labels.push({ s, p: new THREE.Vector3(x, y, z) }); }
+
+const FAM = ['basic', 'weaver', 'hunter', 'tank', 'sniper', 'carrier', 'shieldbearer', 'strafer', 'brood'];
+const SEEDS = { basic: 3, weaver: 2, hunter: 1, tank: 5, sniper: 6, carrier: 2, shieldbearer: 4, strafer: 8, brood: 12 };
+const spinners = [];
+let camPos = [0, 900, 0.01], camTgt = [0, 0, 0], camUp = [0, 0, -1], fov = 50;
+
+function bossModel(level, plain) {
+  const S = num('scale', 1.4);
+  const gen = withDetail(HI, () => genBoss(level));
+  const g = new THREE.Group();
+  const core = model(gen.core, { plain, kind: 'boss', scale: S, seed: level });
+  core.scale.setScalar(1);
+  g.add(core);
+  gen.turrets.forEach((tr, i) => {
+    const tm = model(tr.mesh, { plain, kind: 'boss', scale: S, seed: level * 10 + i + 1 });
+    tm.scale.setScalar(1);
+    tm.position.set(tr.pivot[0], tr.pivot[1], tr.pivot[2]);
+    tm.rotation.y = 0.5 - i * 0.45;
+    g.add(tm);
+  });
+  g.scale.setScalar(S);
+  return g;
+}
+
+if (VIEW === 'lineup') {
+  const S = num('scale', 0.62); // ≈ 62 world units for a 100-unit model, like ENEMY_SIZE × VIS
+  const chase = CAM === 'chase';
+  FAM.forEach((fam, i) => {
+    for (let row = 0; row < 2; row++) {
+      const seed = SEEDS[fam] + (MAT === 'split' ? 0 : row * 10);
+      const mesh = withDetail(HI, () => genShip(seed, fam));
+      const plain = MAT === 'plain' || (MAT === 'split' && row === 0);
+      const o = model(mesh, { plain, kind: 'fighter', scale: S, seed: seed + i * 31 });
+      let x, z;
+      if (chase) { x = -150 + (i % 5) * 230 + row * 115; z = (((i * 2 + row) % 6) - 2.5) * 105; }
+      else { x = (i - 4) * 150; z = row ? 110 : -110; }
+      o.position.set(x / ZOOM, 0, z / ZOOM);
+      o.rotation.y = Math.PI; // enemies fly facing −X, as in the game
+      scene.add(o);
+      spinners.push(o);
+      if (!chase) tag(`${fam}${MAT === 'split' ? (row ? ' · hull' : ' · plain') : ' #' + seed}`, x / ZOOM, 0, (z + 62) / ZOOM);
+    }
+  });
+  const hTop = (WH / 2) / Math.tan((50 * Math.PI) / 360);
+  if (CAM === 'top') { camPos = [0, hTop / ZOOM, 0.01]; }
+  else if (CAM === 'tilt') { camPos = [0, hTop * 0.82 / ZOOM, hTop * 0.62 / ZOOM]; camUp = [0, 1, 0]; }
+  else if (chase) { camPos = [-760, 250, 0]; camTgt = [260, -20, 0]; camUp = [0, 1, 0]; fov = 40; }
+} else if (VIEW === 'boss' || VIEW === 'core') {
+  const level = num('level', 1);
+  const mk = (plain) => {
+    if (VIEW === 'boss') return bossModel(level, plain);
+    const o = model(withDetail(HI, () => genBossCore(level)), { plain, kind: 'boss', scale: 1.4 * 2.2, seed: level + 100 });
+    return o;
+  };
+  if (MAT === 'split') {
+    const a = mk(true), b = mk(false);
+    a.position.z = -72; b.position.z = 72;
+    a.rotation.y = b.rotation.y = Math.PI;
+    scene.add(a, b); spinners.push(a, b);
+    tag('plain MeshStandardMaterial', 0, 0, -8); tag('HullMaterials', 0, 0, 138);
+  } else {
+    const a = mk(MAT === 'plain');
+    a.rotation.y = Math.PI;
+    scene.add(a); spinners.push(a);
+  }
+  if (CAM === 'top') { camPos = [0, (MAT === 'split' ? 420 : 300) / ZOOM, 0.01]; }
+  else if (CAM === 'tilt') { camPos = [0, 330 / ZOOM, 250 / ZOOM]; camUp = [0, 1, 0]; }
+  else if (CAM === 'chase') { camPos = [-420 / ZOOM, 130 / ZOOM, 0]; camTgt = [0, -10, 0]; camUp = [0, 1, 0]; fov = 40; }
+  else { // close 3/4 beauty shot from ahead of the bow
+    const d = (MAT === 'split' ? 330 : 205) / ZOOM;
+    camPos = [-d * 0.78, d * 0.55, d * 0.72]; camTgt = [8, 0, MAT === 'split' ? 0 : 4]; camUp = [0, 1, 0]; fov = 42;
+  }
+} else if (VIEW === 'freighter') {
+  for (let i = 0; i < 2; i++) {
+    const mesh = withDetail(HI, () => genFreighter(4 + i * 3, i === 1 && Q.get('gold') === '1'));
+    const o = model(mesh, { plain: MAT === 'plain' || (MAT === 'split' && i === 0), kind: 'freighter', scale: 1.7, seed: 4 + i });
+    o.position.set(0, 0, i ? 60 : -60); o.rotation.y = Math.PI;
+    scene.add(o); spinners.push(o);
+  }
+  camPos = [-120 / ZOOM, 190 / ZOOM, 230 / ZOOM]; camUp = [0, 1, 0]; fov = 42;
+} else if (VIEW === 'debris') {
+  // wreck chunks: slabs of a fighter's faces, as shatterSprite hands them to MeshDebris
+  const src = withDetail(HI, () => genShip(5, 'tank'));
+  const n = 8;
+  for (let i = 0; i < n; i++) {
+    const faces = src.faces.filter((f) => { const x = src.verts[f.v[0]][0], z = src.verts[f.v[0]][2]; return Math.floor((x + 60) / 30) + 4 * (z > 0 ? 1 : 0) === i; });
+    if (!faces.length) continue;
+    const o = model({ verts: src.verts, faces }, { plain: MAT === 'plain', kind: 'debris', scale: 0.62, seed: i });
+    const heat = Q.has('heat') ? knobs.heat : 1 - i / (n - 1);
+    for (const m of o.children) m.material.userData.setHeat?.(heat);
+    o.position.set((i % 4 - 1.5) * 60, 0, i < 4 ? -30 : 30);
+    o.rotation.set(i * 0.7, i * 1.3, i * 0.4);
+    scene.add(o);
+  }
+  camPos = [0, 230 / ZOOM, 120 / ZOOM]; camUp = [0, 1, 0];
+}
+
+// extra off-screen-ish copies to measure program sharing with many instances
+for (let i = 0, n = num('n', 0); i < n; i++) {
+  const o = model(withDetail(HI, () => genShip(i, FAM[i % 9])), { kind: ['fighter', 'boss', 'freighter', 'rocket', 'debris'][i % 5], scale: 0.3 + (i % 4) * 0.4, seed: i });
+  o.position.set(-600 + (i % 20) * 60, -400, -200 + Math.floor(i / 20) * 60);
+  scene.add(o);
+}
+
+// ?mixop=1: every other instance half-transparent → exercises the second (non-OPAQUE) program variant
+if (Q.get('mixop') === '1') hullMats.forEach((m, i) => { if ((i >> 1) & 1) m.userData.setOpacity(0.5); });
+
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  gl.setSize(w, h, false);
+  composer.setSize(w, h);
+  cam.aspect = w / h;
+}
+addEventListener('resize', resize);
+resize();
+
+// ?bench=N: draw the scene N times per frame straight to the canvas and time it (gl.finish via readPixels)
+const BENCH = num('bench', 0);
+let benchMs = 0, benchN = 0;
+function bench() {
+  const g = gl.getContext(), px = new Uint8Array(4);
+  gl.render(scene, cam); g.readPixels(0, 0, 1, 1, g.RGBA, g.UNSIGNED_BYTE, px); // warm up / flush
+  const t0 = performance.now();
+  for (let i = 0; i < BENCH; i++) gl.render(scene, cam);
+  g.readPixels(0, 0, 1, 1, g.RGBA, g.UNSIGNED_BYTE, px);
+  const dt = performance.now() - t0;
+  if (benchN++ > 1) benchMs += dt; // skip the compile frames
+  if (benchN > 2) document.title = `bench ${(benchMs / (benchN - 2) / BENCH).toFixed(3)} ms n=${benchN - 2}`;
+}
+const T0 = Q.has('t') ? num('t', 0) : null;
+let frames = 0;
+function frame(now) {
+  const t = T0 != null ? T0 : now;
+  hull.update(t);
+  if (Q.get('spin') === '1') for (const o of spinners) o.rotation.y = Math.PI + now / 1500;
+  if (Q.has('anim')) { // sweep one knob 0→1→0 to check it live
+    const v = 0.5 - 0.5 * Math.cos(now / 900);
+    for (const m of hullMats) m.userData[Q.get('anim')]?.(v);
+  }
+  cam.fov = fov;
+  cam.position.set(...camPos);
+  cam.up.set(...camUp);
+  cam.lookAt(...camTgt);
+  cam.updateProjectionMatrix();
+  if (BENCH) bench();
+  composer.render();
+  frames++;
+  for (const l of labels) {
+    const v = l.p.clone().project(cam);
+    l.s.style.left = `${(v.x * 0.5 + 0.5) * innerWidth}px`;
+    l.s.style.top = `${(-v.y * 0.5 + 0.5) * innerHeight}px`;
+  }
+  const progs = gl.info.programs || [];
+  const hp = progs.filter((p) => p.name === 'Hull').length;
+  const sm = progs.filter((p) => p.name === 'HullEmissive').length;
+  hud.textContent = `view=${VIEW} cam=${CAM} mat=${MAT} q=${hull.quality}  ` +
+    Object.entries(knobs).map(([k, v]) => `${k}=${v}`).join(' ') +
+    `\nhull+emissive material instances: ${hullMats.length}   programs total: ${progs.length}   hull programs: ${hp}   emissive programs: ${sm}   draw calls: ${gl.info.render.calls}   frame ${frames}` + (BENCH && benchN > 2 ? `\nbench: ${(benchMs / (benchN - 2) / BENCH).toFixed(3)} ms per full-scene pass (${BENCH} passes × ${benchN - 2} frames, ${cv.width}×${cv.height})` : '') + (Q.get('progs') === '1' ? '\n' + progs.map((p) => `${p.name}×${p.usedTimes}`).join('  ') : '');
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

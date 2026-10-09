@@ -9,6 +9,7 @@ import { drawText } from './ui.js';
 import { MenuState } from './menu.js';
 import { GameState } from './game.js';
 import { VersusState } from './versus.js';
+import { View3D } from './view3d.js';
 
 const canvas = document.getElementById('game');
 const g = canvas.getContext('2d');
@@ -23,7 +24,9 @@ const ZOOM = 1.12;
 function fit() {
   // Adapt the world to the screen aspect: widescreen extends the playfield
   // horizontally, tall phones extend it vertically — no black bars.
-  const vw = window.innerWidth, vh = window.innerHeight;
+  // (a tab opened in the background can report a 0×0 window: sizing from that gave
+  // NaN world dimensions and killed the boot — fall back to the base size until the real resize)
+  const vw = window.innerWidth || BASE_W, vh = window.innerHeight || BASE_H;
   const aspect = vw / vh;
   let w, h;
   if (app.lockWorld) {
@@ -93,6 +96,7 @@ const app = {
     }
   },
 };
+app.view3d = new View3D(app); // WebGL renderer for offline runs (V camera, G classic); loads lazily
 try { app.highScore = Number(localStorage.getItem('spacevoid_high')) || 0; } catch {}
 
 fit(); // initial world + canvas sizing (after app exists for onResize dispatch)
@@ -156,12 +160,21 @@ async function boot() {
   app.debugBg = Number(params.get('bg')) || 0; // debug: force a backdrop seed (?bg=N)
   app.debugIon = params.has('ion'); // debug: ion storm hits at ~5s
   app.debugMod = params.get('mod'); // debug: force a daily modifier by id (?mod=convoy)
+  app.debugShip = params.get('ship'); // debug: fly a roster hull without owning it (?ship=ace)
+  app.debugBossDie = Number(params.get('bossdie')) || 0; // debug: the boss drops to 1 hp at this world time (ms)
+  app.debugEnvEvent = params.get('envevent'); // debug: fire a background event at 1 s (?envevent=capital|battle|cometImpact|…)
+  app.debugBench = Number(params.get('bench')) || 0; // debug: time N stepped frames (GPU-synced), log every hitch to ?log
+  app.debugAutoFire = params.has('autofire'); // debug: the ship fires its laser and rockets on a timer
+  app.debugFreezeAt = Number(params.get('shotat')) || 0; // debug: freeze the sim at this world time — deterministic screenshots
   if (params.has('prof')) window.__prof = { u: 0, d: 0, n: 0 }; // debug: frame-time probe
   const mode = params.get('mode');
   if (params.has('shipgen')) {
     // dev gallery for the procedural ship generator (loaded on demand)
     const { ShipGenState } = await import('./shipgen_page.js');
     app.setState(new ShipGenState(app));
+  } else if (params.get('screen') === 'hangar') { // debug: open the hangar directly
+    const { HangarState } = await import('./hangar.js');
+    app.setState(new HangarState(app));
   } else if (mode === 'single') app.setState(new GameState(app, false));
   else if (mode === 'coop') app.setState(new GameState(app, true));
   else if (mode === 'daily') app.setState(new GameState(app, false, { daily: true }));
@@ -169,8 +182,14 @@ async function boot() {
   else if (params.has('skipstart')) app.goMenu();
   else app.setState(new StartState());
 
+  // debug: start straight in a 3D camera (?view=tilt|chase) — headless screenshots, tuning
+  const view = params.get('view');
+  if (view === 'classic') app.view3d.enabled = false;
+  else if (['top', 'tilt', 'chase'].includes(view)) { app.view3d.enabled = true; app.view3d.mode = view; app.view3d.snapCam = true; }
+  if (app.view3d.enabled) app.view3d.load(); // warm up behind the menu
+
   // debug: fast-forward game time deterministically (?mode=single&ff=30000)
-  if (params.has('log')) window.__svlog = [];
+  if (params.has('log')) { window.__svlog = []; window.__app = app; } // (debug handle for profiling from the console)
   const ff = Number(params.get('ff') || 0);
   for (let t = 0; t < ff; t += 16.67) {
     app.state.update(16.67);
@@ -182,6 +201,8 @@ async function boot() {
     pre.style.display = 'none';
     pre.textContent = (window.__svlog || []).join('\n');
     document.body.appendChild(pre);
+    const arr = window.__svlog; // keep mirroring events that happen after the fast-forward
+    arr.push = (...a) => { pre.textContent += `\n${a.join('\n')}`; return Array.prototype.push.apply(arr, a); };
     // live error capture: runtime errors after the ff loop land in the pre too
     const pushErr = (msg) => { pre.textContent += `\nERR: ${msg}`; };
     addEventListener('error', (e) => pushErr(`${e.message} @${(e.filename || '').split('/').pop()}:${e.lineno}`));
@@ -203,12 +224,44 @@ async function boot() {
     // A thrown update/draw must NEVER kill the loop or blank the screen —
     // skip the bad frame and keep going (this used to leave only the backdrop).
     try {
+      // debug (?shotat=T): once the renderer is up, step sim+render synchronously
+      // to world time T so a headless screenshot lands on an exact, fully
+      // "lived-in" frame (particles only exist in frames that were drawn)
+      const v3d = app.view3d;
+      if (app.debugFreezeAt && !app._stepped && (v3d.active || !v3d.enabled || v3d.failed)) {
+        app._stepped = true;
+        for (let i = 0; i < 6000 && (app.state.time || 0) < app.debugFreezeAt; i++) {
+          app.state.update(16.67); input.endStep(); app.state.draw(g); v3d.endFrame();
+        }
+      }
+      // debug (?bench=N&log): frame-time histogram + every frame over 12 ms, with the
+      // shader-program count before/after (a jump there = a link stall)
+      if (app.debugBench && !app._benched && v3d.active && !v3d.warming) {
+        app._benched = true;
+        const glc = v3d.gl.getContext(), info = v3d.gl.info, ts = [];
+        let lastP = info.programs.length;
+        for (let i = 0; i < app.debugBench; i++) {
+          const b0 = performance.now();
+          app.state.update(16.67); input.endStep(); app.state.draw(g); v3d.endFrame(); glc.finish();
+          const d = performance.now() - b0;
+          ts.push(d);
+          if (d > 12) window.__svlog?.push(`HITCH ${(app.state.time / 1000).toFixed(1)}s L${app.state.level} ${d.toFixed(0)}ms programs ${lastP}>${info.programs.length}`);
+          if (info.programs.length > lastP) { // (headless clocks don't tick inside a frame, so links are also reported by name)
+            window.__svlog?.push(`LINK ${(app.state.time / 1000).toFixed(1)}s L${app.state.level} +${info.programs.length - lastP}: ${info.programs.slice(lastP).map((x) => x.name || x.cacheKey.split(',')[0] || '?').join(' | ')}`);
+          }
+          lastP = info.programs.length;
+        }
+        ts.sort((a, b) => a - b);
+        const q = (f) => ts[Math.floor(ts.length * f)].toFixed(1);
+        window.__svlog?.push(`BENCH frames=${ts.length} median=${q(0.5)}ms p95=${q(0.95)} p99=${q(0.99)} max=${ts[ts.length - 1].toFixed(0)} over12=${ts.filter((x) => x > 12).length} programs=${info.programs.length}`);
+      }
       const p = window.__prof;
       const t0 = p && performance.now();
       app.state.update(dt);
       input.endStep();
       const t1 = p && performance.now();
       app.state.draw(g);
+      app.view3d.endFrame();
       if (p) {
         p.u += t1 - t0;
         p.d += performance.now() - t1;
@@ -221,7 +274,10 @@ async function boot() {
       }
     } catch (e) {
       input.endStep();
-      if (errCount++ < 5) console.error('frame error:', e);
+      if (errCount++ < 5) {
+        console.error('frame error:', e);
+        document.getElementById('svlog')?.append(`\nERR frame: ${e.message} | ${(e.stack || '').split('\n')[1] || ''}`);
+      }
       window.__svlog?.push?.(`ERR ${e.message}`);
     }
     g.drawImage(vignette, 0, 0, W, H);

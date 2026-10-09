@@ -221,7 +221,7 @@ export class HangarState {
     const spr = this.app.images.ships?.[ship.id];
     // keep the stat block (ends ~cy+310) clear of the action button (top ~H-194)
     const cy = Math.min(H * 0.4, H - 524);
-    if (spr) {
+    if (spr && !this.in3D) { // 3D graphics show the real hull on a turntable instead (see draw)
       const sw = 240, sh = sw * (spr.height / spr.width);
       g.drawImage(spr, W / 2 - sw / 2, cy - sh / 2, sw, sh);
     }
@@ -279,8 +279,14 @@ export class HangarState {
   }
 
   draw(g) {
-    g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
-    for (const s of this.stars) s.draw(g);
+    this.in3D = !!this.app.view3d?.backdrop(g, this.tab === 'ships'
+      ? { ship: SHIPS[this.idx].id, x: W / 2, y: Math.min(H * 0.4, H - 524), size: 250, spin: 0.0007 }
+      : { ship: null });
+    if (this.in3D) { g.fillStyle = 'rgba(0,0,0,0.2)'; g.fillRect(0, 0, W, H); }
+    else {
+      g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
+      for (const s of this.stars) s.draw(g);
+    }
     drawText(g, 'HANGAR', W / 2, 74, 38);
     drawText(g, `◆ ${progress.credits} CR`, W - 14, 26, 17, 'rgb(120,220,255)', 'right');
     this.tabShips.draw(g);

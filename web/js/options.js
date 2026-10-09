@@ -31,17 +31,18 @@ export class OptionsState {
     for (let i = 0; i < 60; i++) {
       this.stars.push(new Star(randInt(0, W), randInt(0, H), rand(0.1, 0.4), randInt(1, 3), randInt(50, 200)));
     }
-    const y0 = 150;
-    const dy = 60;
-    this.btnName = new Button(`NAME: ${savedName() || '—'}`, W / 2, y0, 300, 50, 'rgb(0,200,255)', 'name');
-    this.btnMusic = new Button(`MUSIC: ${pct(settings.music)}`, W / 2, y0 + dy, 300, 50, 'rgb(0,220,130)', 'music');
-    this.btnSfx = new Button(`SOUND FX: ${pct(settings.sfx)}`, W / 2, y0 + dy * 2, 300, 50, 'rgb(0,220,130)', 'sfx');
-    this.btnVibro = new Button(`VIBRATION: ${settings.vibro ? 'ON' : 'OFF'}`, W / 2, y0 + dy * 3, 300, 50, 'rgb(0,220,130)', 'vibro');
-    this.btnMotion = new Button(`MOTION: ${settings.motionFx ? 'ON' : 'OFF'}`, W / 2, y0 + dy * 4, 300, 50, 'rgb(0,220,130)', 'motion');
-    this.btnFs = new Button('FULLSCREEN', W / 2, y0 + dy * 5, 300, 50, 'rgb(255,140,0)', 'fullscreen');
-    this.achY = y0 + dy * 5 + 54; // achievements sit just below the last toggle
+    const y0 = 146;
+    const dy = 54;
+    this.btnName = new Button(`NAME: ${savedName() || '—'}`, W / 2, y0, 300, 46, 'rgb(0,200,255)', 'name');
+    this.btnMusic = new Button(`MUSIC: ${pct(settings.music)}`, W / 2, y0 + dy, 300, 46, 'rgb(0,220,130)', 'music');
+    this.btnSfx = new Button(`SOUND FX: ${pct(settings.sfx)}`, W / 2, y0 + dy * 2, 300, 46, 'rgb(0,220,130)', 'sfx');
+    this.btnVibro = new Button(`VIBRATION: ${settings.vibro ? 'ON' : 'OFF'}`, W / 2, y0 + dy * 3, 300, 46, 'rgb(0,220,130)', 'vibro');
+    this.btnMotion = new Button(`MOTION: ${settings.motionFx ? 'ON' : 'OFF'}`, W / 2, y0 + dy * 4, 300, 46, 'rgb(0,220,130)', 'motion');
+    this.btnGfx = new Button(`GRAPHICS: ${settings.gfx3d ? '3D' : 'CLASSIC'}`, W / 2, y0 + dy * 5, 300, 46, 'rgb(120,220,255)', 'gfx');
+    this.btnFs = new Button('FULLSCREEN', W / 2, y0 + dy * 6, 300, 46, 'rgb(255,140,0)', 'fullscreen');
+    this.achY = y0 + dy * 6 + 54; // achievements sit just below the last toggle
     this.menu = new ButtonGroup([
-      this.btnName, this.btnMusic, this.btnSfx, this.btnVibro, this.btnMotion, this.btnFs,
+      this.btnName, this.btnMusic, this.btnSfx, this.btnVibro, this.btnMotion, this.btnGfx, this.btnFs,
       new Button('BACK', W / 2, H - 90, 200, 56, 'rgb(255,0,0)', 'back'),
     ]);
   }
@@ -80,6 +81,9 @@ export class OptionsState {
       settings.motionFx = !settings.motionFx;
       saveSettings();
       this.btnMotion.text = `MOTION: ${settings.motionFx ? 'ON' : 'OFF'}`;
+    } else if (action === 'gfx') {
+      this.app.view3d?.setEnabled(!settings.gfx3d);
+      this.btnGfx.text = `GRAPHICS: ${settings.gfx3d ? '3D' : 'CLASSIC'}`;
     } else if (action === 'fullscreen') {
       if (document.fullscreenEnabled) {
         if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
@@ -94,9 +98,13 @@ export class OptionsState {
   }
 
   draw(g) {
-    g.fillStyle = '#000';
-    g.fillRect(0, 0, W, H);
-    for (const s of this.stars) s.draw(g);
+    // (opened from a paused run: leave its 3D scene alone — the backdrop would tear it down)
+    if (!this.returnTo && this.app.view3d?.backdrop(g)) { g.fillStyle = 'rgba(0,0,0,0.5)'; g.fillRect(0, 0, W, H); }
+    else {
+      g.fillStyle = '#000';
+      g.fillRect(0, 0, W, H);
+      for (const s of this.stars) s.draw(g);
+    }
 
     drawText(g, 'SETTINGS', W / 2, 100, 40);
     this.menu.draw(g);

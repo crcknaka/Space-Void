@@ -40,10 +40,49 @@ export function addFace(m, v, c, e = 0, layer = 0) {
   m.faces.push({ v, c, e, l: layer });
 }
 
+// Detail mode: the 2D pipeline bakes chunky low-poly sprites, but the WebGL
+// view wants smooth hulls. Inside withDetail(k, fn) every lathe gets k× the
+// sides and its profile is resampled along a monotone cubic through the same
+// sections — same seeds, same silhouette, no RNG consumed, just rounder.
+let DETAIL = 1;
+export function withDetail(k, fn) {
+  const prev = DETAIL;
+  DETAIL = k;
+  try { return fn(); } finally { DETAIL = prev; }
+}
+
+// monotone cubic (Fritsch–Carlson) through ys at integer knots — never overshoots
+function pchip(ys, sub) {
+  const n = ys.length, d = [], m = new Array(n);
+  for (let i = 0; i < n - 1; i++) d.push(ys[i + 1] - ys[i]);
+  m[0] = d[0]; m[n - 1] = d[n - 2];
+  for (let i = 1; i < n - 1; i++) m[i] = d[i - 1] * d[i] <= 0 ? 0 : (2 * d[i - 1] * d[i]) / (d[i - 1] + d[i]);
+  const out = [];
+  for (let i = 0; i < n - 1; i++) {
+    for (let j = 0; j < sub; j++) {
+      const t = j / sub, t2 = t * t, t3 = t2 * t;
+      out.push((2 * t3 - 3 * t2 + 1) * ys[i] + (t3 - 2 * t2 + t) * m[i] + (-2 * t3 + 3 * t2) * ys[i + 1] + (t3 - t2) * m[i + 1]);
+    }
+  }
+  out.push(ys[n - 1]);
+  return out;
+}
+
+function refineSections(sections, o, sub) {
+  const ch = (f) => pchip(sections.map(f), sub);
+  const x = ch((s) => s.x), r = ch((s) => s.r), cy = ch((s) => s.cy || 0), cz = ch((s) => s.cz || 0);
+  const sy = ch((s) => s.sy ?? o.sy ?? 1);
+  return x.map((_, i) => ({ x: x[i], r: r[i], cy: cy[i], cz: cz[i], sy: sy[i] }));
+}
+
 // Solid of revolution around the x-axis. Sections run nose→tail:
 // { x, r, sy (vertical squash), cy, cz (center offsets) }.
 export function addLathe(m, sections, sides, c, o = {}) {
   const L = o.layer || 0;
+  if (DETAIL > 1) {
+    sides = Math.round(sides * DETAIL);
+    if (sections.length >= 3) sections = refineSections(sections, o, 4);
+  }
   const rings = sections.map((s) => {
     const ring = [];
     const sy = s.sy ?? o.sy ?? 1;

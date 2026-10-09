@@ -5,7 +5,7 @@ import { W, H, rand, randInt, clamp } from './const.js';
 import * as input from './input.js';
 import * as audio from './audio.js';
 import { glowBullet, glowEnemyBullet, glowPowerup, glowEngine, glowExplosion, glowElite, drawGlow, tinted, drawShieldBubble } from './fx.js';
-import { renderMesh, fitTransform, projectPoint, VIEW } from './mesh3d.js';
+import { renderMesh, fitTransform, projectPoint, VIEW, withDetail } from './mesh3d.js';
 import { genBoss, genBossCore, BOSS_VIEW, aimYaw } from './bossgen.js';
 import { genFreighter } from './shipgen.js';
 
@@ -383,9 +383,11 @@ export class Player {
     if (k.has(c.left)) this.x -= sp;
     if (k.has(c.right)) this.x += sp;
     if (pad) {
-      this.x += pad.x * sp;
-      this.y += pad.y * sp;
-      if (Math.abs(pad.y) > 0.3) dy = Math.sign(pad.y);
+      // 3D chase camera looks down +x: stick up = forward, stick right = starboard
+      const ax = this.chase ? -pad.y : pad.x, ay = this.chase ? pad.x : pad.y;
+      this.x += ax * sp;
+      this.y += ay * sp;
+      if (Math.abs(ay) > 0.3) dy = Math.sign(ay);
     }
 
     this.x = clamp(this.x, this.w / 2, W - this.w / 2);
@@ -1054,7 +1056,9 @@ export class DistantRocks {
 export class Freighter {
   constructor(time, forceGolden = false) {
     this.golden = forceGolden || Math.random() < 0.05; // rare treasure hauler
-    const mesh = genFreighter((Math.random() * 1e9) | 0, this.golden);
+    const fseed = (Math.random() * 1e9) | 0;
+    const mesh = genFreighter(fseed, this.golden);
+    mesh.hi3d = () => withDetail(3, () => genFreighter(fseed, this.golden)); // smooth hull for the WebGL view
     const wpx = Math.ceil(300 + Math.random() * 220);
     const c = document.createElement('canvas');
     c.width = wpx;
@@ -2173,7 +2177,7 @@ export class Boss {
       for (const a of [cb.ang, cb.ang + Math.PI / 2]) {
         g.save();
         g.translate(this.x + jx, this.y + jy);
-        g.rotate(-a);
+        g.rotate(a); // same direction (cos a, sin a) the hit test uses — it used to be mirrored
         if (tele) {
           g.globalAlpha = 0.35 + 0.3 * Math.sin(t / 55);
           g.strokeStyle = 'rgb(255,60,60)';

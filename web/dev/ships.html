@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SPACE VOID — ships3d viewer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; height: 100%; background: #04060b; color: #9fb4cc; font: 12px/1.35 ui-monospace, Menlo, monospace; overflow: hidden; }
+  #out { display: block; }
+  #err { position: fixed; left: 0; top: 0; right: 0; margin: 0; color: #ff8080; background: rgba(50, 0, 0, .88); white-space: pre-wrap; z-index: 9; padding: 0 8px; max-height: 70vh; overflow: hidden; font-size: 12px; }
+  #hud { position: fixed; left: 8px; bottom: 6px; white-space: pre; text-shadow: 0 1px 2px #000; }
+  #nav { position: fixed; right: 8px; bottom: 6px; text-align: right; }
+  #nav a { color: #6fa8ff; margin-left: 8px; text-decoration: none; }
+</style>
+<script type="importmap">{ "imports": { "three": "../vendor/three.module.min.js" } }</script>
+</head>
+<body>
+<pre id="err"></pre>
+<canvas id="out"></canvas>
+<div id="hud"></div>
+<div id="nav"></div>
+<script>
+  // visible error overlay (headless screenshots have no console)
+  const errBox = document.getElementById('err');
+  const showErr = (m) => { errBox.textContent += String(m).slice(0, 1800) + '\n'; };
+  window.addEventListener('error', (e) => showErr('ERROR: ' + (e.message || e) + (e.filename ? ` @ ${e.filename.split('/').pop()}:${e.lineno}:${e.colno}` : '')));
+  window.addEventListener('unhandledrejection', (e) => showErr('REJECTION: ' + (e.reason && (e.reason.stack || e.reason.message) || e.reason)));
+</script>
+<script type="module">
+/*
+  ?ship=vanguard|interceptor|juggernaut|ghost|ace|player1|player2
+  &view=top|tilt|chase|beauty|rear|under|side|front|nozzle|cockpit     (close-up of one ship; default beauty)
+  &bank=0.4 (rad)  &thrust=0..2  &damage=0..1  &flash=0..1  &opacity=0..1  &tint=green|orange|purple|r,g,b
+  &dist=1 (camera distance multiplier)  &q=0.5 (low quality)  &t=ms (freeze animation time)
+  ?sheet=1            contact sheet: every ship, top + 3/4 (+ &rows=top,tilt,rear,under)
+  ?game=top|tilt|chase   a full game frame (world 1564x880) with all ships at in-game size
+  ?game=1&ship=x      one ship at game scale from the three game cameras (1x and 3x)
+  ?tints=1            the vanguard in the four online-player tints
+*/
+import * as THREE from 'three';
+import { EffectComposer } from '../vendor/three-addons/postprocessing/EffectComposer.js';
+import { RenderPass } from '../vendor/three-addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from '../vendor/three-addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from '../vendor/three-addons/postprocessing/OutputPass.js';
+import { RoomEnvironment } from '../vendor/three-addons/environments/RoomEnvironment.js';
+const { Ships3D, SHIP_IDS } = await import('../js/ships3d.js?v=' + Date.now());
+
+const Q = new URLSearchParams(location.search);
+const num = (k, d) => (Q.has(k) && Q.get(k) !== '' && isFinite(+Q.get(k)) ? +Q.get(k) : d);
+const TINTS = { green: [0.25, 1, 0.35], orange: [1, 0.5, 0.12], purple: [0.7, 0.3, 1], red: [1, 0.2, 0.2] };
+const parseTint = (s) => (!s ? null : TINTS[s] || s.split(',').map(Number));
+const P = {
+  ship: Q.get('ship') || 'vanguard', view: Q.get('view') || 'beauty', bank: num('bank', 0), thrust: num('thrust', 1),
+  damage: num('damage', 0), flash: num('flash', 0), opacity: num('opacity', 1), tint: parseTint(Q.get('tint')),
+  dist: num('dist', 1), q: num('q', 1), t: Q.has('t') ? num('t', 0) : null,
+};
+// in-game length (world units): sprite w * VIS, 50 → ~60
+const GAME_LEN = { vanguard: 60, player1: 60, player2: 60, interceptor: 50, juggernaut: 70, ghost: 53, ace: 60 };
+const WW = 1564, WH = 880, FOV = 50, CHASE_FOV = 40;
+
+const out = document.getElementById('out'), ctx = out.getContext('2d');
+const VW = window.innerWidth, VH = window.innerHeight;
+out.width = VW; out.height = VH;
+
+const glc = document.createElement('canvas');
+const gl = new THREE.WebGLRenderer({ canvas: glc, antialias: true, powerPreference: 'high-performance', preserveDrawingBuffer: true });
+gl.setPixelRatio(1);
+gl.toneMapping = THREE.ACESFilmicToneMapping;
+gl.toneMappingExposure = 1.0;
+gl.debug.onShaderError = (g, prog, vs, fs) => {
+  showErr('SHADER ERROR\n' + g.getProgramInfoLog(prog) + '\nVS: ' + g.getShaderInfoLog(vs) + '\nFS: ' + g.getShaderInfoLog(fs));
+};
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(Q.get('bg') ? '#' + Q.get('bg') : 0x05070c);
+const cam = new THREE.PerspectiveCamera(FOV, 16 / 9, 5, 30000);
+{ // same lighting rig as view3d.js
+  const pmrem = new THREE.PMREMGenerator(gl);
+  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+  scene.environmentIntensity = 0.55;
+  pmrem.dispose();
+  const sun = new THREE.DirectionalLight(0xfff0dc, 2.7);
+  sun.position.set(-0.45, 1, 0.55);
+  scene.add(sun, new THREE.HemisphereLight(0x8fb8ff, 0x1a1420, 0.9));
+}
+{ // star field
+  const n = 1400, pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
+  let s = 7; const R = () => ((s = (s * 16807) % 2147483647) / 2147483647);
+  for (let i = 0; i < n; i++) {
+    const u = R() * 2 - 1, a = R() * 6.283, r = Math.sqrt(1 - u * u), b = 0.15 + R() * R() * 1.4;
+    pos.set([Math.cos(a) * r * 9000, u * 9000, Math.sin(a) * r * 9000], i * 3);
+    col.set([b * (0.8 + R() * 0.3), b * 0.9, b * (0.9 + R() * 0.4)], i * 3);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  scene.add(new THREE.Points(g, new THREE.PointsMaterial({ size: 2.2, sizeAttenuation: false, vertexColors: true })));
+}
+const rt = new THREE.WebGLRenderTarget(256, 256, { type: THREE.HalfFloatType, samples: 4 });
+const composer = new EffectComposer(gl, rt);
+composer.setPixelRatio(1);
+composer.addPass(new RenderPass(scene, cam));
+composer.addPass(new UnrealBloomPass(new THREE.Vector2(256, 256), 0.55, 0.42, 0.9));
+composer.addPass(new OutputPass());
+
+const ships = new Ships3D(THREE, { quality: P.q });
+const root = new THREE.Group();
+scene.add(root);
+const cache = new Map();
+function inst(id, tint) {
+  const key = id + '|' + (tint ? tint.join(',') : '');
+  let g = cache.get(key);
+  if (!g) { g = ships.build(id, { tint }); cache.set(key, g); }
+  return g;
+}
+let simT = P.t ?? 600;
+// place ships: list of { id, x, z, len, bank, tint, ... }
+function stage(list) {
+  root.clear();
+  for (const s of list) {
+    const g = inst(s.id, s.tint ?? null), u = g.userData;
+    g.position.set(s.x || 0, s.y || 0, s.z || 0);
+    g.scale.setScalar(s.len || 60);
+    g.rotation.set(s.bank ?? 0, 0, 0);
+    u.setThrust(s.thrust ?? P.thrust); u.setBank((s.bank ?? 0) / 0.45); u.setFlash(s.flash ?? P.flash);
+    u.setDamage(s.damage ?? P.damage); u.setOpacity(s.opacity ?? P.opacity);
+    u.update(16, simT);
+    root.add(g);
+  }
+}
+const CLOSE = {
+  top: { p: [0, 1, 0.0001], up: [0, 0, -1], d: 175 },
+  tilt: { p: [-0.06, 0.74, 0.74], d: 170 },
+  chase: { p: [-540, 330, 0], d: 185, tgt: [14, 0, 0] },
+  beauty: { p: [0.74, 0.5, 0.66], d: 150 },
+  rear: { p: [-0.8, 0.42, 0.52], d: 150 },
+  under: { p: [0.5, -0.62, 0.6], d: 160 },
+  side: { p: [0, 0.07, 1], d: 160 },
+  front: { p: [1, 0.2, 0.25], d: 140 },
+  nozzle: { p: [-1, 0.32, 0.1], d: 62, off: [-22, 0, 0] },   // straight up the tailpipes, as the chase camera sees them
+  cockpit: { p: [0.45, 0.75, 0.5], d: 62, off: [8, 3, 0] },
+};
+function closeCam(view, aspect, dist = 1) {
+  const c = CLOSE[view] || CLOSE.beauty, v = new THREE.Vector3(...c.p).normalize().multiplyScalar(c.d * dist * (aspect < 1.3 ? 1.25 : 1));
+  cam.fov = 30; cam.aspect = aspect; cam.position.copy(v); cam.up.set(...(c.up || [0, 1, 0]));
+  { const tg = c.tgt || [0, 0, 0], of = c.off || [0, 0, 0]; cam.position.x += of[0]; cam.position.y += of[1]; cam.position.z += of[2]; cam.lookAt(tg[0] + of[0], tg[1] + of[1], tg[2] + of[2]); } cam.updateProjectionMatrix();
+}
+function gameCam(mode, aspect, px = 0, pz = 0) {
+  const hTop = (WH / 2) / Math.tan((FOV * Math.PI) / 360);
+  cam.aspect = aspect; cam.fov = FOV; cam.up.set(0, 1, 0);
+  if (mode === 'top') { cam.position.set(0, hTop, 0.01); cam.up.set(0, 0, -1); cam.lookAt(0, 0, 0); }
+  else if (mode === 'chase') { cam.fov = CHASE_FOV; cam.position.set(px - 540, 330, pz * 0.84); cam.lookAt(px + 470, 0, pz * 0.84 * 0.92); }
+  else { cam.position.set(-WW * 0.04, hTop * 0.74, hTop * 0.74); cam.lookAt(0, 0, WH * 0.07); }
+  cam.updateProjectionMatrix();
+}
+function renderGL(w, h) {
+  gl.setSize(w, h, false); composer.setSize(w, h);
+  composer.render();
+}
+function tile(x, y, w, h, label) {
+  renderGL(w, h);
+  ctx.drawImage(glc, 0, 0, w, h, x, y, w, h);
+  if (label) { ctx.fillStyle = '#8fa6c0'; ctx.font = '12px ui-monospace, Menlo, monospace'; ctx.fillText(label, x + 8, y + 16); }
+}
+const hud = document.getElementById('hud');
+const fmtInfo = (id) => { const i = ships.info(id); return `${id}: ${i.tris.total} tris (hull ${i.tris.hull} mech ${i.tris.mech} glass ${i.tris.glass} emis ${i.tris.emis}), ${i.drawCalls} draws, first build ${i.buildMs.toFixed(1)} ms, size ${i.size.map((v) => v.toFixed(3)).join(' x ')}`; };
+
+function drawSheet() {
+  const rows = (Q.get('rows') || 'top,tilt').split(','), ids = Q.get('ids') ? Q.get('ids').split(',') : SHIP_IDS.filter((i) => i !== 'player1');
+  const tw = Math.floor(VW / ids.length), th = Math.floor(VH / rows.length);
+  ids.forEach((id, c) => rows.forEach((view, r) => {
+    stage([{ id, bank: P.bank, tint: P.tint }]);
+    closeCam(view, tw / th, P.dist * (view === 'top' ? 1.05 : 1) * (Q.has('dist') ? 1 : Math.max(0.62, Math.min(1.25, 0.62 * (th / tw)))));
+    tile(c * tw, r * th, tw, th, r === 0 ? id : view);
+  }));
+}
+function drawTints() {
+  const list = [null, TINTS.green, TINTS.orange, TINTS.purple], id = P.ship;
+  const tw = Math.floor(VW / 4), th = Math.floor(VH / 2);
+  list.forEach((tint, c) => ['top', 'tilt'].forEach((view, r) => {
+    stage([{ id, tint }]); closeCam(view, tw / th, P.dist); tile(c * tw, r * th, tw, th, tint ? 'tint ' + tint.join(',') : 'no tint');
+  }));
+}
+function gameRow(mode) {
+  const ids = SHIP_IDS.filter((i) => i !== 'player1');
+  return ids.map((id, i) => ({ id, len: GAME_LEN[id], x: mode === 'chase' ? -380 : -420 + (i % 2) * 150, z: (i - (ids.length - 1) / 2) * (mode === 'chase' ? 150 : 112), bank: (i % 3 - 1) * P.bank }));
+}
+function drawGameFrame(mode) {
+  stage(gameRow(mode));
+  gameCam(mode, VW / VH, -380, 0);
+  tile(0, 0, VW, VH, `game frame · ${mode} · world ${WW}x${WH} shown at ${VW}x${VH}`);
+}
+function drawGameShip(id) {
+  const modes = ['top', 'tilt', 'chase'], cw = Math.floor(VW / 3), ch1 = Math.floor(VH * 0.3), ch2 = VH - ch1;
+  const fw = 1280, fh = 720, tmp = document.createElement('canvas');
+  tmp.width = fw; tmp.height = fh;
+  const tc = tmp.getContext('2d');
+  modes.forEach((mode, c) => {
+    const px = -420, pz = 60;
+    stage([{ id, len: GAME_LEN[id], x: px, z: pz, bank: P.bank, tint: P.tint }]);
+    gameCam(mode, fw / fh, px, pz);
+    renderGL(fw, fh);
+    tc.drawImage(glc, 0, 0, fw, fh, 0, 0, fw, fh);
+    const v = new THREE.Vector3(px, 0, pz).project(cam), sx = (v.x * 0.5 + 0.5) * fw, sy = (-v.y * 0.5 + 0.5) * fh;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(tmp, Math.round(sx - cw / 2), Math.round(sy - ch1 / 2), cw, ch1, c * cw, 0, cw, ch1);
+    const zw = cw / 3, zh = ch2 / 3;
+    ctx.drawImage(tmp, Math.round(sx - zw / 2), Math.round(sy - zh / 2), zw, zh, c * cw, ch1, cw, ch2);
+    ctx.fillStyle = '#8fa6c0'; ctx.font = '12px ui-monospace, Menlo, monospace';
+    ctx.fillText(`${id} · ${mode} · 1x (1280x720 frame)`, c * cw + 8, 16); ctx.fillText('3x', c * cw + 8, ch1 + 16);
+  });
+}
+
+function draw() {
+  ctx.fillStyle = '#04060b'; ctx.fillRect(0, 0, VW, VH);
+  if (Q.get('sheet')) drawSheet();
+  else if (Q.get('tints')) drawTints();
+  else if (Q.get('game') && Q.get('game') !== '1') drawGameFrame(Q.get('game'));
+  else if (Q.get('game')) drawGameShip(P.ship);
+  else { stage([{ id: P.ship, bank: P.bank, tint: P.tint }]); closeCam(P.view, VW / VH, P.dist); tile(0, 0, VW, VH); }
+}
+
+try {
+  // cold build timings, one fresh factory
+  const cold = new Ships3D(THREE, { quality: P.q }), lines = [];
+  for (const id of SHIP_IDS) { const t0 = performance.now(); cold.build(id); const a = performance.now() - t0; const t1 = performance.now(); cold.build(id); lines.push(`${id.padEnd(12)} first ${a.toFixed(1).padStart(6)} ms  again ${(performance.now() - t1).toFixed(2)} ms  ${cold.info(id).tris.total} tris`); }
+  cold.dispose();
+  window.__timings = lines;
+  draw();
+  hud.textContent = Q.get('timings') ? lines.join('\n') : (Q.get('sheet') || Q.get('game') || Q.get('tints') ? '' : fmtInfo(P.ship));
+  const single = !Q.get('sheet') && !Q.get('game') && !Q.get('tints');
+  if (P.t == null) {
+    let last = performance.now(), frames = 0;
+    const loop = (now) => {
+      simT += Math.min(50, now - last); last = now;
+      if (single || frames++ % 6 === 0) draw();
+      requestAnimationFrame(loop);
+    };
+    requestAnimationFrame(loop);
+  }
+  document.getElementById('nav').innerHTML = SHIP_IDS.map((i) => `<a href="?ship=${i}&view=${P.view}">${i}</a>`).join('') + '<br>' +
+    Object.keys(CLOSE).map((v) => `<a href="?ship=${P.ship}&view=${v}">${v}</a>`).join('') + '<br>' +
+    `<a href="?sheet=1">sheet</a><a href="?game=top">game top</a><a href="?game=tilt">game tilt</a><a href="?game=chase">game chase</a><a href="?game=1&ship=${P.ship}">game scale</a><a href="?tints=1">tints</a>`;
+} catch (e) { showErr('FATAL: ' + (e.stack || e)); }
+</script>
+</body>
+</html>

@@ -1,7 +1,7 @@
 // Space Void service worker — offline play + instant repeat loads.
 // Assets are cache-first (immutable), code/html/fonts are network-first
 // with cache fallback, /api is never cached.
-const CACHE = 'space-void-v4'; // v4: fully procedural art, zero image downloads
+const CACHE = 'space-void-v5'; // v5: WebGL renderer (three.js + 3D modules load lazily, cached at runtime)
 
 const PRECACHE = [
   '.',
