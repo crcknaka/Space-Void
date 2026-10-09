@@ -47,20 +47,35 @@ export function saveName(n) {
   try { localStorage.setItem('spacevoid_name', String(n).toUpperCase().slice(0, 14)); } catch {}
 }
 
+// Shared look of the two name dialogs — same language as the canvas UI kit
+// (ui.js): system type, tracked caps, glass panel, cyan primary action.
+const OV_FONT = 'system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif';
+const OV_WRAP = `position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(2,5,10,.74);z-index:10;font-family:${OV_FONT};`;
+const OV_BOX = 'background:rgba(8,16,28,.94);border:1px solid rgba(104,214,255,.45);border-radius:3px;'
+  + 'box-shadow:0 0 0 1px rgba(0,0,0,.6),0 18px 60px rgba(0,0,0,.6),0 0 46px rgba(104,214,255,.10);'
+  + 'padding:28px 32px 26px;text-align:center;max-width:90vw';
+const OV_TITLE = 'color:#68d6ff;font-size:11px;font-weight:600;letter-spacing:.28em;margin-bottom:16px';
+const OV_INPUT = 'width:240px;max-width:70vw;background:rgba(4,9,16,.85);color:#f6faff;caret-color:#68d6ff;'
+  + 'border:1px solid rgba(188,208,230,.3);border-radius:2px;padding:12px 12px;'
+  + `font:600 18px ${OV_FONT};letter-spacing:.16em;text-align:center;outline:none;text-transform:uppercase`;
+const OV_BTN = `border-radius:2px;padding:12px 24px;min-height:44px;font:700 12px ${OV_FONT};letter-spacing:.18em;cursor:pointer`;
+const OV_OK = `background:#68d6ff;color:#06101c;border:1px solid #68d6ff;${OV_BTN}`;
+const OV_ALT = `background:transparent;color:#bcd0e6;border:1px solid rgba(188,208,230,.35);${OV_BTN}`;
+
 // DOM overlay to set the persistent player name (used by SETTINGS)
 let nameEditor = null;
 export function askPlayerName() {
   if (!nameEditor) {
     nameEditor = document.createElement('div');
-    nameEditor.style.cssText = 'position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.65);z-index:10;font-family:Orbitron,sans-serif;';
+    nameEditor.style.cssText = OV_WRAP;
     nameEditor.innerHTML = `
-      <div style="background:#111;border:2px solid #0c6;border-radius:10px;padding:26px 30px;text-align:center;max-width:90vw">
-        <div style="color:#fff;font-size:19px;font-weight:700;margin-bottom:14px">YOUR NAME</div>
+      <div style="${OV_BOX}">
+        <div style="${OV_TITLE}">PILOT NAME</div>
         <input id="pname-input" maxlength="14" placeholder="PILOT" autocomplete="off" spellcheck="false"
-          style="width:220px;max-width:70vw;background:#000;color:#0f8;border:1px solid #333;border-radius:6px;padding:10px 12px;font:700 18px Orbitron,sans-serif;text-align:center;outline:none;text-transform:uppercase">
-        <div style="margin-top:16px;display:flex;gap:10px;justify-content:center">
-          <button id="pname-ok" style="background:#0c6;color:#000;border:0;border-radius:6px;padding:10px 22px;font:700 15px Orbitron,sans-serif;cursor:pointer">SAVE</button>
-          <button id="pname-cancel" style="background:#444;color:#fff;border:0;border-radius:6px;padding:10px 22px;font:700 15px Orbitron,sans-serif;cursor:pointer">CANCEL</button>
+          style='${OV_INPUT}'>
+        <div style="margin-top:18px;display:flex;gap:10px;justify-content:center">
+          <button id="pname-ok" style='${OV_OK}'>SAVE</button>
+          <button id="pname-cancel" style='${OV_ALT}'>CANCEL</button>
         </div>
       </div>`;
     document.body.appendChild(nameEditor);
@@ -84,20 +99,15 @@ let overlay = null;
 function buildOverlay() {
   overlay = document.createElement('div');
   overlay.id = 'nameov';
-  overlay.style.cssText =
-    'position:fixed;inset:0;display:none;align-items:center;justify-content:center;' +
-    'background:rgba(0,0,0,.65);z-index:10;font-family:Orbitron,sans-serif;';
+  overlay.style.cssText = OV_WRAP;
   overlay.innerHTML = `
-    <div style="background:#111;border:2px solid #0c6;border-radius:10px;padding:26px 30px;text-align:center;max-width:90vw">
-      <div style="color:#fff;font-size:19px;font-weight:700;margin-bottom:14px">SUBMIT YOUR SCORE</div>
+    <div style="${OV_BOX}">
+      <div style="${OV_TITLE}">SUBMIT YOUR SCORE</div>
       <input id="nameov-input" maxlength="14" placeholder="YOUR NAME" autocomplete="off" spellcheck="false"
-        style="width:220px;max-width:70vw;background:#000;color:#0f8;border:1px solid #333;border-radius:6px;
-        padding:10px 12px;font:700 18px Orbitron,sans-serif;text-align:center;outline:none;text-transform:uppercase">
-      <div style="margin-top:16px;display:flex;gap:10px;justify-content:center">
-        <button id="nameov-ok" style="background:#0c6;color:#000;border:0;border-radius:6px;padding:10px 22px;
-          font:700 15px Orbitron,sans-serif;cursor:pointer">SUBMIT</button>
-        <button id="nameov-skip" style="background:#444;color:#fff;border:0;border-radius:6px;padding:10px 22px;
-          font:700 15px Orbitron,sans-serif;cursor:pointer">SKIP</button>
+        style='${OV_INPUT}'>
+      <div style="margin-top:18px;display:flex;gap:10px;justify-content:center">
+        <button id="nameov-ok" style='${OV_OK}'>SUBMIT</button>
+        <button id="nameov-skip" style='${OV_ALT}'>SKIP</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);

@@ -2,7 +2,8 @@
 import { W, H, STEP, randInt, rand, setRngSeed } from './const.js';
 import * as input from './input.js';
 import * as audio from './audio.js';
-import { Button, ButtonGroup, drawText } from './ui.js';
+import { Button, ButtonGroup } from './ui.js';
+import * as ui from './ui.js';
 import { Star, StaticStar, DistantConvoy, Freighter, Comet } from './entities.js';
 import { makeSpaceBackdrop, makePlanetSprite, drawLiveStation } from './bggen.js';
 import { GameState } from './game.js';
@@ -13,6 +14,23 @@ import { OnlineState } from './online.js';
 import { HangarState } from './hangar.js';
 import { todayMod, dailyAttemptsLeft, timeToNextDaily } from './daily.js';
 import { progress } from './progress.js';
+import { SHIP_BY_ID } from './ships.js';
+
+const { C, rgba } = ui;
+
+// per-entry presentation: accent + the one-line blurb shown under the list
+const ITEMS = {
+  single: { info: 'Solo run — waves, elites and a boss in every sector' },
+  hangar: { info: 'Ships, secondary weapons and permanent upgrades' },
+  local: { info: 'Co-op or versus — two players on one device' },
+  online: { info: 'Play with friends over the internet · up to 4 in co-op', tag: 'MULTIPLAYER' },
+  daily: { info: 'One seeded run a day with a global leaderboard', color: C.gold },
+  scores: { info: 'Global leaderboards for every mode' },
+  settings: { info: 'Audio, graphics, controls feel and achievements' },
+  coop: { info: 'Fight the campaign side by side' },
+  versus: { info: 'Head-to-head duel in the arena', color: C.gold },
+  back: { info: 'Return to the main menu' },
+};
 
 export class MenuState {
   constructor(app) {
@@ -26,6 +44,7 @@ export class MenuState {
     this.dailyBlock = 0;
     this.time = 0;
     this.k = 1;
+    this.anim = new ui.Anim();
     // procedural vista: deep-space tile + a big dim world low in the frame +
     // slow ambient traffic. Replaces the last PNG the game shipped with.
     this.bg = makeSpaceBackdrop((Math.random() * 1e9) | 0);
@@ -35,6 +54,8 @@ export class MenuState {
     this.nextAmbientAt = 2000 + Math.random() * 5000;
     this.starfield();
     this.layout();
+    this.anim.mark('enter');
+    this.anim.mark('page');
   }
 
   starfield() {
@@ -49,35 +70,45 @@ export class MenuState {
   }
 
   layout() {
-    const dy = 74;
+    // wide screens: the list is anchored to the left margin and the hull owns
+    // the right half; narrow / portrait: one centred column
+    const wide = ui.isWide(), mx = ui.gutter();
+    const rw = wide ? 380 : Math.min(400, W - 2 * mx - 16);
+    const cx = wide ? mx + rw / 2 : W / 2;
+    const slack = Math.max(0, H - 786); // tall phones: spread the column out, bigger touch rows
+    const rh = wide ? 52 : 56 + Math.min(10, slack * 0.03), step = rh + (wide ? 6 : 4);
+    const y0 = (wide ? 236 : 204) + slack * 0.3;
+    let last;
     if (this.page === 'local') {
-      const cy = H / 2 - dy / 2;
       this.menu = new ButtonGroup([
-        new Button('CO-OP', W / 2, cy - dy, 220, 58, 'rgb(0,120,255)', 'coop'),
-        new Button('VERSUS', W / 2, cy, 220, 58, 'rgb(255,140,0)', 'versus'),
-        new Button('BACK', W / 2, cy + dy + 20, 200, 54, 'rgb(255,0,0)', 'back'),
+        new Button('CO-OP', cx, y0, rw, rh, 'rgb(0,120,255)', 'coop'),
+        new Button('VERSUS', cx, y0 + step, rw, rh, 'rgb(255,140,0)', 'versus'),
+        new Button('BACK', cx, last = y0 + step * 2 + 20, rw, rh, 'rgb(255,0,0)', 'back'),
       ]);
     } else {
-      const dym = 64; // tighter step to fit the 7th (HANGAR) entry
-      let y = H / 2 - dym * 3;
-      const online = new Button('ONLINE', W / 2, 0, 220, 54, 'rgb(0,220,255)', 'online');
+      let y = y0;
+      const online = new Button('ONLINE', cx, 0, rw, rh, 'rgb(0,220,255)', 'online');
       online.accent = true; // permanently highlighted
       this.menu = new ButtonGroup([
-        new Button('SINGLE', W / 2, y, 220, 54, 'rgb(0,255,0)', 'single'),
-        new Button('HANGAR', W / 2, y += dym, 220, 54, 'rgb(120,220,255)', 'hangar'),
-        new Button('LOCAL 2P', W / 2, y += dym, 220, 54, 'rgb(0,120,255)', 'local'),
-        Object.assign(online, { cy: (y += dym) }),
-        new Button('DAILY', W / 2, y += dym, 220, 54, 'rgb(255,210,0)', 'daily'),
-        new Button('SCORES', W / 2, y += dym, 220, 54, 'rgb(200,120,255)', 'scores'),
-        new Button('SETTINGS', W / 2, y += dym, 220, 54, 'rgb(255,0,0)', 'settings'),
+        new Button('SINGLE', cx, y, rw, rh, 'rgb(0,255,0)', 'single'),
+        new Button('HANGAR', cx, y += step, rw, rh, 'rgb(120,220,255)', 'hangar'),
+        new Button('LOCAL 2P', cx, y += step, rw, rh, 'rgb(0,120,255)', 'local'),
+        Object.assign(online, { cy: (y += step) }),
+        new Button('DAILY', cx, y += step, rw, rh, 'rgb(255,210,0)', 'daily'),
+        new Button('SCORES', cx, y += step, rw, rh, 'rgb(200,120,255)', 'scores'),
+        new Button('SETTINGS', cx, last = y += step, rw, rh, 'rgb(255,0,0)', 'settings'),
       ]);
     }
+    this.L = { wide, mx, rw, x: cx - rw / 2, slack, bottom: last + rh / 2 };
+    // showcase hull (wide only): right of the list, level with its middle
+    this.hero = wide ? { x: W * 0.67, y: H * 0.47, size: Math.min(430, W * 0.3) } : null;
   }
 
   goPage(p) {
     this.page = p;
     audio.play('click', 0.5);
     this.layout();
+    this.anim.mark('page');
   }
 
   onResize() {
@@ -89,6 +120,7 @@ export class MenuState {
     const k = dt / STEP;
     this.k = k;
     this.time += dt;
+    this.anim.tick(dt);
     this.bgX -= 0.05 * k; // slow drift
     for (const s of this.stars) s.update(k);
     for (const s of this.staticStars) s.update(k);
@@ -105,6 +137,7 @@ export class MenuState {
     if (this.dailyBlock > 0) this.dailyBlock -= k;
 
     const action = this.menu.update();
+    if (this.menu.index !== this._selIdx) { this._selIdx = this.menu.index; this.anim.mark('sel'); }
     if (this.page === 'local') {
       if (action === 'coop') this.app.setState(new GameState(this.app, true));
       else if (action === 'versus') this.app.setState(new VersusState(this.app));
@@ -126,16 +159,11 @@ export class MenuState {
   draw(g) {
     // 3D graphics: the menu floats over the live sky, with the equipped hull
     // idling beside the buttons when there is room for it
-    if (this.app.view3d?.backdrop(g, W > 900
-      ? { ship: progress.selectedShip, x: W * 0.2, y: H * 0.6, size: Math.min(300, W * 0.2) }
-      : { ship: null })) {
-      // dim the centre column a touch so the buttons and text stay crisp
-      const dim = g.createRadialGradient(W / 2, H / 2, 60, W / 2, H / 2, Math.max(360, H * 0.6));
-      dim.addColorStop(0, 'rgba(0,0,0,0.42)');
-      dim.addColorStop(1, 'rgba(0,0,0,0)');
-      g.fillStyle = dim;
-      g.fillRect(0, 0, W, H);
-    } else {
+    const hero = this.hero;
+    const in3D = !!this.app.view3d?.backdrop(g, hero
+      ? { ship: progress.selectedShip, x: hero.x, y: hero.y, size: hero.size }
+      : { ship: null });
+    if (!in3D) {
     g.fillStyle = '#000';
     g.fillRect(0, 0, W, H);
 
@@ -170,43 +198,133 @@ export class MenuState {
     for (const s of this.stars) s.draw(g);
     }
 
-    drawText(g, 'SPACE VOID', W / 2, H / 2 - 315, 58);
-    drawText(g, 'v2.0', W / 2, H / 2 - 275, 19, 'rgb(150,150,150)');
-    if (this.app.highScore > 0) {
-      drawText(g, `BEST: ${this.app.highScore}`, W / 2, H / 2 - 243, 22, 'rgb(255,210,80)');
-    }
-    // credits wallet, top-right corner
-    if (progress.credits > 0) {
-      drawText(g, `◆ ${progress.credits} CR`, W - 14, 26, 17, 'rgb(120,220,255)', 'right');
-    }
+    this.drawUI(g, in3D);
+  }
 
-    if (this.page === 'local') {
-      drawText(g, '2 PLAYERS · ONE DEVICE', W / 2, H / 2 - 150, 18, 'rgb(160,160,160)');
-    }
+  // everything above the backdrop: scrims, title lockup, the list, info cards
+  drawUI(g, in3D) {
+    ui.begin(g);
+    const a = this.anim, L = this.L, { wide, mx } = L;
+    const hero = this.hero;
 
-    this.menu.draw(g);
+    // scrims keep the type readable over a bright planet or the sun
+    if (wide) ui.scrim(g, 'left', W * 0.6, in3D ? 0.78 : 0.7);
+    else ui.scrim(g, 'all', 0, in3D ? 0.46 : 0.4);
+    ui.scrim(g, 'top', 120, 0.5);
+    ui.scrim(g, 'bottom', 150, 0.62);
 
-    if (this.page === 'main') {
-      // daily challenge info: today's modifier, attempts, reset countdown
-      const tries = dailyAttemptsLeft();
-      const dailyLine = `DAILY · ${todayMod().name} · ${tries > 0 ? `${tries} ${tries === 1 ? 'try' : 'tries'} left` : 'no tries left'} · resets in ${timeToNextDaily()}`;
-      drawText(g, dailyLine, W / 2, H - 92, 13, tries > 0 ? 'rgb(255,210,80)' : 'rgb(150,120,60)');
+    // classic graphics have no 3D turntable — float the baked hull instead
+    const ship = SHIP_BY_ID[progress.selectedShip];
+    if (hero && !in3D) {
+      const spr = this.app.images.ships?.[progress.selectedShip];
+      if (spr) {
+        const sw = Math.min(280, hero.size * 0.7), sh = sw * (spr.height / spr.width);
+        ui.glow(g, C.cyan, hero.x, hero.y, sw * 0.9, sw * 0.5, 0.1);
+        g.drawImage(spr, hero.x - sw / 2, hero.y - sh / 2 + Math.sin(this.time / 900) * 6, sw, sh);
+      }
     }
-    if (this.dailyBlock > 0) {
-      g.globalAlpha = Math.min(1, this.dailyBlock / 60);
-      drawText(g, 'No daily attempts left — come back after the reset!', W / 2, H / 2 + 250, 16, 'rgb(255,110,110)');
+    if (hero && ship) {
+      const k = a.reveal(3, 'page'), cy = hero.y + hero.size * (in3D ? 0.4 : 0.3);
+      g.globalAlpha = k;
+      ui.line(g, hero.x - 70, cy, hero.x + 70, cy, rgba(C.mid, 0.3));
+      g.fillStyle = rgba(C.cyan); g.fillRect(hero.x - 12, cy - 1, 24, 2);
+      ui.text(g, ship.name, hero.x, cy + 20, { size: 15, weight: 600, track: 0.32, align: 'center' });
+      ui.text(g, 'ACTIVE HULL', hero.x, cy + 40, { size: 10, weight: 600, track: 0.26, align: 'center', color: rgba(C.low) });
       g.globalAlpha = 1;
     }
 
-    // controls hint
-    if (this.page === 'local') {
-      drawText(g, input.isTouch
-        ? 'Two players share this screen · gamepads recommended (P1=pad1, P2=pad2)'
-        : 'P1: WASD + Shift · Space   ·   P2: Arrows + RShift · Enter', W / 2, H - 48, 13, 'rgb(150,150,150)');
-    } else {
-      drawText(g, 'Space = rocket · E = laser · Shift = boost · Esc = pause', W / 2, H - 64, 13, 'rgb(150,150,150)');
-      drawText(g, 'ONLINE = play with friends over the internet · up to 4 in co-op', W / 2, H - 44, 13, 'rgb(120,220,255)');
+    // ---- title lockup: SPACE (heavy) VOID (light) over a rule ----
+    const ts = wide ? 58 : Math.min(46, (W - 2 * mx) / 9.6);
+    const ty = wide ? 98 : 84 + L.slack * 0.12;
+    const o1 = { size: ts, weight: 700, track: 0.2 }, o2 = { size: ts, weight: 200, track: 0.2 };
+    const w1 = ui.measure(g, 'SPACE', o1), w2 = ui.measure(g, 'VOID', o2), gap = ts * 0.52;
+    const tw = w1 + gap + w2, tx = wide ? mx : W / 2 - tw / 2;
+    const tk = a.reveal(0, 'enter', 0, 700);
+    g.globalAlpha = tk;
+    ui.text(g, 'SPACE', tx, ty, o1);
+    ui.text(g, 'VOID', tx + w1 + gap, ty, { ...o2, color: rgba(C.cyan) });
+    const ry = Math.round(ty + ts * 0.74);
+    g.fillStyle = rgba(C.mid, 0.22); g.fillRect(tx, ry, tw * tk, ui.hair());
+    g.fillStyle = rgba(C.cyan); g.fillRect(tx, ry - 1, 36, 2);
+    ui.text(g, this.page === 'local' ? '2 PLAYERS · ONE DEVICE' : 'V2.0', tx, ry + 17,
+      { size: 11, weight: 600, track: 0.24, color: rgba(C.mid, 0.9) });
+    if (this.app.highScore > 0) {
+      const best = ui.fmt(a.to('best', this.app.highScore, 320, 0));
+      const bw = ui.text(g, best, tx + tw, ry + 17, { size: 13, weight: 700, track: 0.1, align: 'right', color: rgba(C.gold) });
+      ui.text(g, 'BEST', tx + tw - bw - 10, ry + 17, { size: 11, weight: 600, track: 0.24, align: 'right', color: rgba(C.mid) });
     }
-    drawText(g, 'Made by cRc^', W - 10, H - 14, 14, 'rgb(200,200,200)', 'right');
+    g.globalAlpha = 1;
+
+    // credits wallet, top-right corner
+    if (progress.credits > 0) ui.wallet(g, W - mx, 38, a.to('cr', progress.credits, 260, 0));
+
+    // ---- the list ----
+    const tries = dailyAttemptsLeft();
+    this.menu.buttons.forEach((b, i) => {
+      const meta = ITEMS[b.action] || {};
+      const sel = a.to(`row_${b.action}`, b.selected || b.hovered ? 1 : 0, 80);
+      const k = a.reveal(i, 'page');
+      g.globalAlpha = k;
+      ui.menuRow(g, b.cx - b.w / 2 - (1 - k) * 22, b.cy - b.h / 2, b.w, b.h, b.text, {
+        a: sel,
+        color: meta.color || C.cyan,
+        index: b.action === 'back' ? '‹' : String(i + 1).padStart(2, '0'),
+        tag: b.action === 'daily' ? (tries > 0 ? `${tries} LEFT` : 'DONE') : meta.tag,
+        tagColor: b.action === 'daily' && tries === 0 ? C.low : meta.color || C.cyan,
+      });
+    });
+    g.globalAlpha = 1;
+
+    // blurb for the focused entry (or the "no attempts" notice)
+    const iy = L.bottom + 24;
+    const iw = wide ? Math.max(L.rw, W * 0.4) : L.rw;
+    const ix = wide ? L.x + 20 : W / 2;
+    const ial = wide ? 'left' : 'center';
+    if (this.dailyBlock > 0) {
+      ui.text(g, 'No daily attempts left — come back after the reset!', ix, iy,
+        { size: 13, weight: 600, align: ial, color: rgba(C.danger), alpha: Math.min(1, this.dailyBlock / 60), maxW: iw });
+    } else {
+      const meta = ITEMS[this.menu.buttons[this.menu.index].action];
+      if (meta) ui.text(g, meta.info, ix, iy, { size: 13, weight: 400, align: ial, color: rgba(C.mid, 0.85), alpha: ui.ease.out(a.since('sel') / 220), maxW: iw });
+    }
+
+    // ---- daily challenge card: today's modifier, attempts, reset countdown ----
+    if (this.page === 'main') {
+      const cw = wide ? 340 : L.rw, ch = 62;
+      const cx0 = wide ? W - mx - cw : W / 2 - cw / 2;
+      const cy0 = wide ? H - 152 : iy + 22;
+      const k = a.reveal(5, 'page');
+      g.globalAlpha = k;
+      ui.panel(g, cx0, cy0 + (1 - k) * 10, cw, ch, { accent: C.gold, cut: 10, fill: 0.55 });
+      ui.text(g, 'DAILY CHALLENGE', cx0 + 18, cy0 + 20, { size: 10, weight: 700, track: 0.24, color: rgba(tries > 0 ? C.gold : C.low) });
+      ui.text(g, todayMod().name, cx0 + 18, cy0 + 42, { size: 15, weight: 600, track: 0.12, maxW: cw - 150 });
+      ui.pips(g, cx0 + cw - 18, cy0 + 20, tries, 3, { color: C.gold, align: 'right' });
+      ui.text(g, `RESETS IN ${timeToNextDaily()}`, cx0 + cw - 18, cy0 + 43, { size: 10.5, weight: 600, track: 0.12, align: 'right', color: rgba(C.low) });
+      g.globalAlpha = 1;
+    }
+
+    // ---- footer: controls ----
+    const fy = H - 38;
+    if (this.page === 'local') {
+      if (input.isTouch) {
+        ui.text(g, 'Two players share this screen · gamepads recommended (P1 = pad 1, P2 = pad 2)', wide ? mx : W / 2, fy,
+          { size: 12, align: wide ? 'left' : 'center', color: rgba(C.low), maxW: W - 2 * mx });
+      } else {
+        const p1 = [['P1', 'WASD'], ['SHIFT', 'BOOST'], ['SPACE', 'ROCKET']];
+        const p2 = [['P2', 'ARROWS'], ['RSHIFT', 'BOOST'], ['ENTER', 'ROCKET']];
+        if (wide) {
+          const w = ui.keyHints(g, mx, fy, p1);
+          ui.keyHints(g, mx + w + 44, fy, p2);
+        } else {
+          ui.keyHints(g, W / 2, fy - 30, p1, { align: 'center', gap: 14 });
+          ui.keyHints(g, W / 2, fy, p2, { align: 'center', gap: 14 });
+        }
+      }
+    } else if (!input.isTouch) {
+      const keys = [['SPACE', 'ROCKET'], ['E', 'LASER'], ['SHIFT', 'BOOST'], ['ESC', 'PAUSE']];
+      if (wide) ui.keyHints(g, mx, fy, keys);
+      else ui.keyHints(g, W / 2, fy - 14, keys, { align: 'center', gap: 14 });
+    }
+    ui.text(g, 'MADE BY cRc^', W - mx, wide ? fy : H - 16, { size: 10, weight: 600, track: 0.22, align: 'right', color: rgba(C.low, 0.7) });
   }
 }

@@ -2,7 +2,8 @@
 import { W, H, STEP, rand, randInt, overlap, clamp, setRngSeed } from './const.js';
 import * as input from './input.js';
 import * as audio from './audio.js';
-import { Button, ButtonGroup, drawText } from './ui.js';
+import { ButtonGroup, UIButton } from './ui.js';
+import * as ui from './ui.js';
 import { BaseWorld } from './world.js';
 import {
   Player, Enemy, Boss, Asteroid, PowerUp, Explosion, Spark, Shockwave, Bullet, Rocket,
@@ -18,6 +19,27 @@ import { SHIP_BY_ID } from './ships.js';
 import { WEAPON_BY_ID } from './weapons.js';
 import { dailySeed, todayMod, useDailyAttempt, dailyAttemptsLeft, MODS } from './daily.js';
 import { makeSpaceBackdrop, sectorName, SECTOR_THEMES } from './bggen.js';
+
+const { C, rgba } = ui;
+const HUD_RED = '255,96,108'; // lives / boss hull
+const ION = '150,205,255';
+
+// tiny HUD glyphs, centred on (x, y); s = overall height
+function glyphRocket(g, x, y, s, color) {
+  g.fillStyle = color;
+  g.beginPath();
+  g.moveTo(x - s * 0.6, y - s * 0.5); g.lineTo(x - s * 0.3, y - s * 0.2); g.lineTo(x + s * 0.25, y - s * 0.2);
+  g.lineTo(x + s * 0.7, y); g.lineTo(x + s * 0.25, y + s * 0.2); g.lineTo(x - s * 0.3, y + s * 0.2);
+  g.lineTo(x - s * 0.6, y + s * 0.5); g.lineTo(x - s * 0.45, y);
+  g.closePath(); g.fill();
+}
+function glyphBolt(g, x, y, s, color) {
+  g.fillStyle = color;
+  g.beginPath();
+  g.moveTo(x + s * 0.15, y - s * 0.6); g.lineTo(x - s * 0.35, y + s * 0.08); g.lineTo(x - s * 0.02, y + s * 0.08);
+  g.lineTo(x - s * 0.15, y + s * 0.6); g.lineTo(x + s * 0.35, y - s * 0.08); g.lineTo(x + s * 0.02, y - s * 0.08);
+  g.closePath(); g.fill();
+}
 
 const P1_CONTROLS = {
   up: 'KeyW', down: 'KeyS', left: 'KeyA', right: 'KeyD',
@@ -329,11 +351,17 @@ export class GameState extends BaseWorld {
     g.globalCompositeOperation = prev;
   }
 
-  // OVERDRIVE meter + ready prompt / touch button (screen space)
+  // OVERDRIVE meter + ready prompt / touch button (screen space). In the
+  // cockpit view the bottom of the screen is the dashboard, so the meter
+  // shrinks into the top-right corner under the level plate.
   drawOverdriveHUD(g) {
     if (this.online) return;
     const active = this.overUntil && this.time < this.overUntil;
-    const bw = 240, bx = W / 2 - bw / 2, by = H - 30, m = this.overdrive || 0;
+    const pit = this._hudPit, m = this.overdrive || 0;
+    const bw = pit ? 150 : 240;
+    const bx = pit ? W - 14 - bw : W / 2 - bw / 2;
+    const by = pit ? (input.isTouch ? 134 : this.daily ? 108 : 84) : H - 30;
+    const lx = pit ? W - 14 : W / 2, al = pit ? 'right' : 'center';
     if (active) {
       const rem = (this.overUntil - this.time) / 5000;
       // gold edge vignette
@@ -341,27 +369,34 @@ export class GameState extends BaseWorld {
       vg.addColorStop(0, 'rgba(255,190,40,0)');
       vg.addColorStop(1, `rgba(255,190,40,${0.09 * (0.6 + 0.4 * Math.sin(this.time / 60))})`);
       g.fillStyle = vg; g.fillRect(0, 0, W, H);
-      drawText(g, 'OVERDRIVE', W / 2, by - 12, 15, 'rgb(255,215,90)');
-      g.fillStyle = 'rgba(255,255,255,0.15)'; g.fillRect(bx, by, bw, 7);
-      g.fillStyle = 'rgb(255,205,70)'; g.fillRect(bx, by, bw * rem, 7);
+      ui.hudLabel(g, 'OVERDRIVE', lx, by - 12, { size: 11, weight: 700, track: 0.3, align: al, color: rgba(C.gold) });
+      ui.hudBar(g, bx, by, bw, 6, rem, { color: C.gold, segs: pit ? 12 : 20, back: 0.22, glow: true });
       return;
     }
     // charging bar (hidden until it starts filling)
     if (m > 0 || this.overdriveReady()) {
-      g.fillStyle = 'rgba(255,255,255,0.12)'; g.fillRect(bx, by, bw, 7);
-      g.fillStyle = m >= 1 ? 'rgb(255,215,80)' : 'rgb(150,200,255)';
-      g.fillRect(bx, by, bw * m, 7);
-      if (this.overdriveReady()) {
+      const ready = this.overdriveReady();
+      g.fillStyle = rgba(C.ink, 0.45); g.fillRect(bx - 3, by - 3, bw + 6, 12);
+      ui.hudBar(g, bx, by, bw, 6, m, { color: m >= 1 ? C.gold : C.cyan, segs: pit ? 12 : 20, back: 0.2, glow: ready });
+      if (ready) {
         const pulse = 0.6 + 0.4 * Math.sin(this.time / 110);
         g.globalAlpha = pulse;
         if (input.isTouch) {
           const ob = this.overdriveBtn();
-          g.fillStyle = 'rgba(255,205,70,0.35)'; g.beginPath(); g.arc(ob.x, ob.y, ob.r, 0, Math.PI * 2); g.fill();
-          drawText(g, 'OD', ob.x, ob.y, 22, '#000');
+          ui.glow(g, C.gold, ob.x, ob.y, ob.r * 1.5, ob.r * 1.5, 0.5);
+          g.beginPath(); g.arc(ob.x, ob.y, ob.r, 0, Math.PI * 2);
+          g.fillStyle = rgba(C.gold, 0.9); g.fill();
+          ui.text(g, 'OD', ob.x, ob.y + 1, { size: 20, weight: 700, track: 0.1, align: 'center', color: rgba(C.ink) });
+        } else if (pit) {
+          ui.hudLabel(g, 'OVERDRIVE READY · F', lx, by - 12, { size: 10, weight: 700, track: 0.2, align: 'right', color: rgba(C.gold) });
         } else {
-          drawText(g, 'OVERDRIVE READY — press F', W / 2, by - 12, 14, 'rgb(255,215,90)');
+          const tw = ui.measure(g, 'OVERDRIVE READY', { size: 11, weight: 700, track: 0.3 });
+          ui.hudLabel(g, 'OVERDRIVE READY', W / 2 - 16, by - 14, { size: 11, weight: 700, track: 0.3, align: 'center', color: rgba(C.gold) });
+          ui.keyHints(g, W / 2 - 16 + tw / 2 + 10, by - 14, [['F', '']], { size: 10 });
         }
         g.globalAlpha = 1;
+      } else {
+        ui.hudLabel(g, 'OVERDRIVE', lx, by - 11, { size: 9, weight: 700, track: 0.28, align: al, color: rgba(C.low) });
       }
     }
   }
@@ -369,9 +404,9 @@ export class GameState extends BaseWorld {
   buildOverMenu() {
     const buttons = [];
     if (!this.daily || dailyAttemptsLeft() > 0) {
-      buttons.push(new Button('RETRY', W / 2, H / 2 + 88, 200, 50, 'rgb(0,255,0)', 'retry'));
+      buttons.push(new UIButton('RETRY', W / 2, H / 2 + 88, 240, 50, C.cyan, 'retry'));
     }
-    buttons.push(new Button('MAIN MENU', W / 2, H / 2 + 156, 200, 50, 'rgb(255,0,0)', 'main_menu'));
+    buttons.push(new UIButton('MAIN MENU', W / 2, H / 2 + 156, 240, 50, C.cyan, 'main_menu'));
     return new ButtonGroup(buttons);
   }
 
@@ -732,7 +767,7 @@ export class GameState extends BaseWorld {
     const v3 = this.online ? null : this.app.view3d;
     if (v3 && input.pressed.has('KeyV')) v3.cycle();
     if (v3 && input.pressed.has('KeyG')) v3.setEnabled(!v3.enabled);
-    const chase = !!(v3?.active && v3.mode === 'chase');
+    const chase = !!(v3?.active && (v3.mode === 'chase' || v3.mode === 'cockpit')); // both look down +x
     this.player1.controls = chase ? P1_CHASE_CONTROLS : P1_CONTROLS;
     this.player1.chase = chase;
     if (this.player2 && !this.online) {
@@ -1674,7 +1709,12 @@ export class GameState extends BaseWorld {
     for (const e of this.enemies) e.draw(g, this);
     for (const b of this.bullets) b.draw(g);
     for (const b of this.enemyBullets) b.draw(g);
-    for (const fx of this.effects) fx.draw(g, this);
+    for (const fx of this.effects) {
+      if (fx instanceof ScorePopup) { // kit type instead of the sprite-era font
+        const t = (this.time - fx.spawn) / fx.life;
+        this.drawPopup(g, fx, fx.x, fx.y - t * 34, t);
+      } else fx.draw(g, this);
+    }
     for (const r of this.rockets) r.draw(g);
     for (const r of this.enemyRockets) r.draw(g);
     if (this.overUntil && this.time < this.overUntil) this.drawOverdriveAura(g); // behind the ships
@@ -1682,8 +1722,10 @@ export class GameState extends BaseWorld {
     g.restore();
     // 3D was asked for but is not (yet) drawing: say why instead of silently showing classic
     const v3c = this.online ? null : this.app.view3d;
-    if (v3c?.enabled && (v3c.loading || v3c.failed)) drawText(g, v3c.label, 10, H - 14, 12, 'rgba(150,200,255,0.6)', 'left');
+    ui.begin(g);
+    if (v3c?.enabled && (v3c.loading || v3c.failed)) ui.hudLabel(g, v3c.label, 12, H - 16, { size: 10, color: rgba(C.low) });
     }
+    this._hudPit = !!(v3 && v3.mode === 'cockpit'); // cockpit: the lower third is the dashboard
 
     // slow-motion tint
     if (this.speedMul < 1) {
@@ -1705,8 +1747,7 @@ export class GameState extends BaseWorld {
       }
       const blink = 0.55 + 0.45 * Math.sin(this.time / 110);
       g.globalAlpha = active ? blink : Math.min(1, blink + 0.2);
-      drawText(g, active ? '⚡ ION STORM — WEAPONS OFFLINE ⚡' : '⚡ ION STORM INCOMING ⚡',
-        W / 2, 90, 20, 'rgb(150,205,255)');
+      this.drawBanner(g, this._hudPit ? 150 : 112, null, active ? 'ION STORM — WEAPONS OFFLINE' : 'ION STORM INCOMING', ION, g.globalAlpha);
       g.globalAlpha = 1;
     }
 
@@ -1756,8 +1797,7 @@ export class GameState extends BaseWorld {
       g.fillStyle = `rgba(255,0,0,${0.08 * blink})`;
       g.fillRect(0, 0, W, H);
       g.globalAlpha = 0.55 + 0.45 * blink;
-      drawText(g, '!! WARNING !!', W / 2, H / 2 - 220, 46, 'rgb(255,60,60)');
-      drawText(g, 'BOSS APPROACHING', W / 2, H / 2 - 178, 20, 'rgb(255,150,150)');
+      this.drawBanner(g, H / 2 - 200, 'WARNING', 'BOSS APPROACHING', C.danger, g.globalAlpha);
       g.globalAlpha = 1;
     }
 
@@ -1767,8 +1807,7 @@ export class GameState extends BaseWorld {
       g.fillStyle = `rgba(255,140,40,${0.06 * blink})`;
       g.fillRect(0, 0, W, H);
       g.globalAlpha = 0.55 + 0.45 * blink;
-      drawText(g, 'METEOR SHOWER', W / 2, H / 2 - 220, 42, 'rgb(255,170,70)');
-      drawText(g, 'SURVIVE FOR A BONUS', W / 2, H / 2 - 180, 18, 'rgb(255,205,140)');
+      this.drawBanner(g, H / 2 - 200, 'METEOR SHOWER', 'SURVIVE FOR A BONUS', '255,170,80', g.globalAlpha);
       g.globalAlpha = 1;
     }
 
@@ -1781,67 +1820,21 @@ export class GameState extends BaseWorld {
           g.fillRect(0, 0, W, H);
         }
         const pop = Math.min(1, t * 6);
-        const size = Math.round(64 * (0.6 + 0.4 * pop));
         const alpha = t < 0.75 ? 1 : 1 - (t - 0.75) / 0.25;
-        g.globalAlpha = alpha * pop;
-        const prevOp = g.globalCompositeOperation;
-        g.globalCompositeOperation = 'lighter';
-        drawText(g, `LEVEL ${this.levelBanner.level}`, W / 2, H / 2 - 180, size, 'rgb(120,80,20)');
-        g.globalCompositeOperation = prevOp;
-        drawText(g, `LEVEL ${this.levelBanner.level}`, W / 2, H / 2 - 180, size, 'rgb(255,215,90)');
-        drawText(g, `— ${sectorName(this.levelBanner.level)} —`, W / 2, H / 2 - 180 + size * 0.72, Math.round(size * 0.3), 'rgb(150,200,255)');
-        g.globalAlpha = alpha * 0.8;
-        drawText(g, 'WAVE CLEARED', W / 2, H / 2 - 180 + size * 0.72 + 30, 15, 'rgb(200,200,200)');
-        g.globalAlpha = 1;
+        this.drawBanner(g, H / 2 - 180, `LEVEL ${this.levelBanner.level}`, sectorName(this.levelBanner.level).toUpperCase(), C.gold,
+          alpha * pop, 30 + 16 * pop, 'WAVE CLEARED');
       }
     }
 
-    // HUD
-    const scoreText = `Score: ${this.score}`;
-    drawText(g, scoreText, 10, 24, 26, '#fff', 'left');
-    if (this.mult > 1) {
-      // badge sits right after the score text, shifting as the score grows
-      const mx = 10 + g.measureText(scoreText).width + 14;
-      const pulse = this.time - this.multPulse < 400 ? 1.4 - (this.time - this.multPulse) / 1000 : 1;
-      drawText(g, `x${this.mult}`, mx, 24, Math.round(24 * pulse), 'rgb(255,210,60)', 'left');
-      // combo time bar
-      const frac = Math.max(0, (this.comboEnd - this.time) / 4000);
-      g.fillStyle = 'rgba(255,210,60,0.8)';
-      g.fillRect(mx, 38, 46 * frac, 3);
-    }
-    drawText(g, `Level: ${this.level}`, W - 10, 24, 26, '#fff', 'right');
-    drawText(g, sectorName(this.level), W - 10, 44, 12, 'rgba(160,190,220,0.75)', 'right');
-    // on touch the pause button sits top-right at y~72, so drop the DAILY tag below it
-    if (this.daily) drawText(g, `DAILY · ${this.mod.name}`, W - 10, input.isTouch ? 110 : 64, 15, 'rgb(255,210,60)', 'right');
+    this.drawHud(g, v3);
 
     // daily modifier intro banner (first seconds of the run)
     if (this.daily && this.time < 3600 && !this.over) {
       const t = this.time / 3600;
       const alpha = t < 0.85 ? 1 : 1 - (t - 0.85) / 0.15;
-      g.globalAlpha = alpha;
-      drawText(g, this.mod.name, W / 2, H / 2 - 130, 44, 'rgb(255,210,60)');
-      drawText(g, this.mod.desc, W / 2, H / 2 - 90, 20, 'rgb(220,220,220)');
-      drawText(g, `attempt ${'●'.repeat(3 - dailyAttemptsLeft())}${'○'.repeat(dailyAttemptsLeft())}`, W / 2, H / 2 - 58, 15, 'rgb(160,160,160)');
-      g.globalAlpha = 1;
+      const left = dailyAttemptsLeft();
+      this.drawBanner(g, H / 2 - 110, this.mod.name, this.mod.desc.toUpperCase(), C.gold, alpha, 40, `ATTEMPT ${3 - left} / 3`);
     }
-    // lives + rockets per player (colour-coded)
-    const shown = this.playerList.filter((p) => !p.gone); // drop guests who left
-    const many = shown.length > 2;
-    const fs = many ? 18 : 22;
-    shown.forEach((p, i) => {
-      const y = 58 + i * (many ? 26 : 32);
-      drawText(g, `P${p.slot + 1}`, 10, y, fs, p.color, 'left');
-      // compact form past 4 lives (hull upgrades / Juggernaut) so hearts don't
-      // run into the rocket counter
-      const hearts = p.lives > 4 ? `♥×${p.lives}` : '♥'.repeat(Math.max(0, p.lives));
-      drawText(g, hearts, 44, y, fs, 'rgb(255,80,90)', 'left');
-      // out-of-ammo dry-fire briefly flashes the counter red
-      const rkCol = this.time - (p.rkEmptyFlash || 0) < 300 ? 'rgb(255,80,80)' : '#fff';
-      const lzCol = this.time - (p.lzEmptyFlash || 0) < 300 ? 'rgb(255,80,80)' : 'rgb(120,220,255)';
-      drawText(g, `🚀${p.rockets}`, many ? 108 : 124, y, fs, rkCol, 'left');
-      drawText(g, `⚡${p.lasers}`, many ? 168 : 192, y, fs, lzCol, 'left');
-    });
-    if (this.speedMul < 1) drawText(g, 'SLOW-MO', W / 2, 24, 24, 'rgb(120,200,255)');
 
     // first-run touch tutorial overlay
     if (this.tutUntil && !this.over) {
@@ -1854,18 +1847,18 @@ export class GameState extends BaseWorld {
         g.globalAlpha = a;
         // move hint at the left third
         const hx = W * 0.3, hy = H * 0.62;
-        g.strokeStyle = 'rgb(140,210,255)';
-        g.lineWidth = 2;
+        g.strokeStyle = rgba(C.cyan);
+        g.lineWidth = 1.5;
         g.beginPath(); g.arc(hx, hy, 26 * pulse, 0, Math.PI * 2); g.stroke();
         g.beginPath(); g.arc(hx, hy, 5, 0, Math.PI * 2); g.stroke();
-        drawText(g, 'DRAG ANYWHERE TO MOVE', hx, hy + 56, 16, 'rgb(140,210,255)');
-        drawText(g, 'GUNS FIRE ON THEIR OWN', hx, hy + 80, 13, 'rgba(200,220,240,0.85)');
+        ui.hudLabel(g, 'DRAG ANYWHERE TO MOVE', hx, hy + 56, { size: 13, weight: 700, track: 0.2, align: 'center', color: rgba(C.cyan), maxW: W * 0.56 });
+        ui.hudLabel(g, 'GUNS FIRE ON THEIR OWN', hx, hy + 78, { size: 10.5, track: 0.2, align: 'center', color: rgba(C.mid), maxW: W * 0.56 });
         // button hints
         const rb = this.rocketBtn(), lb2 = this.laserBtn();
         g.beginPath(); g.arc(rb.x, rb.y, (rb.r + 8) * pulse, 0, Math.PI * 2); g.stroke();
-        drawText(g, 'ROCKET', rb.x - rb.r - 12, rb.y, 15, 'rgb(140,210,255)', 'right');
+        ui.hudLabel(g, 'ROCKET', rb.x - rb.r - 16, rb.y, { size: 12, weight: 700, track: 0.2, align: 'right', color: rgba(C.cyan) });
         g.beginPath(); g.arc(lb2.x, lb2.y, (lb2.r + 8) * pulse, 0, Math.PI * 2); g.stroke();
-        drawText(g, 'LASER', lb2.x - lb2.r - 12, lb2.y, 15, 'rgb(140,210,255)', 'right');
+        ui.hudLabel(g, 'LASER', lb2.x - lb2.r - 16, lb2.y, { size: 12, weight: 700, track: 0.2, align: 'right', color: rgba(C.cyan) });
         g.globalAlpha = 1;
       }
     }
@@ -1875,58 +1868,53 @@ export class GameState extends BaseWorld {
 
     // touch controls: rocket button + pause button
     if (input.isTouch && !this.over && !this.paused) {
+      // glass discs: dark fill so they hold up over a bright sky, coloured ring
+      const disc = (b, r, color, ring = 0.8) => {
+        g.beginPath(); g.arc(b.x, b.y, r, 0, Math.PI * 2);
+        g.fillStyle = rgba(C.ink, 0.5); g.fill();
+        g.strokeStyle = rgba(color, ring); g.lineWidth = 1.5; g.stroke();
+        g.beginPath(); g.arc(b.x, b.y, r - 5, 0, Math.PI * 2);
+        g.strokeStyle = rgba(color, 0.16); g.lineWidth = 1; g.stroke();
+      };
+      const num = (n, x, y, color) => ui.text(g, String(n), x, y, { size: 17, weight: 700, align: 'center', color });
       const b = this.rocketBtn();
-      g.globalAlpha = 0.35;
-      g.fillStyle = '#fff';
-      g.beginPath();
-      g.arc(b.x, b.y, b.r, 0, Math.PI * 2);
-      g.fill();
-      g.globalAlpha = 0.9;
-      g.drawImage(images.rocket, b.x - 20, b.y - 18, 40, 20);
-      drawText(g, `${this.player1.rockets}`, b.x, b.y + 16, 22, '#000');
+      const hasRk = this.player1.rockets > 0;
+      disc(b, b.r, hasRk ? C.hi : C.low, hasRk ? 0.8 : 0.4);
+      g.globalAlpha = hasRk ? 0.95 : 0.4;
+      g.drawImage(images.rocket, b.x - 20, b.y - 20, 40, 20);
+      g.globalAlpha = 1;
+      num(this.player1.rockets, b.x, b.y + 17, rgba(hasRk ? C.hi : C.low));
 
       // laser button (charges + cooldown arc)
       const lb = this.laserBtn();
       const p1 = this.player1;
       const cd = Math.max(0, p1.lastLaser + p1.laserDelay - this.time) / p1.laserDelay;
       const ready = p1.lasers > 0 && cd <= 0;
-      g.globalAlpha = ready ? 0.4 : 0.22;
-      g.fillStyle = ready ? 'rgb(120,220,255)' : '#888';
-      g.beginPath(); g.arc(lb.x, lb.y, lb.r, 0, Math.PI * 2); g.fill();
+      disc(lb, lb.r, ready ? C.cyan : C.low, ready ? 0.9 : 0.4);
       if (cd > 0) { // cooldown sweep
-        g.globalAlpha = 0.5;
-        g.strokeStyle = '#fff'; g.lineWidth = 4;
-        g.beginPath(); g.arc(lb.x, lb.y, lb.r - 3, -Math.PI / 2, -Math.PI / 2 + (1 - cd) * Math.PI * 2); g.stroke();
+        g.strokeStyle = rgba(C.cyan, 0.9); g.lineWidth = 3;
+        g.beginPath(); g.arc(lb.x, lb.y, lb.r - 2, -Math.PI / 2, -Math.PI / 2 + (1 - cd) * Math.PI * 2); g.stroke();
       }
-      g.globalAlpha = 0.95;
-      drawText(g, '⚡', lb.x, lb.y - 4, 26, '#000');
-      drawText(g, `${p1.lasers}`, lb.x, lb.y + 18, 20, '#000');
+      glyphBolt(g, lb.x, lb.y - 9, 20, rgba(ready ? C.cyan : C.low));
+      num(p1.lasers, lb.x, lb.y + 16, rgba(ready ? C.hi : C.low));
 
       if (!this.online && this.app.view3d?.active) { // camera button
         const cb = this.camBtn();
-        g.globalAlpha = 0.3; g.fillStyle = '#fff';
-        g.beginPath(); g.arc(cb.x, cb.y, cb.r - 4, 0, Math.PI * 2); g.fill();
-        g.globalAlpha = 0.85;
-        drawText(g, 'CAM', cb.x, cb.y + 1, 11, '#000');
+        disc(cb, cb.r - 2, C.mid, 0.6);
+        ui.text(g, 'CAM', cb.x, cb.y + 0.5, { size: 9.5, weight: 700, track: 0.12, align: 'center', color: rgba(C.hi) });
       }
       const pb = this.pauseBtn();
-      g.globalAlpha = 0.3;
-      g.fillStyle = '#fff';
-      g.beginPath();
-      g.arc(pb.x, pb.y, pb.r - 4, 0, Math.PI * 2);
-      g.fill();
-      g.globalAlpha = 0.85;
+      disc(pb, pb.r - 2, C.mid, 0.6);
       if (this.online) {
         // leave (X)
-        g.strokeStyle = '#000'; g.lineWidth = 3;
+        g.strokeStyle = rgba(C.hi); g.lineWidth = 2;
         g.beginPath(); g.moveTo(pb.x - 6, pb.y - 6); g.lineTo(pb.x + 6, pb.y + 6);
         g.moveTo(pb.x + 6, pb.y - 6); g.lineTo(pb.x - 6, pb.y + 6); g.stroke();
       } else {
-        g.fillStyle = '#000';
-        g.fillRect(pb.x - 7, pb.y - 8, 5, 16); // pause bars
-        g.fillRect(pb.x + 2, pb.y - 8, 5, 16);
+        g.fillStyle = rgba(C.hi);
+        g.fillRect(pb.x - 6, pb.y - 7, 4, 14); // pause bars
+        g.fillRect(pb.x + 2, pb.y - 7, 4, 14);
       }
-      g.globalAlpha = 1;
     }
 
     this.drawPauseOverlay(g);
@@ -1934,63 +1922,8 @@ export class GameState extends BaseWorld {
     if (this.over) {
       g.fillStyle = `rgba(0,0,0,${this.overAlpha})`;
       g.fillRect(0, 0, W, H);
-      if (this.online && this.overAlpha >= 0.5) {
-        drawText(g, 'GAME OVER', W / 2, H / 2 - 44, 56, 'rgb(255,0,0)');
-        drawText(g, `LOST IN ${sectorName(this.level)}`, W / 2, H / 2 - 6, 14, 'rgba(160,190,220,0.8)');
-        drawText(g, `Score: ${this.score}`, W / 2, H / 2 + 26, 30);
-      }
-      if (this.overMenu) {
-        drawText(g, 'GAME OVER', W / 2, H / 2 - 100, 56, 'rgb(255,0,0)');
-        drawText(g, `LOST IN ${sectorName(this.level)}`, W / 2, H / 2 - 64, 14, 'rgba(160,190,220,0.8)');
-        drawText(g, `Score: ${this.score}`, W / 2, H / 2 - 38, 30);
-        if (this.newBest) {
-          // performance.now(): world time is frozen once the run is over
-          const pulse = 0.72 + 0.28 * Math.sin(performance.now() / 170);
-          g.globalAlpha = pulse;
-          drawText(g, '★ NEW BEST! ★', W / 2, H / 2 - 11, 25, 'rgb(255,215,80)');
-          g.globalAlpha = 1;
-        } else {
-          drawText(g, `Best: ${this.app.highScore}`, W / 2, H / 2 - 12, 24, 'rgb(180,180,180)');
-        }
-        // credits earned this run + running balance
-        if (this.reward && this.reward.total > 0) {
-          drawText(g, `+${this.reward.total} CR  ·  ${progress.credits} total`, W / 2, H / 2 + 14, 20, 'rgb(255,205,70)');
-        }
-        if (this.daily) {
-          const left = dailyAttemptsLeft();
-          drawText(g, left > 0 ? `DAILY ATTEMPTS LEFT: ${left}` : 'NO DAILY ATTEMPTS LEFT TODAY',
-            W / 2, H / 2 + 38, 16, left > 0 ? 'rgb(255,210,60)' : 'rgb(255,110,110)');
-        }
-        this.overMenu.draw(g);
-
-        // leaderboard block under the buttons
-        const ly = H / 2 + 195;
-        if (this.lb.status === 'done') {
-          if (this.lb.rank > 0 && this.lb.rank <= 10) {
-            drawText(g, `${this.daily ? 'DAILY' : 'GLOBAL'} RANK: #${this.lb.rank}`, W / 2, ly, 22, 'rgb(255,210,80)');
-          }
-          if (this.lb.top?.length) {
-            drawText(g, this.daily ? '— DAILY TOP —' : '— GLOBAL TOP —', W / 2, ly + 30, 16, 'rgb(140,140,140)');
-            this.lb.top.slice(0, 5).forEach((e, i) => {
-              const mine = this.lb.rank === i + 1;
-              const col = mine ? 'rgb(0,255,140)' : 'rgb(200,200,200)';
-              drawText(g, `${i + 1}. ${e.name}`, W / 2 - 130, ly + 56 + i * 24, 16, col, 'left');
-              drawText(g, `${e.score}`, W / 2 + 130, ly + 56 + i * 24, 16, col, 'right');
-            });
-          }
-        } else if (this.lb.status === 'sending') {
-          drawText(g, 'Submitting score…', W / 2, ly, 16, 'rgb(140,140,140)');
-        } else if (this.lb.status === 'offline') {
-          drawText(g, 'Leaderboard unavailable', W / 2, ly, 16, 'rgb(120,120,120)');
-        }
-
-        // keyboard shortcut hint at the foot of the screen
-        if (this.lb.status !== 'asking') {
-          const canRetry = !this.daily || dailyAttemptsLeft() > 0;
-          drawText(g, canRetry ? 'Enter / R — retry     Esc — menu' : 'Esc — menu',
-            W / 2, H - 22, 13, 'rgba(175,175,175,0.85)');
-        }
-      }
+      if (this.online && this.overAlpha >= 0.5) this.drawOverHead(g, H / 2 - 44, false);
+      if (this.overMenu) this.drawResults(g);
     }
 
     // big-hit / boss-phase screen punch: additive ghosts of the frame offset
@@ -2016,31 +1949,243 @@ export class GameState extends BaseWorld {
       window.__svlog?.push(`ERR 3D render: ${e.message} | ${(e.stack || '').split('\n')[1] || ''}`);
       v3.failed = true;
     }
-    // HUD backing: the sky can be bright (sun glare, nebulae) — keep the top row legible
-    const hb = g.createLinearGradient(0, 0, 0, 96);
-    hb.addColorStop(0, 'rgba(0,0,0,0.42)');
-    hb.addColorStop(1, 'rgba(0,0,0,0)');
-    g.fillStyle = hb;
-    g.fillRect(0, 0, W, 96);
-    const boss = this.enemies.find((e) => e.isBoss && !e.dead);
-    if (boss) {
-      const bw = Math.min(360, W * 0.4), bx = W / 2 - bw / 2, by = 62;
-      g.fillStyle = 'rgba(255,255,255,0.2)';
-      g.fillRect(bx, by, bw, 8);
-      g.fillStyle = boss.shieldUntil > this.time ? 'rgb(90,220,255)' : boss.flash > 0.05 ? '#fff' : '#f33';
-      g.fillRect(bx, by, (bw * Math.max(0, boss.health)) / boss.maxHealth, 8);
-    }
+    ui.begin(g);
     // score popups live in sim space — pin them to where that point lands on screen
     for (const fx of this.effects) {
       if (!(fx instanceof ScorePopup) || fx.dead) continue;
       const sp = v3.toScreen(fx.x, fx.y);
       if (!sp) continue;
       const t = (this.time - fx.spawn) / fx.life;
-      g.globalAlpha = t < 0.7 ? 1 : Math.max(0, 1 - (t - 0.7) / 0.3);
-      drawText(g, fx.text, sp.x, sp.y - 18 - t * 30, 16, fx.color);
+      this.drawPopup(g, fx, sp.x, sp.y - 18 - t * 30, t);
+    }
+    if (v3.mode === 'cockpit' && this.player1.alive && !this.over) this.drawPitAids(g, v3);
+    // camera hint: bottom-left, lifted above the dashboard in the cockpit view
+    if (!input.isTouch && !this.over && !this.paused) {
+      g.globalAlpha = 0.8;
+      ui.keyHints(g, 12, v3.mode === 'cockpit' ? 126 : H - 20, [['V', v3.label], ['G', 'CLASSIC GRAPHICS']], { size: 9.5, gap: 14 });
       g.globalAlpha = 1;
     }
-    if (!input.isTouch) drawText(g, `${v3.label}  ·  V — next   G — classic graphics`, 10, H - 14, 12, 'rgba(150,200,255,0.6)', 'left');
+  }
+
+  // floating score / pickup text
+  drawPopup(g, fx, x, y, t) {
+    const a = t < 0.7 ? 1 : Math.max(0, 1 - (t - 0.7) / 0.3);
+    const o = { size: 14 + 3 * Math.max(0, 1 - t * 5), weight: 700, track: 0.06, align: 'center' };
+    ui.text(g, fx.text, x + 1, y + 1, { ...o, color: 'rgba(0,0,0,0.65)', alpha: a });
+    ui.text(g, fx.text, x, y, { ...o, color: fx.color, alpha: a });
+  }
+
+  // Centre-screen announcement: a dark band that fades out sideways (so it
+  // reads over a nebula or an explosion), accent hairlines, light tracked title.
+  // title may be null for a one-line notice.
+  drawBanner(g, cy, title, sub, c, alpha = 1, size = 42, note = null) {
+    const prev = g.globalAlpha;
+    g.globalAlpha = 1;
+    const bw = Math.min(W * 0.48, 460), h = title ? size * 1.15 + 34 : 30, top = cy - h / 2;
+    for (const [dir, x] of [['l', W / 2 - bw], ['r', W / 2]]) {
+      ui.fade(g, '2,5,10', dir, x, top, bw, h, 0.62 * alpha);
+      ui.fade(g, c, dir, x, top, bw, ui.hair() * 1.5, 0.9 * alpha);
+      ui.fade(g, c, dir, x, top + h - ui.hair() * 1.5, bw, ui.hair() * 1.5, 0.9 * alpha);
+    }
+    if (title) {
+      ui.text(g, title, W / 2, cy - 10, { size, weight: 300, track: 0.3, align: 'center', color: rgba(c), alpha, maxW: W - 40 });
+      ui.text(g, sub, W / 2, cy + size * 0.5 + 6, { size: 11, weight: 700, track: 0.3, align: 'center', color: rgba(C.hi, 0.9), alpha, maxW: W - 40 });
+    } else {
+      ui.text(g, sub, W / 2, cy + 0.5, { size: 12, weight: 700, track: 0.3, align: 'center', color: rgba(c), alpha, maxW: W - 40 });
+    }
+    if (note) ui.hudLabel(g, note, W / 2, top + h + 16, { size: 10, weight: 700, track: 0.3, align: 'center', color: rgba(C.mid, 0.9 * alpha) });
+    g.globalAlpha = prev;
+  }
+
+  // Top HUD: score + combo and one row per player on the left, level + sector
+  // on the right, the boss hull bar in the middle (under the left plate on
+  // narrow / portrait screens). Plates keep it legible over a bright sky.
+  drawHud(g, v3) {
+    ui.scrim(g, 'top', 100, v3 ? 0.5 : 0.3);
+    const shown = this.playerList.filter((p) => !p.gone); // drop guests who left
+    const many = shown.length > 2, rowH = many ? 21 : 25;
+    const lx = 8, ly = 8, lw = 232, lh = 56 + shown.length * rowH + 5;
+    ui.hudPanel(g, lx, ly, lw, lh, { alpha: 0.5 });
+    ui.text(g, 'SCORE', lx + 14, ly + 14, { size: 9, weight: 700, track: 0.28, color: rgba(C.low) });
+    const sw = ui.text(g, ui.fmt(this.score), lx + 14, ly + 36, { size: 24, weight: 600, track: 0.03, color: '#fff' });
+    if (this.mult > 1) {
+      // badge sits right after the score, shifting as the score grows
+      const mx = lx + 14 + sw + 14;
+      const pulse = this.time - this.multPulse < 400 ? 1.4 - (this.time - this.multPulse) / 1000 : 1;
+      ui.text(g, `×${this.mult}`, mx, ly + 36, { size: Math.round(19 * pulse), weight: 700, color: rgba(C.gold) });
+      // combo time bar
+      ui.hudBar(g, mx, ly + 49, 44, 2.5, Math.max(0, (this.comboEnd - this.time) / 4000), { color: C.gold, back: 0.2 });
+    }
+    g.fillStyle = rgba(C.mid, 0.14); g.fillRect(lx + 14, ly + 56, lw - 28, ui.hair());
+    // lives + rockets + beam charges per player (colour-coded)
+    shown.forEach((p, i) => {
+      const y = ly + 59 + rowH * (i + 0.5);
+      ui.text(g, `P${p.slot + 1}`, lx + 14, y + 0.5, { size: 11, weight: 700, track: 0.08, color: p.color });
+      // compact form past 5 lives (hull upgrades / Juggernaut) so the pips
+      // don't run into the rocket counter
+      const lives = Math.max(0, p.lives);
+      if (lives > 5) {
+        ui.hudIconPips(g, lx + 44, y, 1, 1, { color: HUD_RED, size: 9 });
+        ui.text(g, `×${lives}`, lx + 58, y + 0.5, { size: 13, weight: 700, color: rgba(HUD_RED) });
+      } else {
+        ui.hudIconPips(g, lx + 44, y, lives, Math.min(5, Math.max(lives, p.maxLives || 3)), { color: HUD_RED, size: 9, gap: 4 });
+      }
+      // out-of-ammo dry-fire briefly flashes the counter red
+      const rk = this.time - (p.rkEmptyFlash || 0) < 300 ? rgba(C.danger) : rgba(p.rockets > 0 ? C.hi : C.low);
+      const lz = this.time - (p.lzEmptyFlash || 0) < 300 ? rgba(C.danger) : rgba(p.lasers > 0 ? C.cyan : C.low);
+      glyphRocket(g, lx + 132, y, 11, rk);
+      ui.text(g, String(p.rockets), lx + 145, y + 0.5, { size: 14, weight: 700, color: rk });
+      glyphBolt(g, lx + 186, y, 13, lz);
+      ui.text(g, String(p.lasers), lx + 196, y + 0.5, { size: 14, weight: 700, color: lz });
+    });
+
+    // level + sector, top-right
+    const rw = 204, rx = W - 8 - rw;
+    ui.hudPanel(g, rx, 8, rw, 44, { alpha: 0.5, edge: 'right' });
+    ui.text(g, 'LEVEL', W - 22, 20, { size: 9, weight: 700, track: 0.28, align: 'right', color: rgba(C.low) });
+    const nw = ui.text(g, String(this.level).padStart(2, '0'), W - 22, 38, { size: 22, weight: 600, align: 'right', color: '#fff' });
+    ui.text(g, sectorName(this.level).toUpperCase(), W - 22 - nw - 12, 39, {
+      size: 10, weight: 600, track: 0.14, align: 'right', color: rgba(C.mid, 0.9), maxW: rw - nw - 40,
+    });
+    // on touch the pause button sits top-right at y~72, so drop the DAILY tag below it
+    if (this.daily) {
+      const dy = input.isTouch ? 112 : 74, label = `DAILY · ${this.mod.name}`;
+      const dw = ui.measure(g, label, { size: 10.5, weight: 700, track: 0.14 }) + 16;
+      g.fillStyle = rgba(C.ink, 0.5); g.fillRect(W - 8 - dw, dy - 10, dw, 20);
+      ui.chip(g, W - 8, dy, label, { color: C.gold, align: 'right' });
+    }
+    if (this.speedMul < 1) ui.hudLabel(g, 'SLOW-MO', W / 2, 24, { size: 12, weight: 700, track: 0.4, align: 'center', color: rgba(C.cyan) });
+
+    // boss hull
+    const boss = this.enemies.find((e) => e.isBoss && !e.dead);
+    if (!boss) { this._bossGhost = 1; return; }
+    const narrow = W < 760;
+    const bw = narrow ? W - 40 : Math.min(440, W * 0.34), bx = W / 2 - bw / 2;
+    const by = narrow ? (this.daily && input.isTouch ? 150 : ly + lh + 26) : 60;
+    const v = Math.max(0, boss.health) / boss.maxHealth;
+    // trailing "recent damage" level eases down behind the real one
+    this._bossGhost = Math.max(v, (this._bossGhost ?? 1) - 0.004 * (this.k || 1));
+    const col = boss.shieldUntil > this.time ? C.cyan : boss.flash > 0.05 ? C.white : HUD_RED;
+    g.fillStyle = rgba(C.ink, 0.55); g.fillRect(bx - 5, by - 5, bw + 10, 17);
+    g.fillStyle = rgba(HUD_RED, 0.9); g.fillRect(bx - 5, by - 5, 2, 17); g.fillRect(bx + bw + 3, by - 5, 2, 17);
+    ui.hudBar(g, bx, by, bw, 7, v, { color: col, back: 0.16, ghost: this._bossGhost });
+    ui.hudLabel(g, boss.shieldUntil > this.time ? 'SHIELDED' : boss.mega ? 'MEGA BOSS' : 'BOSS', bx - 4, by - 15, { size: 9.5, weight: 700, track: 0.3, color: rgba(col === C.white ? HUD_RED : col) });
+    ui.hudLabel(g, `${Math.ceil(v * 100)}%`, bx + bw + 4, by - 15, { size: 10, weight: 700, track: 0.08, align: 'right', color: rgba(C.hi) });
+  }
+
+  // GAME OVER heading block (also used alone by the online wrapper's flow)
+  drawOverHead(g, y, big = true) {
+    ui.text(g, 'GAME OVER', W / 2, y, { size: big ? 38 : 44, weight: 300, track: 0.36, align: 'center', color: rgba(C.danger), maxW: W - 40 });
+    ui.text(g, `LOST IN ${sectorName(this.level).toUpperCase()}`, W / 2, y + 36, { size: 10.5, weight: 700, track: 0.26, align: 'center', color: rgba(C.low), maxW: W - 40 });
+    ui.text(g, ui.fmt(this.score), W / 2, y + 70, { size: 34, weight: 600, track: 0.04, align: 'center', color: '#fff' });
+  }
+
+  // results: heading, best / reward lines, the two buttons, leaderboard slice
+  drawResults(g) {
+    const cy = H / 2, pw = Math.min(380, W - 32), top = cy - 148, bottom = cy + 198;
+    ui.panel(g, W / 2 - pw / 2, top, pw, bottom - top, { accent: C.danger, fill: 0.74 });
+    this.drawOverHead(g, cy - 108);
+    if (this.newBest) {
+      // performance.now(): world time is frozen once the run is over
+      ui.chip(g, W / 2, cy - 4, 'NEW BEST', { color: C.gold, align: 'center', filled: true, h: 22, size: 11, a: 0.72 + 0.28 * Math.sin(performance.now() / 170) });
+    } else {
+      ui.text(g, `BEST  ${ui.fmt(this.app.highScore)}`, W / 2, cy - 4, { size: 12, weight: 700, track: 0.2, align: 'center', color: rgba(C.mid, 0.85) });
+    }
+    // credits earned this run + running balance
+    if (this.reward && this.reward.total > 0) {
+      ui.text(g, `+${ui.fmt(this.reward.total)} CR  ·  ${ui.fmt(progress.credits)} TOTAL`, W / 2, cy + 20, { size: 13, weight: 700, track: 0.14, align: 'center', color: rgba(C.gold), maxW: pw - 40 });
+    }
+    if (this.daily) {
+      const left = dailyAttemptsLeft();
+      ui.text(g, left > 0 ? `DAILY ATTEMPTS LEFT: ${left}` : 'NO DAILY ATTEMPTS LEFT TODAY', W / 2, cy + 42,
+        { size: 11, weight: 700, track: 0.18, align: 'center', color: rgba(left > 0 ? C.gold : C.danger), maxW: pw - 40 });
+    }
+    this.overMenu.draw(g);
+
+    // leaderboard block under the panel
+    const ly = bottom + 22, x0 = W / 2 - pw / 2 + 12, x1 = W / 2 + pw / 2 - 12;
+    const head = { size: 10, weight: 700, track: 0.24 };
+    if (this.lb.status === 'done') {
+      if (this.lb.top?.length) ui.text(g, this.daily ? 'DAILY TOP' : 'GLOBAL TOP', x0, ly, { ...head, color: rgba(C.low) });
+      if (this.lb.rank > 0 && this.lb.rank <= 10) {
+        ui.text(g, `${this.daily ? 'DAILY' : 'GLOBAL'} RANK  #${this.lb.rank}`, this.lb.top?.length ? x1 : W / 2, ly,
+          { ...head, size: 11, align: this.lb.top?.length ? 'right' : 'center', color: rgba(C.gold) });
+      }
+      if (this.lb.top?.length) {
+        g.fillStyle = rgba(C.mid, 0.2); g.fillRect(x0, ly + 12, x1 - x0, ui.hair());
+        this.lb.top.slice(0, 5).forEach((e, i) => {
+          const mine = this.lb.rank === i + 1, y = ly + 28 + i * 21;
+          const col = rgba(mine ? C.ok : C.mid);
+          ui.text(g, String(i + 1).padStart(2, '0'), x0, y, { size: 11, weight: 700, color: rgba(mine ? C.ok : C.low) });
+          ui.text(g, e.name, x0 + 30, y, { size: 13, weight: 600, track: 0.08, color: col, maxW: pw * 0.5 });
+          ui.text(g, ui.fmt(e.score), x1, y, { size: 13, weight: 600, align: 'right', color: col });
+        });
+      }
+    } else if (this.lb.status === 'sending') {
+      ui.text(g, 'SUBMITTING SCORE…', W / 2, ly, { ...head, align: 'center', color: rgba(C.low) });
+    } else if (this.lb.status === 'offline') {
+      ui.text(g, 'LEADERBOARD UNAVAILABLE', W / 2, ly, { ...head, align: 'center', color: rgba(C.low, 0.8) });
+    }
+
+    // keyboard shortcut hint at the foot of the screen
+    if (this.lb.status !== 'asking' && !input.isTouch) {
+      const canRetry = !this.daily || dailyAttemptsLeft() > 0;
+      ui.keyHints(g, W / 2, H - 20, canRetry ? [['ENTER', 'RETRY'], ['R', 'RETRY'], ['ESC', 'MENU']] : [['ESC', 'MENU']], { align: 'center', size: 10 });
+    }
+  }
+
+  // Helmet-sight symbology for the cockpit view, where depth along the lane is
+  // the hard part: a gun pipper, a box on every hostile (red once it is on the
+  // ship's line), a diamond on each shot that is going to connect, and edge
+  // chevrons for anything outside the canopy.
+  drawPitAids(g, v3) {
+    const p = this.player1, t = this.time, sm = this.speedMul || 1;
+    g.save();
+    g.lineWidth = Math.max(1, ui.hair() * 1.3);
+    const pip = v3.toScreen(p.x + 620, p.y);
+    if (pip) {
+      g.strokeStyle = rgba(C.cyan, 0.8);
+      g.beginPath(); g.arc(pip.x, pip.y, 9, 0, Math.PI * 2);
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { g.moveTo(pip.x + dx * 13, pip.y + dy * 13); g.lineTo(pip.x + dx * 21, pip.y + dy * 21); }
+      g.stroke();
+      g.fillStyle = rgba(C.cyan, 0.95);
+      g.fillRect(pip.x - 1, pip.y - 1, 2, 2);
+    }
+    const chevron = (y, right, hot) => {
+      const x = right ? W - 26 : 26, d = right ? 1 : -1;
+      g.strokeStyle = hot ? rgba(C.danger, 0.95) : rgba(C.gold, 0.7);
+      g.beginPath(); g.moveTo(x - d * 8, y - 11); g.lineTo(x + d * 6, y); g.lineTo(x - d * 8, y + 11); g.stroke();
+    };
+    for (const e of this.enemies) {
+      if (e.dead || e.dying || e.x < p.x + 20) continue;
+      const a = v3.toScreen(e.x, e.y - e.h / 2), b = v3.toScreen(e.x, e.y + e.h / 2);
+      if (!a || !b) continue;
+      const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+      const lined = Math.abs(e.y - p.y) < (e.h + p.h) * 0.5;
+      if (cx < 8 || cx > W - 8) { chevron(Math.max(90, Math.min(H * 0.6, cy)), cx > W / 2, lined); continue; }
+      const r = Math.max(9, Math.min(150, Math.abs(b.x - a.x) * 0.62)), c = Math.max(4, r * 0.34);
+      g.strokeStyle = e.isBoss ? rgba(C.danger, 0.55) : lined ? rgba(C.danger, 0.95) : rgba(C.gold, 0.6);
+      g.beginPath();
+      for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+        g.moveTo(cx + sx * r, cy + sy * r - sy * c); g.lineTo(cx + sx * r, cy + sy * r); g.lineTo(cx + sx * r - sx * c, cy + sy * r);
+      }
+      g.stroke();
+    }
+    // incoming fire that will actually cross the ship
+    const warn = (x, y, vx, vy, size) => {
+      if (vx > -0.4 || x <= p.x) return;
+      const steps = (x - p.x) / -vx;
+      if (steps > 110 || Math.abs(y + vy * steps - p.y) - (size + p.h * 0.8) / 2 > 4) return;
+      const sp = v3.toScreen(x, y);
+      if (!sp) return;
+      const r = 5 + 9 * (1 - steps / 110), blink = steps < 35 ? 0.55 + 0.45 * Math.sin(t / 45) : 1;
+      g.strokeStyle = rgba(C.danger, 0.9 * blink);
+      g.beginPath(); g.moveTo(sp.x, sp.y - r); g.lineTo(sp.x + r, sp.y); g.lineTo(sp.x, sp.y + r); g.lineTo(sp.x - r, sp.y); g.closePath(); g.stroke();
+    };
+    for (const b of this.enemyBullets) if (!b.dead) warn(b.x, b.y, b.vx * sm, b.vy * sm, 10);
+    for (const a of this.asteroids) if (!a.dead) warn(a.x, a.y, -a.vx * sm, a.vy * sm, a.w * 0.75);
+    for (const r of this.enemyRockets) if (!r.dead) warn(r.x, r.y, (r.vx ?? -4) * sm, (r.vy ?? 0) * sm, r.w);
+    g.restore();
   }
 
   // gravity well physics: inverse-square pull on projectiles, rocks, power-ups
@@ -2134,14 +2279,29 @@ export class GameState extends BaseWorld {
     g.globalCompositeOperation = prev;
   }
 
-  // pause overlay + this run's stats above the base menu
+  // pause overlay: the base world owns the menu (buttons, navigation, hit
+  // tests) — this only draws it in the kit style with the run's stats on top
   drawPauseOverlay(g) {
     if (!this.paused) return;
-    super.drawPauseOverlay(g);
+    g.fillStyle = 'rgba(2,5,10,0.62)';
+    g.fillRect(0, 0, W, H);
+    const bs = this.pauseMenu.buttons, first = bs[0], last = bs[bs.length - 1];
+    const pw = Math.min(340, W - 32), top = first.cy - first.h / 2 - 138, bottom = last.cy + last.h / 2 + 26;
+    ui.panel(g, W / 2 - pw / 2, top, pw, bottom - top, { fill: 0.76 });
+    ui.text(g, 'PAUSED', W / 2, top + 40, { size: 28, weight: 300, track: 0.42, align: 'center', color: '#fff' });
+    g.fillStyle = rgba(C.cyan); g.fillRect(W / 2 - 18, top + 64, 36, 2);
     const secs = Math.floor(this.time / 1000);
-    const mmss = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
-    drawText(g, `SCORE ${this.score}     LEVEL ${this.level}     ${mmss}`,
-      W / 2, H / 2 - 168, 18, 'rgba(200,220,255,0.9)');
+    const stats = [['SCORE', ui.fmt(this.score)], ['LEVEL', String(this.level)], ['TIME', `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`]];
+    stats.forEach(([label, v], i) => {
+      const x = W / 2 + (i - 1) * (pw / 3 - 8);
+      ui.text(g, v, x, top + 92, { size: 17, weight: 600, align: 'center', color: '#fff' });
+      ui.text(g, label, x, top + 112, { size: 9, weight: 700, track: 0.26, align: 'center', color: rgba(C.low) });
+    });
+    for (const b of bs) {
+      b.glow = (b.glow || 0) + ((b.hovered || b.selected ? 1 : 0) - (b.glow || 0)) * 0.25;
+      ui.button(g, b.cx - b.w / 2, b.cy - b.h / 2 + 4, b.w, b.h - 8, b.text, { a: b.glow, size: 14 });
+    }
+    if (!input.isTouch) ui.keyHints(g, W / 2, bottom + 26, [['W S', 'NAVIGATE'], ['ENTER', 'SELECT'], ['ESC', 'RESUME']], { align: 'center', size: 10 });
   }
 
   drawToasts(g) {
@@ -2155,9 +2315,12 @@ export class GameState extends BaseWorld {
       const slide = Math.min(1, age / 250);
       const fade = age > 2700 ? 1 - (age - 2700) / 500 : 1;
       g.globalAlpha = slide * fade;
-      drawText(g, `🏆 ${t.title}`, W / 2, y - 20 * (1 - slide), 20, 'rgb(255,210,60)');
+      const tw = ui.measure(g, t.title, { size: 12, weight: 700, track: 0.16 }) + 128, ty = y - 20 * (1 - slide);
+      ui.hudPanel(g, W / 2 - tw / 2, ty - 15, tw, 30, { alpha: 0.7, accent: C.gold, edge: 'left' });
+      ui.text(g, 'ACHIEVEMENT', W / 2 - tw / 2 + 16, ty + 0.5, { size: 9, weight: 700, track: 0.24, color: rgba(C.gold) });
+      ui.text(g, t.title, W / 2 + tw / 2 - 14, ty + 0.5, { size: 12, weight: 700, track: 0.16, align: 'right', color: '#fff' });
       g.globalAlpha = 1;
-      y += 30;
+      y += 36;
       return true;
     });
   }

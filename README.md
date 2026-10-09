@@ -2,7 +2,7 @@
 
 Space shooter for the browser. **All art is generated in code** — ships, bosses, planets, asteroids, explosions, skies, even the menu: the game ships zero image or model files (only sounds are downloaded).
 
-It renders two ways from the same simulation: a **WebGL view** (three.js, loaded on demand) with three cameras — classic top-down, tilted, and third-person chase — and the original **classic canvas** look, which is the default on phones, the fallback when WebGL is unavailable, and what the online and versus modes use.
+It renders two ways from the same simulation: a **WebGL view** (three.js, loaded on demand) with four cameras — classic top-down, tilted, third-person chase, and a first-person cockpit with live instruments — and the original **classic canvas** look, which is the default on phones, the fallback when WebGL is unavailable, and what the online and versus modes use.
 
 🎮 **Play now: https://space-void.vercel.app** — desktop or phone, installable as a PWA, works offline.
 
@@ -28,7 +28,7 @@ It renders two ways from the same simulation: a **WebGL view** (three.js, loaded
 
 ## Controls
 
-**Desktop** — P1: `WASD` move, `Shift` boost, `Space` rocket, `E`/`Q` laser (guns auto-fire). P2 (local): arrows, `RShift`, `Enter`, `Numpad1`/`/`. Gamepads supported (stick/D-pad, `A`/`RT` rocket, `X` laser, `B`/`RB` boost). `Esc`/`P` pause. `V` cycles the camera (top → tilt → third-person chase; in chase `A`/`D` strafe and `W`/`S` move fore/aft), `G` swaps between the 3D renderer and the classic canvas graphics (offline modes).
+**Desktop** — P1: `WASD` move, `Shift` boost, `Space` rocket, `E`/`Q` laser (guns auto-fire). P2 (local): arrows, `RShift`, `Enter`, `Numpad1`/`/`. Gamepads supported (stick/D-pad, `A`/`RT` rocket, `X` laser, `B`/`RB` boost). `Esc`/`P` pause. `V` cycles the camera (top → tilt → third-person chase → cockpit; in chase and cockpit `A`/`D` strafe and `W`/`S` move fore/aft), `G` swaps between the 3D renderer and the classic canvas graphics (offline modes).
 
 **Touch** — drag anywhere to move, on-screen rocket & laser buttons, guns auto-fire.
 
@@ -46,7 +46,7 @@ Online modes need the Vercel API routes (`/api/rtc`, `/api/scores`) — use `ver
 
 ## Dev cheats (URL params)
 
-`?mode=single|coop|versus|daily` skip the menu · `&god` invincible · `&ff=30000` fast-forward 30s · `&boss=N` instant boss of level N · `&ion` ion storm at 5s · `&mod=<id>` force a daily modifier (`minefield`, `rocketday`, `convoy`…) · `&bg=N` force a backdrop seed · `&view=top|tilt|chase|classic` force the renderer/camera (no easing) · `&ship=<id>` fly any hull · `&autofire` laser + rockets on a timer · `&bossdie=<ms>` drop the boss to 1 hp at that world time · `&shotat=<ms>` step sim+render to that world time and freeze (deterministic screenshots) · `&screen=hangar` · `&prof` frame-time overlay · `?shipgen` procedural ship gallery (click to inspect, `R` rerolls).
+`?mode=single|coop|versus|daily` skip the menu · `&god` invincible · `&ff=30000` fast-forward 30s · `&boss=N` instant boss of level N · `&ion` ion storm at 5s · `&mod=<id>` force a daily modifier (`minefield`, `rocketday`, `convoy`…) · `&bg=N` force a backdrop seed · `&view=top|tilt|chase|cockpit|classic` force the renderer/camera (no easing) · `&ship=<id>` fly any hull · `&autofire` laser + rockets on a timer · `&bossdie=<ms>` drop the boss to 1 hp at that world time · `&shotat=<ms>` step sim+render to that world time and freeze (deterministic screenshots) · `&screen=hangar|weapons|upgrades|options|scores|local` · `&hud=pause|over` · `&prof` frame-time overlay · `?shipgen` procedural ship gallery (click to inspect, `R` rerolls).
 
 ### Headless screenshots
 

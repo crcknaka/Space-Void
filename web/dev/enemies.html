@@ -29,12 +29,18 @@
 <script type="module">
 /*
   ?ship=basic|weaver|hunter|tank|sniper|carrier|shieldbearer|strafer|brood|drone
-  &view=top|tilt|front|beauty|rear|under|side|chase     (close-up of one ship; default beauty)
+  &view=top|tilt|front|beauty|rear|under|side|chase|cockpit|tail     (close-up of one ship; default beauty)
+        cockpit = nose-on from slightly above, the hull a third of the frame; tail = the same from behind
   knobs: &flash=0..1 &dim=0.4..1 &damage=0..1 &warp=0..1 &charge=0..1 &thrust=0..2 &opacity=0..1 &elite=1
+         &aim=rad (turret / battery / rail traverse)  &roll=-1..1  &fire=0..1 (recoil pulse, 1 = the instant of the shot)
+         &death=0..1 (death fall)  &broken=N (parts broken off)  &parts=1 (show the broken-off pieces beside the hull)
   &dist=1 (camera distance multiplier)  &q=0.5 (low quality)  &t=ms (freeze animation time)  &bg=rrggbb
   ?sheet=1            contact sheet: every type, top + front 3/4 (+ &rows=top,front,tilt,rear  &ids=a,b)
   ?game=top|tilt|chase   a full game frame (world 1564x880) with all ten at in-game size beside a player ship
   ?states=1&ship=x    one type through every state knob (&view=tilt)
+  ?dmg=1              damage contact sheet: each type at 0 / 0.35 / 0.7 / 1 (&ids=a,b,c  &view=tilt  &cols=0,0.35,0.7,1)
+  ?mech=1&ship=x      one type through its machinery: aim, charge, roll, thrust, recoil, break-away parts, death fall
+  ?game=...&mix=1     game frame with the fleet at mixed damage (0 / 0.35 / 0.7 / 1 and broken parts)
   ?timings=1          cold build timings in the HUD
 */
 import * as THREE from 'three';
@@ -52,6 +58,7 @@ const P = {
   ship: Q.get('ship') || 'basic', view: Q.get('view') || 'beauty', thrust: num('thrust', 1),
   damage: num('damage', 0), flash: num('flash', 0), opacity: num('opacity', 1), dim: num('dim', 1), warp: num('warp', 0), charge: num('charge', 0),
   elite: !!num('elite', 0), dist: num('dist', 1), q: num('q', 1), t: Q.has('t') ? num('t', 0) : null,
+  aim: num('aim', 0), roll: num('roll', 0), fire: num('fire', 0), death: num('death', 0), broken: num('broken', 0), parts: !!num('parts', 0),
 };
 // recommended in-game length (world units) per type — see the module report
 const HIT = { basic: [50, 30], weaver: [50, 30], hunter: [50, 30], tank: [66, 40], sniper: [54, 24], carrier: [72, 44], shieldbearer: [52, 32], strafer: [62, 34], brood: [56, 34], drone: [34, 20] };
@@ -126,7 +133,20 @@ function stage(list) {
     g.rotation.order = 'YXZ';
     g.rotation.set(s.roll || 0, s.rotY || 0, 0);
     u.setThrust(s.thrust ?? P.thrust); u.setFlash(s.flash ?? P.flash); u.setDamage(s.damage ?? P.damage); u.setOpacity(s.opacity ?? P.opacity);
-    if (!s.player) { u.setDim(s.dim ?? P.dim); u.setWarp(s.warp ?? P.warp); u.setCharge(s.charge ?? P.charge); }
+    if (!s.player) {
+      u.setDim(s.dim ?? P.dim); u.setWarp(s.warp ?? P.warp); u.setCharge(s.charge ?? P.charge);
+      u.setAim(s.aim ?? P.aim, true); u.setRoll(s.ctl ?? P.roll); u.setDeath(s.death ?? P.death);
+      for (let n = s.broken ?? P.broken; (u._broken || 0) < n; u._broken = (u._broken || 0) + 1) {
+        const part = u.breakOff();
+        if (!part) continue;
+        if (s.parts ?? P.parts) { part.position.multiplyScalar(1.5).add(new THREE.Vector3(0, 0.12, 0)); part.rotation.set(0.5, 0.3, 0.4); g.add(part); (u._debris ||= []).push(part); }
+        else part.userData.dispose();
+      }
+      u.settle();
+      const fire = s.fire ?? P.fire;
+      if (fire > 0) { u.setFire(); u.update(-110 * Math.log(Math.max(1e-3, fire)), simT - 16); } // decay the pulse to the asked level
+      for (const d of u._debris || []) d.userData.update(16, simT);
+    }
     u.update(16, simT);
     root.add(g);
   });
@@ -141,6 +161,8 @@ const CLOSE = {
   rear: { p: [-0.8, 0.42, 0.52], d: 150 },
   under: { p: [0.5, -0.62, 0.6], d: 160 },
   side: { p: [0, 0.07, 1], d: 160 },
+  cockpit: { p: [1, 0.2, 0.1], d: 118 },
+  tail: { p: [-1, 0.3, 0.14], d: 118 },
 };
 function closeCam(view, aspect, dist = 1) {
   const c = CLOSE[view] || CLOSE.beauty, v = new THREE.Vector3(...c.p).normalize().multiplyScalar(c.d * dist * (aspect < 1.3 ? 1.25 : 1));
@@ -166,7 +188,7 @@ function tile(x, y, w, h, text) {
   if (text) label(text, x + 8, y + 16);
 }
 const hud = document.getElementById('hud');
-const fmtInfo = (id) => { const i = fleet.info(id); return `${id}: ${i.tris} tris (hull ${i.trisBy.hull} emis ${i.trisBy.emis}), ${i.drawCalls} draws, first build ${(i.buildMs ?? 0).toFixed(1)} ms, size ${i.size.map((v) => v.toFixed(3)).join(' x ')}`; };
+const fmtInfo = (id) => { const i = fleet.info(id); return `${id}: ${i.tris} tris (hull ${i.trisBy.hull} emis ${i.trisBy.emis}), ${i.drawCalls} draws, ${i.rigParts} rig parts, breaks: ${i.parts.join(' ')}${i.aim ? ', aims' : ''}, first build ${(i.buildMs ?? 0).toFixed(1)} ms, size ${i.size.map((v) => v.toFixed(3)).join(' x ')} · frame: ${gl.info.render.calls} calls`; };
 
 function drawSheet() {
   const rows = (Q.get('rows') || 'top,front').split(','), ids = Q.get('ids') ? Q.get('ids').split(',') : ENEMY_IDS;
@@ -194,6 +216,32 @@ function drawStates() {
     tile((i % cols) * tw, Math.floor(i / cols) * th, tw, th, `${id} · ${name}`);
   });
 }
+// each type through the four damage stages
+function drawDamage() {
+  const ids = Q.get('ids') ? Q.get('ids').split(',') : ENEMY_IDS.slice(0, 5), view = Q.get('view') || 'tilt';
+  const cols = (Q.get('cols') || '0,0.35,0.7,1').split(',').map(Number);
+  const tw = Math.floor(VW / cols.length), th = Math.floor(VH / ids.length);
+  ids.forEach((id, r) => cols.forEach((d, c) => {
+    stage([{ id, slot: 'd' + c, damage: d, elite: P.elite }]);
+    closeCam(view, tw / th, P.dist * 0.8);
+    tile(c * tw, r * th, tw, th, `${id} · damage ${d}`);
+  }));
+}
+// one type through its moving parts
+function drawMech() {
+  const id = P.ship, view = Q.get('view') || 'beauty';
+  const S = [
+    ['rest', {}], ['aim +0.6', { aim: 0.6 }], ['aim -2 (clamped to the mount)', { aim: -2 }], ['charge 0.5', { charge: 0.5 }], ['charge 1', { charge: 1 }],
+    ['roll +1', { ctl: 1 }], ['roll -1', { ctl: -1 }], ['thrust 0', { thrust: 0 }], ['thrust 2', { thrust: 2 }], ['fire (recoil)', { fire: 1 }],
+    ['broken 1', { broken: 1, damage: 0.4 }], ['broken 2', { broken: 2, damage: 0.6 }], ['broken 3 + parts', { broken: 3, damage: 0.8, parts: true }], ['death 0.4', { death: 0.4, damage: 1, thrust: 0, dim: 0.45 }], ['death 0.95', { death: 0.95, damage: 1, thrust: 0, dim: 0.45 }],
+  ];
+  const cols = 5, rowsN = Math.ceil(S.length / cols), tw = Math.floor(VW / cols), th = Math.floor(VH / rowsN);
+  S.forEach(([name, st], i) => {
+    stage([{ id, slot: 'm' + i, elite: P.elite, ...st }]);
+    closeCam(view, tw / th, P.dist * 0.85);
+    tile((i % cols) * tw, Math.floor(i / cols) * th, tw, th, `${id} · ${name}`);
+  });
+}
 // all ten at game size, facing -X, beside a player ship
 function gameList(mode) {
   const ids = ENEMY_IDS, list = [];
@@ -203,7 +251,8 @@ function gameList(mode) {
     let x, z;
     if (mode === 'chase') { x = px + 300 + (i % 5) * 190 + (i >= 5 ? 95 : 0); z = ((i * 3) % 10 - 4.5) * 62; }
     else { x = -150 + (i % 5) * 150; z = (i < 5 ? -1 : 1) * 95; }
-    list.push({ id, len: GAME_LEN[id], x, z, rotY: Math.PI, elite: Q.get('elite') === 'mix' ? i % 3 === 0 : P.elite });
+    const m = Q.get('mix') ? { damage: [0, 0.35, 0.7, 1][(i + (i >= 5 ? 2 : 0)) % 4], broken: [0, 0, 1, 3][(i + (i >= 5 ? 2 : 0)) % 4] } : {};
+    list.push({ id, len: GAME_LEN[id], x, z, rotY: Math.PI, elite: Q.get('elite') === 'mix' ? i % 3 === 0 : P.elite, ...m });
   });
   return list;
 }
@@ -223,7 +272,7 @@ function drawGameFrame(mode) {
   for (const s of list) {
     v.set(s.x, 0, s.z).project(cam);
     const px = ((v.x * 0.5 + 0.5) * VW - sx0) * zoom, py = ((-v.y * 0.5 + 0.5) * VH - sy0) * zoom;
-    ctx.textAlign = 'center'; label(s.player ? 'player' : s.id, px, py + (mode === 'chase' ? 22 : 34) * zoom + 10, '#5f7288'); ctx.textAlign = 'left';
+    ctx.textAlign = 'center'; label(s.player ? 'player' : s.id + (s.damage != null ? ' ' + s.damage : ''), px, py + (mode === 'chase' ? 22 : 34) * zoom + 10, '#5f7288'); ctx.textAlign = 'left';
   }
 }
 
@@ -231,6 +280,8 @@ function draw() {
   ctx.fillStyle = '#04060b'; ctx.fillRect(0, 0, VW, VH);
   if (Q.get('sheet')) drawSheet();
   else if (Q.get('states')) drawStates();
+  else if (Q.get('dmg')) drawDamage();
+  else if (Q.get('mech')) drawMech();
   else if (Q.get('game')) drawGameFrame(Q.get('game'));
   else { stage([{ id: P.ship, elite: P.elite }]); closeCam(P.view, VW / VH, P.dist); tile(0, 0, VW, VH); }
 }
@@ -243,7 +294,7 @@ try {
     cold.dispose();
   }
   draw();
-  const single = !Q.get('sheet') && !Q.get('game') && !Q.get('states');
+  const single = !Q.get('sheet') && !Q.get('game') && !Q.get('states') && !Q.get('dmg') && !Q.get('mech');
   hud.textContent = Q.get('timings') ? lines.join('\n') : (single ? fmtInfo(P.ship) : '');
   if (P.t == null) {
     let last = performance.now(), frames = 0;
@@ -256,7 +307,7 @@ try {
   }
   document.getElementById('nav').innerHTML = ENEMY_IDS.map((i) => `<a href="?ship=${i}&view=${P.view}">${i}</a>`).join('') + '<br>' +
     Object.keys(CLOSE).map((v) => `<a href="?ship=${P.ship}&view=${v}">${v}</a>`).join('') + '<br>' +
-    `<a href="?sheet=1">sheet</a><a href="?game=top">game top</a><a href="?game=tilt">game tilt</a><a href="?game=chase">game chase</a><a href="?states=1&ship=${P.ship}">states</a><a href="?ship=${P.ship}&view=${P.view}&elite=1">elite</a>`;
+    `<a href="?sheet=1">sheet</a><a href="?game=top">game top</a><a href="?game=tilt">game tilt</a><a href="?game=chase">game chase</a><a href="?states=1&ship=${P.ship}">states</a><a href="?dmg=1">damage</a><a href="?dmg=1&ids=carrier,shieldbearer,strafer,brood,drone">damage 2</a><a href="?mech=1&ship=${P.ship}">mech</a><a href="?game=chase&mix=1">game mix</a><a href="?ship=${P.ship}&view=${P.view}&elite=1">elite</a>`;
 } catch (e) { showErr('FATAL: ' + (e.stack || e)); }
 </script>
 </body>

@@ -13,6 +13,16 @@
 //   const ships = new Ships3D(THREE, { quality: 1 });
 //   const g = ships.build('vanguard', { tint: [0.3, 1, 0.4] });
 //   g.userData.{nozzles,muzzles,setThrust,setBank,setFlash,setOpacity,setDamage,setTint,update,dispose}
+//
+// Moving parts (control surfaces, nozzle petals, guns, gear, canopy, doors, torn
+// panels) are not separate meshes. Every vertex carries a rig slot + weight and
+// the shaders pose it from two small uniform arrays, so a hull stays at four
+// draw calls however much of it moves. Extra userData, all optional:
+//   setPitch(-1..1) setYaw(-1..1)            control surfaces / thrust vectoring / airbrakes (pitch < 0)
+//   setWeapon(1..3) setFire() setRocket() setLaser(0..1) setOverdrive(bool)
+//   setGear(0..1) setCanopy(0..1)            hangar / launch
+//   wounds, woundCount, breakOff(), repair() damage hooks
+//   muzzleCount, groundY, settle()
 
 export const SHIP_IDS = ['vanguard', 'interceptor', 'juggernaut', 'ghost', 'ace', 'player1', 'player2'];
 
@@ -183,6 +193,52 @@ export function wing(st, o = {}) {
   }
   return loft(rings, o);
 }
+// airfoil ring clipped at chord fraction fh (front keeps the leading part)
+function clipProf(prof, fh, front) {
+  const out = [], n = prof.length, inside = (p) => (front ? p[0] <= fh : p[0] >= fh);
+  for (let i = 0; i < n; i++) {
+    const a = prof[i], b = prof[(i + 1) % n], ia = inside(a), ib = inside(b);
+    if (ia) out.push(a);
+    if (ia !== ib) out.push([fh, lerp(a[1], b[1], (fh - a[0]) / (b[0] - a[0]))]);
+  }
+  return out;
+}
+function spanCut(st, za, zb) {
+  const out = [wAt(st, za)];
+  for (const s of st) if (s.z > za + 1e-6 && s.z < zb - 1e-6) out.push(s);
+  out.push(wAt(st, zb));
+  return out;
+}
+// wing with the trailing edge aft of chord fraction fh cut loose over each span range in
+// cuts = [[z0, z1], ...] (ascending): { main, flaps: [{ flap, p (hinge point), a (hinge axis, running outboard) }] }
+export function wingFlap(st, cuts, fh, o = {}) {
+  const prof = o.prof || WPROF, zB = st[st.length - 1].z, gap = o.gap ?? 0.014, inset = o.inset ?? 0.0025;
+  const main = [], flaps = [];
+  const add = (t) => { for (let i = 0; i < t.length; i++) main.push(t[i]); };
+  let z = st[0].z;
+  for (const [z0, z1] of cuts) {
+    if (z0 > z + 1e-6) add(wing(spanCut(st, z, z0), { prof, tip: false }));
+    add(loft(spanCut(st, z0, z1).map((s) => wingRing(s, clipProf(prof, fh, true)))));
+    const a = wAt(st, z0), b = wAt(st, z1);
+    const pa = [lerp(a.xl, a.xt, fh + gap), a.y, z0], pb = [lerp(b.xl, b.xt, fh + gap), b.y, z1];
+    const d = [pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]], l = Math.hypot(d[0], d[1], d[2]);
+    flaps.push({ flap: loft(spanCut(st, z0 + inset, z1 - inset).map((s) => wingRing(s, clipProf(prof, fh + gap, false)))), p: pa, a: [d[0] / l, d[1] / l, d[2] / l] });
+    z = z1;
+  }
+  if (z < zB - 1e-6) add(wing(spanCut(st, z, zB), { prof, tip: o.tip }));
+  return { main, flaps };
+}
+// height of a wing's upper (up = 1) or lower surface at plan point (x, z)
+export function wTop(st, x, z, up = 1, prof = WPROF) {
+  const s = wAt(st, z), f = clamp((s.xl - x) / (s.xl - s.xt), 0, 1);
+  let h = 0;
+  for (let i = 0; i < prof.length; i++) {
+    const a = prof[i], b = prof[(i + 1) % prof.length];
+    if (a[1] * up < 0 || b[1] * up < 0 || a[0] === b[0]) continue;
+    if ((f - a[0]) * (f - b[0]) <= 0) h = Math.max(h, Math.abs(lerp(a[1], b[1], (f - a[0]) / (b[0] - a[0]))));
+  }
+  return s.y + up * h * s.th * 0.5;
+}
 // chord/planform helpers shared by geometry and livery
 export function wAt(st, z) {
   let i = 0;
@@ -299,7 +355,7 @@ function creaseNormals(p, cosT) {
 // Baked contact shading. The opaque shell is voxelised, then every vertex is
 // darkened by how much of the hemisphere over it is blocked close by: wing
 // roots, the undersides of plates, the gaps between pods, the insides of ducts.
-// bufs: [{ pos, nrm, col }] — col is multiplied in place.
+// bufs: [{ pos, nrm, col, skip? }] — col is multiplied in place; vertices flagged in skip neither cast nor receive.
 export function bakeAO(bufs, o = {}) {
   const vox = o.vox || 0.0085, floor = o.floor ?? 0.36, pad = 2;
   let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
@@ -321,6 +377,7 @@ export function bakeAO(bufs, o = {}) {
   for (const b of bufs) {
     const p = b.pos;
     for (let t = 0; t < p.length; t += 9) {
+      if (b.skip && b.skip[t / 3]) continue;
       const ax = p[t], ay = p[t + 1], az = p[t + 2];
       const ux = p[t + 3] - ax, uy = p[t + 4] - ay, uz = p[t + 5] - az, vx = p[t + 6] - ax, vy = p[t + 7] - ay, vz = p[t + 8] - az;
       const m = Math.max(Math.hypot(ux, uy, uz), Math.hypot(vx, vy, vz), Math.hypot(ux - vx, uy - vy, uz - vz));
@@ -339,6 +396,7 @@ export function bakeAO(bufs, o = {}) {
   for (const b of bufs) {
     const p = b.pos, nr = b.nrm, c = b.col;
     for (let i = 0; i < p.length; i += 3) {
+      if (b.skip && b.skip[i / 3]) continue;
       const x = p[i], y = p[i + 1], z = p[i + 2], a = nr[i], bb = nr[i + 1], cc = nr[i + 2];
       // tangent frame
       let tx, ty, tz;
@@ -505,7 +563,17 @@ export class Livery {
 /* ========================================================================== */
 
 const GLASS_A = 0.34;
-const CH = { STATIC: 0, ENGINE: 1, NAV: 2, STROBE: 3, ACCENT: 4, COCKPIT: 5 };
+// emissive channels: every glowing vertex names one, and its level is a uniform
+const CH = { STATIC: 0, ENGINE: 1, NAV: 2, STROBE: 3, ACCENT: 4, COCKPIT: 5, AB: 6, SHIM: 7, GOLD: 8, BHEAT: 9, COIL: 10, LASER: 11, ROCKET: 12, FLASHA: 13, FLASHB: 14, SPARK: 15 };
+const NCH = 16;
+// rig: slot 0 is the rigid hull; the others are posed every frame from the state channels below
+const NP = 48;
+const S = {
+  ONE: 0, BANK: 1, PITCH: 2, YAW: 3, BRAKE: 4, THR: 5, AB: 6, GEARD: 7, GEARL: 8, CANOPY: 9, W2: 10, W3: 11,
+  FIREA: 12, FIREB: 13, ROCKET: 14, LASER: 15, OD: 16, BRK1: 17, BRK2: 18, SPIN: 19, BREATHE: 20, DMG1: 21, DMG2: 22,
+  GUT: 23, TWITCH: 24, BANKP: 25, BANKN: 26, SWEEP: 27, N: 28,
+};
+const HEATC = [5.5, 1.5, 0.25], GOLDC = [6.5, 4.2, 0.7], SPARKC = [7, 2.4, 0.4];
 const METAL = lin(0x9aa0a8), GUNMETAL = lin(0x3a3e45), SOOT = lin(0x17171a), PITCH = lin(0x08090b);
 const K3 = (c, k) => [c[0] * k, c[1] * k, c[2] * k];
 const NAV_RED = [6.5, 0.25, 0.18], NAV_GREEN = [0.2, 5.5, 0.9], NAV_WHITE = [5, 5.4, 6.5];
@@ -513,33 +581,54 @@ const NAV_RED = [6.5, 0.25, 0.18], NAV_GREEN = [0.2, 5.5, 0.9], NAV_WHITE = [5, 
 export class Kit {
   constructor(q, zr, P) {
     this.q = q; this.zr = zr; this.P = P;
-    this.hull = { pos: [], nrm: [], col: [], uv: [], hp: [], ha: [] };
-    this.mech = { pos: [], nrm: [], col: [] };
-    this.glass = { pos: [], nrm: [], col: [] };
-    this.emis = { pos: [], col: [], ch: [] };
+    this.hull = { pos: [], nrm: [], col: [], uv: [], rig: [] };
+    this.mech = { pos: [], nrm: [], col: [], rig: [] };
+    this.glass = { pos: [], nrm: [], col: [], rig: [] };
+    this.emis = { pos: [], col: [], ch: [], rig: [] };
     this.nozzles = []; this.muzzles = [];
+    this.parts = [{ p: [0, 0, 0], a: [0, 0, 1], ao: true, tag: 0 }]; this.ri = 0; this.rw = null;
+    this.groundY = 0; this.tears = [];
     this.sw = [(0.495 + UV_X0) / UV_XW, 1 - 0.03 / (2 * zr)];
   }
   seg(n) { return this.q >= 1 ? n : Math.max(6, Math.round(n * 0.55)); }
-  _emit(b, t, col, crease, mode, hinge) {
+  /* ---- rig ---- */
+  // Declare a moving part. Terms are flat lists read against the state channels S:
+  //   rot  [ch, radians, ...] about axis a through pivot p     rot2 the same about a2 (applied after)
+  //   mov  [ch, dx, dy, dz, ...]                               iris [ch, gain, ...] → YZ scale 1 + sum
+  //   vis  [base, ch, gain, ...] → shown while the sum > 0     glow [base, ch, gain, ...] → emissive level
+  // ao:false keeps the part out of the baked contact shading (things that are stowed or hidden at rest);
+  // brk 1|2 marks the piece breakOff() throws away; raw:true exempts it from the burn-through shading.
+  part(o = {}) {
+    if (this.parts.length >= NP) throw new Error('ships3d: out of rig slots');
+    const a = o.a || [0, 0, 1], l = Math.hypot(a[0], a[1], a[2]) || 1;
+    this.parts.push({
+      p: (o.p || [0, 0, 0]).slice(), a: [a[0] / l, a[1] / l, a[2] / l], rot: o.rot || null, a2: o.a2 || null, rot2: o.rot2 || null,
+      mov: o.mov ? o.mov.slice() : null, vis: o.vis || null, iris: o.iris || null, glow: o.glow || null, ao: o.ao !== false, brk: o.brk || 0, range: [],
+      tag: o.raw ? 0.25 : 0, // raw: torn metal — the damage shader leaves it alone
+    });
+    return this.parts.length - 1;
+  }
+  // emit everything fn builds into rig slot i; w(x,y,z) → 0..1 blends a vertex between rest and posed
+  in(i, fn, w) { const pi = this.ri, pw = this.rw; this.ri = i; this.rw = w || null; fn(); this.ri = pi; this.rw = pw; }
+  _emit(b, t, col, crease, mode) {
     const { pos, nrm } = creaseNormals(t, Math.cos((crease ?? 32) * DEG));
-    const zr = this.zr;
+    const zr = this.zr, ri = this.ri, v0 = b.pos.length / 3;
     for (let i = 0; i < pos.length; i += 3) {
       b.pos.push(pos[i], pos[i + 1], pos[i + 2]);
       b.nrm.push(nrm[i], nrm[i + 1], nrm[i + 2]);
       b.col.push(col[0], col[1], col[2]);
+      b.rig.push(ri + this.parts[ri].tag, ri ? (this.rw ? this.rw(pos[i], pos[i + 1], pos[i + 2]) : 1) : 0);
       if (b.uv) {
         if (mode === 1) b.uv.push(this.sw[0], this.sw[1]);
         else b.uv.push((pos[i] + UV_X0) / UV_XW, 1 - (pos[i + 2] + zr) / (2 * zr));
-        if (hinge) { b.hp.push(hinge.p[0], hinge.p[1], hinge.p[2]); b.ha.push(hinge.a[0], hinge.a[1], hinge.a[2], hinge.k); }
-        else { b.hp.push(0, 0, 0); b.ha.push(0, 0, 1, 0); }
       }
     }
+    if (ri && b === this.hull && this.parts[ri].brk) this.parts[ri].range.push(v0, b.pos.length / 3);
   }
   // painted hull: colour comes from the livery texture (plan projection)
-  paint(t, o = {}) { const s = o.shade ?? 1; this._emit(this.hull, t, [s, s, s], o.crease, 0, o.hinge); }
+  paint(t, o = {}) { const s = o.shade ?? 1; this._emit(this.hull, t, [s, s, s], o.crease, 0); }
   // hull-material part in one flat colour (fins, vertical faces, recesses)
-  solid(t, col, o = {}) { this._emit(this.hull, t, col, o.crease, 1, o.hinge); }
+  solid(t, col, o = {}) { this._emit(this.hull, t, col, o.crease, 1); }
   metal(t, col = METAL, crease) { this._emit(this.mech, t, col, crease); }
   glassy(t, col) { this._emit(this.glass, t, col, 50); }
 
@@ -549,6 +638,8 @@ export class Kit {
     E.pos.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
     E.col.push(ca[0], ca[1], ca[2], cb[0], cb[1], cb[2], cc[0], cc[1], cc[2]);
     E.ch.push(ch, ea, ch, eb, ch, ec);
+    const ri = this.ri, w = this.rw;
+    E.rig.push(ri, ri ? (w ? w(a[0], a[1], a[2]) : 1) : 0, ri, ri ? (w ? w(b[0], b[1], b[2]) : 1) : 0, ri, ri ? (w ? w(c[0], c[1], c[2]) : 1) : 0);
   }
   glowTris(t, col, ch) {
     for (let i = 0; i < t.length; i += 9) this.glow([t[i], t[i + 1], t[i + 2]], [t[i + 3], t[i + 4], t[i + 5]], [t[i + 6], t[i + 7], t[i + 8]], col, col, col, ch);
@@ -592,8 +683,20 @@ export class Kit {
       this.glowCone(x - r * 0.08, w, c, ec, x - r * 0.1, r * 0.04, Z, ec + h, y, z, m, CE, sy, sz);
     }
   }
-  // engine nozzle whose exit plane is at x (opening toward -X), length len
+  // engine nozzle whose exit plane is at x (opening toward -X), length len. The petals, liner and
+  // plume ride one rig slot: weighted from the hinge ring to the lip, it opens/closes as an iris
+  // with thrust and vectors with pitch / yaw / bank. The first nozzle built is the one that gutters.
   nozzle(x, y, z, r, len, o = {}) {
+    const hx = x + len * 0.44, v = o.vec ?? 1, bs = z > 0.001 ? -1 : z < -0.001 ? 1 : 0, ik = o.iris ?? 1;
+    const np = this.part({
+      p: [hx, y, z], a: [0, 0, 1], rot: [S.PITCH, -0.17 * v, S.BANK, 0.11 * v * bs], a2: [0, 1, 0], rot2: [S.YAW, -0.15 * v],
+      iris: [S.ONE, -0.15 * ik, S.THR, 0.15 * ik, S.AB, 0.17 * ik, S.BREATHE, 0.014],
+      glow: this.nozzles.length === 0 ? [0, S.GUT, 1] : null,
+    });
+    this.in(np, () => this._nozzle(x, y, z, r, len, o), (X) => clamp((hx - X) / (len * 0.4), 0, 1));
+    return np;
+  }
+  _nozzle(x, y, z, r, len, o) {
     const n = this.seg(20), np = this.seg(14), sy = o.sy || 1, sz = o.sz || 1, L = { y, z, sy, sz };
     const E0 = this.P.eng, K = (c, m) => [c[0] * m, c[1] * m, c[2] * m];
     // collar + actuator band (bare metal)
@@ -627,6 +730,13 @@ export class Kit {
     this.glowCone(xh, r * 0.76, K(E0.mid, 0.2), 0, x + len * 0.05, r * 0.845, K(E0.rim, 0.05), 0, y, z, n, CH.ENGINE, sy, sz);
     this.glowCone(x + len * 0.035, r * 0.845, K(E0.rim, 0.22), 0, x + len * 0.005, r * 0.9, K(E0.rim, 0.02), 0, y, z, n, CH.ENGINE, sy, sz);
     this.flame(x, y, z, r, E0, n, sy, sz);
+    // afterburner: two shock rings riding the plume and a hot band on the lip, lit only above cruise
+    for (const [rr, e, kk] of [[0.84, r * 0.25, 0.16], [0.62, r * 0.85, 0.11]]) {
+      const c = K(E0.hot, kk), c2 = K(E0.mid, kk * 0.5);
+      this.glowCone(x - r * 0.02, r * rr * 0.86, c2, e, x - r * 0.02, r * rr, c, e, y, z, n, CH.AB, sy, sz);
+      this.glowCone(x - r * 0.02, r * rr, c, e, x - r * 0.1, r * rr * 0.97, c2, e + r * 0.1, y, z, n, CH.AB, sy, sz);
+    }
+    this.glowCone(x + len * 0.2, r * 0.82, K(E0.mid, 0.12), 0, x + len * 0.01, r * 0.9, K(E0.hot, 0.1), 0, y, z, n, CH.AB, sy, sz);
     this.nozzles.push({ x, y, z, r: r * 0.9 * Math.max(sy, sz) });
   }
   // gun barrel from x0 (breech) to x1 (muzzle)
@@ -654,10 +764,13 @@ export class Kit {
     const n = o.n || this.seg(18), sub = this.q >= 1 ? 5 : 3;
     const gk = keys.map((k) => ({ x: k.x, w: k.w, t: k.t, b: 0.004, y: y0, et: o.et || 2.2, eb: 2 }));
     const G = fuselage(gk, { n, sub });
-    this.glassy(G.tris, K3(this.P.glass, 0.42));
     const fc = o.frame || lin(0x1b1f26);
-    // sill
+    // the hood (glass, arches, spine) lifts on a hinge behind the seat
+    const hood = this.part({ p: [keys[0].x + 0.006, y0 + 0.002, 0], a: [0, 0, 1], rot: [S.CANOPY, o.lift ?? 0.8] });
+    this.in(hood, () => this.glassy(G.tris, K3(this.P.glass, 0.42)));
+    // sill (stays on the hull)
     this.solid(fuselage(keys.map((k) => ({ x: k.x, w: k.w * 1.1 + 0.004, t: Math.max(0.003, k.t * 0.2), b: 0.012, y: y0 - 0.001, et: 2.6, eb: 2 })), { n, sub: 3 }).tris, fc, { crease: 40 });
+    this.in(hood, () => {
     // arches
     for (const ax of o.arches || []) {
       const s = G.at(ax), hw = o.archW || 0.0045;
@@ -669,6 +782,7 @@ export class Kit {
       for (let i = 0; i <= 6; i++) { const x = lerp(x0, x1, i / 6), s = G.at(x); rings.push(ringRect(x, y0 + s.t * 0.6, y0 + s.t + 0.002, -0.003, 0.003)); }
       this.solid(loft(rings), fc, { crease: 40 });
     }
+    });
     // cockpit: tub, side consoles, seat, pilot (suit, helmet, visor), instrument coaming and glowing screens
     const px = o.pilot ?? lerp(keys[0].x, keys[keys.length - 1].x, 0.48), s = G.at(px);
     const x0 = keys[0].x, x1 = keys[keys.length - 1].x, sw = s.w, st = s.t, ig = this.P.glow;
@@ -731,6 +845,262 @@ export class Kit {
       this.solid(box(x - w, x + w, y - 0.004, y + 0.0022, z0, z1, 0.0012), col, { crease: 30 });
     }
   }
+
+  /* ---- moving parts ---- */
+  // wing with hinged trailing-edge surfaces: flaps = [[z0, z1, rot], ...] aft of chord fraction fh.
+  // Positive rotation = trailing edge down on either side (the port hinge axis is flipped so both
+  // sides share the convention). Returns the rig slots.
+  flapWing(st, s, fh, flaps, o = {}) {
+    const W = wingFlap(st, flaps, fh, o), cr = o.crease ?? 26;
+    this.paint(side(W.main, s), { crease: cr });
+    return W.flaps.map((f, i) => {
+      const part = this.part({ p: [f.p[0], f.p[1], s * f.p[2]], a: [s * f.a[0], s * f.a[1], f.a[2]], rot: flaps[i][2] });
+      this.in(part, () => this.paint(side(f.flap, s), { crease: cr }));
+      return part;
+    });
+  }
+  // gold light strip along a wing at chord fraction f (overdrive trim)
+  wingTrim(st, s, z0, z1, f = 0.07, o = {}) {
+    const zs = [z0];
+    for (const q of st) if (q.z > z0 + 1e-6 && q.z < z1 - 1e-6) zs.push(q.z);
+    zs.push(z1);
+    const P = (z) => { const w = wAt(st, z), x = lerp(w.xl, w.xt, f); return [x, wTop(st, x, z, 1, o.prof), s * z]; };
+    for (let i = 0; i < zs.length - 1; i++) this.trim(P(zs[i]), P(zs[i + 1]), o.w ?? 0.0022);
+  }
+  // a hull piece breakOff() can shed (everything fn paints), plus the frames it leaves showing: rb = ribs() arguments
+  shed(brk, fn, rb) {
+    const B = brk === 1 ? S.BRK1 : S.BRK2, part = this.part({ brk, vis: [1, B, -1] });
+    this.in(part, fn);
+    if (rb) { const ex = this.part({ vis: [0, B, 1], ao: false, raw: true }); this.in(ex, () => this.ribs(...rb)); }
+    return part;
+  }
+  // all-moving surface (canard / tailplane) about a spanwise axis through chord point x at the root
+  slab(st, s, x, rot, o = {}) {
+    const r = st[0], part = this.part({ p: [x, r.y, s * r.z], a: [0, 0, 1], rot });
+    this.in(part, () => this.paint(side(wing(st, o), s), { crease: o.crease ?? 26 }));
+    return part;
+  }
+  // fin standing at (y0, z0), canted by `cant` (as rotX). The panel outboard of station `cut` is an
+  // all-moving rudder with a heat-shimmer skin; with brk it is also the piece breakOff() sheds,
+  // leaving a torn stump on the fixed root.
+  fin(st, cant, y0, z0, s, o = {}) {
+    if (st.length < 3) { // give a plain two-station fin a mid station to cut at
+      const a = st[0], b = st[1], t = o.at ?? 0.45;
+      st = [a, { z: lerp(a.z, b.z, t), xl: lerp(a.xl, b.xl, t), xt: lerp(a.xt, b.xt, t), y: lerp(a.y, b.y, t), th: lerp(a.th, b.th, t) }, b];
+    }
+    const cut = o.cut ?? 1, cr = o.crease ?? 26, sn = Math.sin(cant), cs = Math.cos(cant);
+    const emit = (t) => (o.col ? this.solid(t, o.col, { crease: cr }) : this.paint(t, { crease: cr }));
+    const place = (t) => side(move(rotX(t, cant), 0, y0, z0), s);
+    const P = (x, yl, zl) => [x, y0 + yl * cs + zl * sn, s * (z0 - yl * sn + zl * cs)];
+    emit(place(wing(st.slice(0, cut + 1), { tip: false, prof: o.prof })));
+    const A = st[cut], B = st[st.length - 1], ax = [0, sn, s * cs];
+    const part = this.part({
+      p: P(lerp(A.xl, A.xt, 0.42), 0, A.z), a: ax, rot: o.rot || [S.YAW, -0.3], brk: o.brk || 0,
+      vis: o.brk ? [1, o.brk === 1 ? S.BRK1 : S.BRK2, -1] : null,
+    });
+    this.in(part, () => {
+      emit(place(wing(st.slice(cut), { prof: o.prof })));
+      if (o.heat !== false) { // heat haze over the trailing half, both faces
+        const nu = 5, nv = 2;
+        const pt = (u, v, sd) => {
+          const th = lerp(A.th, B.th, v), h = 0.14 + 0.86 * Math.min(1, (1 - u) * 2.4);
+          return P(lerp(lerp(A.xl, B.xl, v), lerp(A.xt, B.xt, v), u), sd * (th * 0.5 * h + 0.0016), lerp(A.z, B.z, v));
+        };
+        const cu = (u, v) => K3(HEATC, 0.34 * u * u * (0.4 + 0.6 * v));
+        for (const sd of [1, -1]) for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) {
+          const u0 = lerp(0.3, 1, i / nu), u1 = lerp(0.3, 1, (i + 1) / nu), v0 = j / nv, v1 = (j + 1) / nv;
+          const a = pt(u0, v0, sd), b = pt(u1, v0, sd), c = pt(u1, v1, sd), d = pt(u0, v1, sd);
+          this.glow(a, b, c, cu(u0, v0), cu(u1, v0), cu(u1, v1), CH.SHIM);
+          this.glow(a, c, d, cu(u0, v0), cu(u1, v1), cu(u0, v1), CH.SHIM);
+        }
+      }
+    });
+    if (o.brk) this.stump(wingRing(A, o.prof || WPROF).map((p) => P(p[0], p[1], p[2])), ax, o.brk);
+    return { part, P };
+  }
+  // what is left where a piece was shot away: a ragged collar of torn skin around a hot core
+  stump(ring, dir, brk, len) {
+    const n = ring.length, c = [0, 0, 0];
+    for (const p of ring) { c[0] += p[0] / n; c[1] += p[1] / n; c[2] += p[2] / n; }
+    let ext = 0;
+    for (const p of ring) ext = Math.max(ext, Math.hypot(p[0] - c[0], p[1] - c[1], p[2] - c[2]));
+    const L = len ?? ext * 0.55, R = rng(n * 131 + brk * 17);
+    const far = ring.map((p) => {
+      const k = 0.5 + R() * 0.3, j = L * (0.2 + R() * 0.8);
+      return [c[0] + (p[0] - c[0]) * k + dir[0] * j, c[1] + (p[1] - c[1]) * k + dir[1] * j, c[2] + (p[2] - c[2]) * k + dir[2] * j];
+    });
+    const part = this.part({ vis: [0, brk === 1 ? S.BRK1 : S.BRK2, 1], ao: false, raw: true });
+    this.in(part, () => {
+      this.metal(loft([ring, far]), lin(0x1c1a19), 8);
+      const e = 0.0012, fc = [c[0] + dir[0] * (L * 0.5 + e), c[1] + dir[1] * (L * 0.5 + e), c[2] + dir[2] * (L * 0.5 + e)];
+      const q = (p) => [p[0] + dir[0] * e, p[1] + dir[1] * e, p[2] + dir[2] * e];
+      for (let j = 0; j < n; j++) this.glow(fc, q(far[j]), q(far[(j + 1) % n]), K3(SPARKC, 0.42), K3(SPARKC, 0.1), K3(SPARKC, 0.1), CH.SPARK);
+    });
+    return part;
+  }
+  // buckled frames over a molten bed: the structure a torn or missing panel exposes
+  ribs(x0, x1, z0, z1, y, up = 1) {
+    const l = x1 - x0, zc = (z0 + z1) / 2, w = z1 - z0, DKR = lin(0x1a1716), lo = Math.min(y - up * 0.003, y + up * 0.0036), hi = Math.max(y - up * 0.003, y + up * 0.0036);
+    for (let i = 0; i < 3; i++) { const rx = x0 + l * (0.14 + i * 0.33); this.metal(box(rx - l * 0.035, rx + l * 0.035, lo, hi, z0 + w * 0.04, z1 - w * 0.04), DKR, 20); }
+    this.metal(box(x0 + l * 0.04, x1 - l * 0.08, lo, hi - 0.0008, zc - w * 0.06, zc + w * 0.06), DKR, 20);
+    // dark pit with a patchwork of embers in it, and a few sparking points
+    this.solid(box(x0 + l * 0.04, x1 - l * 0.08, Math.min(y, y + up * 0.0012), Math.max(y, y + up * 0.0012), z0 + w * 0.06, z1 - w * 0.06), lin(0x0b0a0a), { crease: 30 });
+    const R = rng(Math.round((x0 + 2) * 9173 + (z0 + 2) * 311)), yy = y + up * 0.0016, nx = 5, nz = 4;
+    const g = [];
+    for (let i = 0; i <= nx; i++) { g.push([]); for (let j = 0; j <= nz; j++) g[i].push(K3(SPARKC, R() < 0.45 ? 0.01 : 0.02 + R() * R() * 0.16)); }
+    for (let i = 0; i < nx; i++) for (let j = 0; j < nz; j++) {
+      const P = (a, b) => [lerp(x0 + l * 0.06, x1 - l * 0.1, a / nx), yy, lerp(z0 + w * 0.08, z1 - w * 0.08, b / nz)];
+      this.glow(P(i, j), P(i + 1, j), P(i + 1, j + 1), g[i][j], g[i + 1][j], g[i + 1][j + 1], CH.SPARK);
+      this.glow(P(i, j), P(i + 1, j + 1), P(i, j + 1), g[i][j], g[i + 1][j + 1], g[i][j + 1], CH.SPARK);
+    }
+    for (let i = 0; i < 3; i++) this.glowBall(lerp(x0, x1, 0.15 + R() * 0.7), y + up * 0.004, lerp(z0, z1, 0.15 + R() * 0.7), 0.0028, K3(SPARKC, 0.7), CH.SPARK);
+  }
+  // battle damage that only exists once setDamage passes stage n: a skin panel peeled back on its
+  // forward edge over the exposed frames
+  tear(n, x, y, z, l, w, o = {}) {
+    const D = n === 1 ? S.DMG1 : S.DMG2;
+    const bed = this.part({ vis: [0, D, 1], ao: false, raw: true });
+    this.in(bed, () => this.ribs(x - l * 0.5, x + l * 0.45, z - w * 0.5, z + w * 0.5, y));
+    const flap = this.part({ p: [x + l * 0.5, y + 0.002, z], a: [o.skew ?? 0.3, 0, 1], rot: [D, -(o.ang ?? 1.05)], vis: [0, D, 1], ao: false, raw: true });
+    const poly = [[x + l * 0.5, z - w * 0.5], [x + l * 0.5, z + w * 0.5], [x - l * 0.15, z + w * 0.5], [x - l * 0.5, z + w * 0.05], [x - l * 0.3, z - w * 0.5]];
+    const R = (yy) => poly.map(([px, pz]) => [px, yy, pz]);
+    this.in(flap, () => this.solid(loft([R(y + 0.0012), R(y + 0.0042)]), lin(0x35322f), { crease: 20 }));
+  }
+  // flat door lying on the skin (up = 1 dorsal, -1 belly), hinged across the ship on its forward
+  // (default) or rear edge, over a dark tray. open = [channel, radians, ...]; sym mirrors it to port
+  // in the same slot (the hinge line runs straight across).
+  hatch(x0, x1, z0, z1, y, o = {}) {
+    const up = o.up ?? 1, th = o.th ?? 0.003, front = o.hinge !== 'rear', sg = (front ? -1 : 1) * up;
+    // y may be [y at x0, y at x1]: the door is built flat at the hinge and tipped to the slope
+    const y0 = Array.isArray(y) ? y[0] : y, y1 = Array.isArray(y) ? y[1] : y, xh = front ? x1 : x0, yh = front ? y1 : y0;
+    const slope = Math.atan2(y1 - y0, x1 - x0), tip = (t) => (slope ? rotZ(t, slope, xh, yh) : t);
+    const open = o.open || [S.BRAKE, 0.9], rot = [];
+    for (let i = 0; i < open.length; i += 2) rot.push(open[i], open[i + 1] * sg);
+    const part = this.part({ p: [xh, yh + up * 0.001, 0], a: [0, 0, 1], rot });
+    const lo = (a, b) => Math.min(yh + up * a, yh + up * b), hi = (a, b) => Math.max(yh + up * a, yh + up * b), m = Math.min(x1 - x0, z1 - z0) * 0.1;
+    for (const s of o.sym ? [1, -1] : [1]) {
+      const za = s > 0 ? z0 : -z1, zb = s > 0 ? z1 : -z0;
+      if (o.bay !== false) this.solid(tip(box(x0 + m, x1 - m, lo(-0.004, 0.0007), hi(-0.004, 0.0007), za + m, zb - m)), o.bayCol || PITCH, { crease: 30 });
+      if (o.glow) this.glowTris(tip(box(x0 + m * 2, x1 - m * 2, lo(0.0007, 0.001), hi(0.0007, 0.001), za + m * 2, zb - m * 2)), o.glow, o.glowCh ?? CH.GOLD);
+      this.in(part, () => {
+        const t = tip(box(x0, x1, lo(0.0012, 0.0012 + th), hi(0.0012, 0.0012 + th), za, zb, Math.min(0.0012, th * 0.4)));
+        if (o.col) this.solid(t, o.col, { crease: 30 }); else this.paint(t, { crease: 30, shade: o.shade ?? 0.93 });
+      });
+    }
+    return part;
+  }
+  // landing gear at belly height y reaching down to ground level G: one leg on the centreline, or a
+  // mirrored pair at ±z. The leg folds aft into its bay behind a front-hinged door (ya = belly
+  // height at the aft end of the bay, where the skin slopes).
+  gear(x, y, z, G, o = {}) {
+    const len = y - G, pair = z > 0.001, r = (o.r ?? 0.0042) * 1.5, w = (o.w ?? 0.008) * 1.25, A = 88 * DEG, foot = o.foot || 'skid';
+    this.hatch(x - len * 1.15, x + 0.012, pair ? z - w * 1.5 : -w * 1.5, pair ? z + w * 1.5 : w * 1.5, o.ya != null ? [o.ya, y] : y, { up: -1, sym: pair, open: [S.GEARD, 1.42], col: o.col || lin(0x2a2f37), th: 0.0025 });
+    const leg = this.part({ p: [x, y + 0.004, 0], a: [0, 0, 1], rot: [S.ONE, -A, S.GEARL, A], vis: [0, S.GEARL, 1], ao: false });
+    const TYRE = lin(0x0c0c0d);
+    this.in(leg, () => {
+      for (const s of pair ? [1, -1] : [1]) {
+        const zc = pair ? s * z : 0, yf = foot === 'wheel' ? G + (o.wr ?? len * 0.3) : G + 0.006;
+        this.metal(latheY([[yf, r * 0.75], [y - len * 0.42, r * 0.75], [y - len * 0.42, r * 1.35], [y + 0.004, r * 1.35]], 8, x, zc), METAL, 30);
+        // drag brace back up into the bay
+        this.metal(loft([ringRect(x - len * 0.5, y - 0.003, y + 0.003, zc - r * 0.6, zc + r * 0.6), ringRect(x - r, y - len * 0.5 - 0.003, y - len * 0.5 + 0.003, zc - r * 0.6, zc + r * 0.6)]), GUNMETAL, 30);
+        if (foot === 'wheel') {
+          const wr = o.wr ?? len * 0.3, ww = w * 0.6;
+          for (const d of o.twin ? [1, -1] : [0]) {
+            const wz = zc + d * ww * 1.25;
+            this.metal(move(rotY(lathe([[-ww, wr * 0.72], [-ww * 0.6, wr], [ww * 0.6, wr], [ww, wr * 0.72]], this.seg(12), {}), 90 * DEG), x, G + wr, wz), TYRE, 40);
+            this.metal(move(rotY(lathe([[-ww * 1.08, wr * 0.2], [-ww * 1.08, wr * 0.55], [ww * 1.08, wr * 0.55], [ww * 1.08, wr * 0.2]], 8, {}), 90 * DEG), x, G + wr, wz), METAL, 40);
+          }
+        } else {
+          const hl = len * (foot === 'pad' ? 0.42 : 0.62), hw = foot === 'pad' ? w * 1.3 : w * 0.7;
+          this.metal(loft([
+            ringRect(x + hl, G + 0.009, G + 0.013, zc - hw * 0.7, zc + hw * 0.7), ringRect(x + hl * 0.6, G, G + 0.006, zc - hw, zc + hw),
+            ringRect(x - hl * 0.7, G, G + 0.006, zc - hw, zc + hw), ringRect(x - hl, G + 0.004, G + 0.008, zc - hw * 0.7, zc + hw * 0.7),
+          ]), GUNMETAL, 30);
+        }
+      }
+    });
+    this.groundY = Math.min(this.groundY, G);
+    return leg;
+  }
+  // pair of recoil slots [A, B] for the guns of one upgrade tier. Tier 1 guns are always out (and
+  // run out a further `ext` at tier 3); later tiers sit hidden `stow` back until they are fitted.
+  gunSlots(tier, o = {}) {
+    const rec = o.recoil ?? 0.014, sv = o.stow || [-0.08, 0, 0], ext = o.ext ?? 0, W = tier === 2 ? S.W2 : S.W3;
+    const mk = (F, zs) => this.part({
+      mov: tier === 1 ? [F, -rec, 0, 0, S.W3, ext, 0, 0] : [S.ONE, sv[0], sv[1], sv[2] * zs, W, -sv[0], -sv[1], -sv[2] * zs, F, -rec, 0, 0],
+      vis: tier === 1 ? null : [0, W, 1], ao: tier === 1,
+    });
+    return [mk(S.FIREA, 1), mk(S.FIREB, -1)];
+  }
+  // gun barrel riding a rig slot: heat sleeve over the muzzle brake, breech flash, optional plasma
+  // coils. Its muzzle point follows the slot. o: { tier, set 'A'|'B', coil, breech (x of the flash) }
+  gun(part, x0, x1, y, z, r, o = {}) {
+    const n = this.seg(10), dim = K3(HEATC, 0.26), Z = [0, 0, 0];
+    this.in(part, () => {
+      this.barrel(x0, x1, y, z, r, { col: o.col, muzzle: false });
+      this.glowCone(x1 - r * 0.7, r * 1.6, K3(HEATC, 0.5), 0, x1 - r * 4.7, r * 1.6, dim, 0, y, z, n, CH.BHEAT);
+      this.glowCone(x1 - r * 4.7, r * 1.16, dim, 0, Math.max(x0 + r * 2, x1 - r * 15), r * 1.14, Z, 0, y, z, n, CH.BHEAT);
+      const nc = o.coil || 0, cc = K3(this.P.glow, 0.5);
+      for (let i = 0; i < nc; i++) {
+        const cx = lerp(x0 + r * 5, x1 - r * 7.5, nc > 1 ? i / (nc - 1) : 0.5);
+        this.metal(lathe([[cx - r * 1.0, r * 1.15], [cx - r * 0.7, r * 1.95], [cx + r * 0.7, r * 1.95], [cx + r * 1.0, r * 1.15]], n, { y, z, capA: false, capB: false }), GUNMETAL, 30);
+        this.glowCone(cx - r * 0.5, r * 2.04, cc, 0, cx + r * 0.5, r * 2.04, cc, 0, y, z, n, CH.COIL);
+      }
+      this.glowBall(o.breech ?? x0 + r * 3, y, z, r * 2.3, [3.2, 2.2, 1.1], o.set === 'B' ? CH.FLASHB : CH.FLASHA);
+    });
+    if (o.muzzle !== false) this.muzzles.push({ x: x1, y, z, part, tier: o.tier || 1 });
+  }
+  // beam emitter looking along +X: housing, fixed collar and an iris whose blades draw back under
+  // the collar while the beam is on, uncovering the lens
+  emitter(x, y, z, r, o = {}) {
+    const n = this.seg(12), L = { y, z };
+    if (o.housing !== false) this.solid(lathe([[x - r * 6, r * 0.2], [x - r * 3.6, r * 1.3], [x - r * 0.3, r * 1.3], [x - r * 0.05, r * 1.1]], n, L), o.col || lin(0x2a2f37), { crease: 34 });
+    this.metal(lathe([[x - r * 0.4, r * 1.32], [x + r * 0.22, r * 1.24], [x + r * 0.22, r * 0.98], [x - r * 0.2, r * 0.92]], n, { ...L, capA: false, capB: false }), METAL, 28);
+    this.metal(lathe([[x - r * 0.62, r * 0.98], [x - r * 0.6, 0.0004]], n, { ...L, capA: false }), PITCH, 30);
+    const hub = o.hub ?? 0.14; // closed aperture as a fraction of r (a centre spike needs room)
+    const part = this.part({ p: [x, y, z], iris: [S.LASER, 0.9 / hub - 1] }), nb = 8, t = [];
+    const P = (a, rr) => [x - r * 0.08, y + Math.sin(a) * rr, z + Math.cos(a) * rr];
+    for (let j = 0; j < nb; j++) {
+      const a0 = (j / nb) * TAU, a1 = ((j + 1) / nb) * TAU;
+      quad(t, P(a0 + 0.5, r * hub), P(a1 + 0.5, r * hub), P(a1, r * 0.97), P(a0, r * 0.97));
+    }
+    if ((t[4] - t[1]) * (t[8] - t[2]) - (t[5] - t[2]) * (t[7] - t[1]) < 0) flip(t);
+    this.in(part, () => this.metal(t, GUNMETAL, 4), (X, Y, Z) => (Math.hypot(Y - y, Z - z) < r * (hub + 0.97) * 0.5 ? 1 : 0));
+    const g = o.glow || this.P.glow;
+    this.glowDisc(x - r * 0.3, y, z, [[0, K3(g, 1.3)], [r * 0.45, K3(g, 0.8)], [r * 0.9, K3(g, 0.25)]], n, CH.LASER);
+    this.glowCone(x - r * 0.3, r * 0.9, K3(g, 0.3), 0, x + r * 0.2, r * 0.96, K3(g, 0.12), 0, y, z, n, CH.LASER);
+    return part;
+  }
+  // rotating sensor bar on a short mast
+  scanner(x, y, z, r = 0.012) {
+    this.metal(latheY([[y - 0.002, r * 0.5], [y + r * 0.5, r * 0.32], [y + r * 0.9, r * 0.32]], 6, x, z), GUNMETAL, 30);
+    const part = this.part({ p: [x, y, z], a: [0, 1, 0], rot: [S.SPIN, 1] });
+    this.in(part, () => {
+      this.metal(box(x - r, x + r, y + r * 0.9, y + r * 1.25, z - r * 0.24, z + r * 0.24, r * 0.08), METAL, 30);
+      this.glowBox(x + r * 0.5, x + r * 0.98, y + r * 1.25, y + r * 1.36, z - r * 0.18, z + r * 0.18, K3(this.P.glow, 0.5), CH.ACCENT);
+    });
+    return part;
+  }
+  // belly dressing between x0..x1 at height y: twin conduits, frames, a scoop and an anti-collision beacon
+  keel(x0, x1, y, hw, o = {}) {
+    for (const s of [1, -1]) this.metal(lathe([[x0, 0.0034], [x1, 0.0034]], 6, { y: y - 0.0015, z: s * hw }), GUNMETAL, 40);
+    const nf = o.frames ?? 4;
+    for (let i = 0; i < nf; i++) { const fx = lerp(x0, x1, (i + 0.5) / nf); this.metal(box(fx - 0.004, fx + 0.004, y - 0.005, y + 0.002, -hw * 1.12, hw * 1.12, 0.0015), METAL, 30); }
+    if (o.scoop != null) {
+      const xs = o.scoop, sw = hw * 0.62, ring = ringRect(xs, y - 0.016, y - 0.001, -sw, sw, 0.003);
+      this.solid(loft([ringRect(xs - 0.075, y - 0.004, y, -sw * 0.5, sw * 0.5, 0.001), ringRect(xs - 0.02, y - 0.016, y - 0.001, -sw, sw, 0.003), ring], { capB: false }), o.col || lin(0x2a2f37), { crease: 30 });
+      this.duct(ring, 0.03, 0.003, { glow: K3(this.P.glow, 0.12) });
+    }
+    const bx = o.beacon ?? lerp(x0, x1, 0.5);
+    this.metal(lathe([[bx - 0.011, 0.004], [bx - 0.007, 0.007], [bx + 0.007, 0.007], [bx + 0.011, 0.004]], 6, { y: y - 0.002, z: 0 }), GUNMETAL, 40);
+    this.glowBall(bx, y - 0.008, 0, 0.006, NAV_RED, CH.STROBE);
+  }
+  // thin gold light strip (overdrive trim) between two points, lying on a surface facing `up`
+  trim(a, b, w = 0.002, up = 1) {
+    const dx = b[0] - a[0], dz = b[2] - a[2], l = Math.hypot(dx, dz) || 1, nx = (-dz / l) * w, nz = (dx / l) * w, h = up * 0.0016, c = K3(GOLDC, 0.3);
+    const A = [a[0] - nx, a[1] + h, a[2] - nz], B = [a[0] + nx, a[1] + h, a[2] + nz], C = [b[0] + nx, b[1] + h, b[2] + nz], D = [b[0] - nx, b[1] + h, b[2] - nz];
+    this.glow(A, B, C, c, c, c, CH.GOLD); this.glow(A, C, D, c, c, c, CH.GOLD);
+  }
 }
 
 /* ========================================================================== */
@@ -765,10 +1135,12 @@ function defVanguard(over = {}) {
     { x: 0.497, w: 0.003, t: 0.003, b: 0.003, et: 2, eb: 2 },
   ];
   return {
-    zr: 0.38, P,
-    breach: [[-0.08, 0.14, 0.085], [0.12, -0.05, 0.06]],
+    zr: 0.38, P, feel: { ctl: 80, eng: 140 },
+    // wound sites [x, z, r, y]: starboard wing root, port wing (tear 1), starboard outer wing (tear 2), nose
+    breach: [[-0.08, 0.14, 0.085], [-0.09, -0.2, 0.06, wTop(WING, -0.09, 0.2)], [-0.15, 0.24, 0.05, wTop(WING, -0.15, 0.24)], [0.12, -0.05, 0.06]],
     geo(k) {
-      const q = k.q, A = lin(P.accent), B2 = lin(P.base2), DK = lin(P.dark);
+      const q = k.q, A = lin(P.accent), B2 = lin(P.base2), DK = lin(P.dark), GND = -0.102;
+      const G1 = k.gunSlots(1, { ext: 0.03 }), G2 = k.gunSlots(2, { stow: [-0.1, 0, 0] }), G3 = k.gunSlots(3, { stow: [0, 0.032, 0], recoil: 0.01 });
       const F = fuselage(FKEY, { n: k.seg(28), sub: q >= 1 ? 4 : 2 });
       k.paint(F.tris, { crease: 38 });
       // dorsal spine
@@ -785,9 +1157,12 @@ function defVanguard(over = {}) {
         k.paint(side(lathe([[-0.4, 0.043], [-0.3, 0.046], [-0.16, 0.041], [-0.04, 0.03], [0.05, 0.012]], k.seg(18), { y: 0.004, z: 0.054, sy: 0.96 }), s), { crease: 38 });
         k.nozzle(-0.5, 0.004, s * 0.054, 0.04, 0.115);
         // wings, leading-edge extension, tailplanes
-        k.paint(side(wing(WING), s), { crease: 26 });
+        // wing: inboard flap (drops as an airbrake) and aileron
+        k.flapWing(WING, s, 0.74, [[0.09, 0.185, [S.BRAKE, 0.55, S.PITCH, -0.12]], [0.195, 0.295, [S.BANK, -s * 0.5, S.PITCH, -0.1]]]);
+        k.wingTrim(WING, s, 0.08, 0.3, 0.09);
         k.paint(side(wing([{ z: 0.028, xl: 0.37, xt: 0.02, y: 0.016, th: 0.01 }, { z: 0.07, xl: 0.19, xt: 0.0, y: 0.014, th: 0.014 }, { z: 0.112, xl: 0.1, xt: -0.02, y: 0.01, th: 0.014 }]), s), { crease: 26 });
-        k.paint(side(wing(STAB), s), { crease: 26, hinge: { p: [-0.4, -0.004, s * 0.1], a: [0, 0, 1], k: s * 0.4 } });
+        // all-moving tailplanes
+        k.slab(STAB, s, -0.4, [S.PITCH, -0.3, S.BANK, -s * 0.34]);
         // side intake under the LERX
         {
           const rk = (R) => R.map((p) => [p[0] - (p[2] - 0.058) * 0.55 - (0.02 - p[1]) * 0.25, p[1], p[2]]);
@@ -797,20 +1172,32 @@ function defVanguard(over = {}) {
         }
         // canted twin fins
         {
-          const fin = wing([{ z: 0, xl: -0.2, xt: -0.405, y: 0, th: 0.016 }, { z: 0.062, xl: -0.275, xt: -0.428, y: 0, th: 0.012 }, { z: 0.128, xl: -0.365, xt: -0.452, y: 0, th: 0.007 }]);
-          k.paint(side(move(rotX(fin, 68 * DEG), 0, 0.022, 0.09), s), { crease: 26 });
-          k.navLight(-0.425, 0.022 + 0.128 * 0.93 + 0.004, s * (0.09 + 0.128 * 0.375), NAV_WHITE, CH.STROBE, 0.008);
+          // (the upper panel is a rudder; the port one can be shot away)
+          const fin = k.fin([{ z: 0, xl: -0.2, xt: -0.405, y: 0, th: 0.016 }, { z: 0.062, xl: -0.275, xt: -0.428, y: 0, th: 0.012 }, { z: 0.128, xl: -0.365, xt: -0.452, y: 0, th: 0.007 }], 68 * DEG, 0.022, 0.09, s, { brk: s < 0 ? 1 : 0 });
+          k.in(fin.part, () => k.navLight(-0.425, 0.022 + 0.128 * 0.93 + 0.004, s * (0.09 + 0.128 * 0.375), NAV_WHITE, CH.STROBE, 0.008));
         }
-        // wingtip gun pods
+        // wingtip gun pods: the tier-2 barrel runs out of a fairing slung under the pod
+        const gi = s > 0 ? 0 : 1, gs = s > 0 ? 'A' : 'B';
         k.paint(side(lathe([[-0.315, 0.002], [-0.285, 0.011], [-0.2, 0.0165], [-0.03, 0.0165], [0.015, 0.012], [0.03, 0.0085]], k.seg(12), { y: -0.001, z: 0.321 }), s), { crease: 30 });
-        k.barrel(0.02, 0.135, -0.001, s * 0.321, 0.0058);
+        k.gun(G1[gi], -0.02, 0.135, -0.001, s * 0.321, 0.0058, { set: gs, breech: 0.042 });
+        k.solid(side(lathe([[-0.17, 0.002], [-0.13, 0.0095], [-0.02, 0.0095], [0.005, 0.0065]], k.seg(8), { y: -0.019, z: 0.321 }), s), B2, { crease: 35 });
+        k.gun(G2[gi], -0.03, 0.108, -0.019, s * 0.321, 0.0046, { set: gs, tier: 2, breech: 0.014 });
         k.glowBox(-0.2, -0.06, 0.0155, 0.0175, s * 0.321 - 0.0022, s * 0.321 + 0.0016, P.glow.map((v) => v * 0.3), CH.ACCENT);
         k.navLight(-0.25, 0.012, s * 0.329, s > 0 ? NAV_GREEN : NAV_RED);
         // nose cannon
-        k.barrel(0.27, 0.385, -0.012, s * 0.043, 0.005, { muzzle: false });
+        k.gun(G1[gi], 0.24, 0.385, -0.012, s * 0.043, 0.005, { set: gs, muzzle: false, breech: 0.333 });
         k.solid(side(lathe([[0.2, 0.004], [0.24, 0.011], [0.3, 0.011], [0.325, 0.007]], k.seg(8), { y: -0.012, z: 0.043 }), s), B2, { crease: 35 });
-        // wing-root armour plate + vents
-        k.paint(side(plate([[0.02, 0.085], [-0.12, 0.085], [-0.12, 0.14], [-0.06, 0.14]], 0.005, 0.0165, 0.003), s), { crease: 25 });
+        // tier 3: a plasma cannon pod drops out of the wing between the pylons
+        k.in(G3[gi], () => {
+          k.solid(side(lathe([[-0.15, 0.003], [-0.11, 0.0125], [-0.01, 0.0125], [0.025, 0.008]], k.seg(10), { y: -0.036, z: 0.2145 }), s), B2, { crease: 35 });
+          k.solid(side(box(-0.11, -0.03, -0.026, -0.01, 0.2115, 0.2175, 0.002), s), DK, { crease: 30 });
+        });
+        k.gun(G3[gi], -0.01, 0.105, -0.036, s * 0.2145, 0.0052, { set: gs, tier: 3, coil: 2, breech: 0.03 });
+        // wing-root armour plate (the starboard one can be blown off its frames) + vents
+        {
+          const ap = () => k.paint(side(plate([[0.02, 0.085], [-0.12, 0.085], [-0.12, 0.14], [-0.06, 0.14]], 0.005, 0.0165, 0.003), s), { crease: 25 });
+          if (s > 0) k.shed(2, ap, [-0.115, 0.0, 0.09, 0.136, 0.0125]); else ap();
+        }
         k.vents(-0.3, -0.2, 0.049, s * 0.054 - 0.018, s * 0.054 + 0.018, 4);
         // underwing stores
         if (q >= 1) {
@@ -820,6 +1207,19 @@ function defVanguard(over = {}) {
           k.missile(-0.225, -0.085, -0.031, s * 0.249, 0.0075);
         }
       }
+      // overdrive vents on the nacelle tops, airbrakes on the upper wing roots
+      k.hatch(-0.185, -0.125, 0.044, 0.064, 0.0495, { sym: true, open: [S.OD, 0.8], glow: K3(GOLDC, 0.5) });
+      k.hatch(-0.265, -0.15, 0.1, 0.142, [wTop(WING, -0.265, 0.12), wTop(WING, -0.15, 0.12)], { sym: true, open: [S.BRAKE, 0.95] });
+      // battle damage: panels that peel off the wings
+      k.tear(1, -0.09, wTop(WING, -0.09, 0.2), -0.2, 0.075, 0.05);
+      k.tear(2, -0.15, wTop(WING, -0.15, 0.24), 0.24, 0.06, 0.042, { skew: -0.3 });
+      // chin beam emitter, sensor mast, rocket bay in the belly fairing, undercarriage
+      k.emitter(0.405, -0.027, 0, 0.0085, { col: B2 });
+      k.scanner(-0.255, 0.049, 0, 0.011);
+      k.hatch(-0.1, 0.0, 0.005, 0.03, -0.064, { up: -1, sym: true, open: [S.ROCKET, 1.25], col: B2, glow: [4, 0.5, 0.2], glowCh: CH.ROCKET });
+      k.keel(-0.255, -0.115, -0.064, 0.024, { frames: 3, scoop: 0.135, beacon: -0.135, col: B2 });
+      k.gear(0.25, -F.at(0.25).b, 0, GND, { foot: 'wheel', ya: -F.at(0.17).b, r: 0.0036 });
+      k.gear(-0.2, -0.037, 0.062, GND, { foot: 'wheel', w: 0.0085 });
       // belly fairing, dorsal antenna, tail sting
       k.solid(box(-0.27, 0.12, -0.064, -0.04, -0.034, 0.034, 0.01), B2, { crease: 30 });
       k.solid(wingBlade(-0.04, 0.074, 0.03, 0.03), DK, { crease: 30 });
@@ -915,9 +1315,11 @@ function defInterceptor() {
   const CAN = [{ z: 0.03, xl: 0.285, xt: 0.19, y: 0.004, th: 0.011 }, { z: 0.125, xl: 0.21, xt: 0.165, y: 0.004, th: 0.006 }];
   const NZ = 0.082, NR = 0.031;
   return {
-    zr: 0.36, P, breach: [[-0.1, 0.1, 0.07], [0.1, -0.03, 0.05]],
+    zr: 0.36, P, feel: { ctl: 34, eng: 90, twitch: 1 },
+    breach: [[-0.12, 0.1, 0.07], [-0.03, -0.2, 0.05, wTop(WING, -0.03, 0.2)], [0.005, 0.225, 0.045, wTop(WING, 0.005, 0.225)], [0.1, -0.03, 0.05]],
     geo(k) {
-      const q = k.q, B2 = lin(P.base2), DK = lin(P.dark);
+      const q = k.q, B2 = lin(P.base2), DK = lin(P.dark), GND = -0.088;
+      const G1 = k.gunSlots(1, { ext: 0.03, recoil: 0.012 }), G2 = k.gunSlots(2, { stow: [-0.11, 0, 0], recoil: 0.012 }), G3 = k.gunSlots(3, { stow: [-0.1, 0, 0], recoil: 0.01 });
       const F = fuselage([
         { x: -0.43, w: 0.022, t: 0.02, b: 0.018, et: 2.2 }, { x: -0.3, w: 0.044, t: 0.036, b: 0.03, et: 2.2 },
         { x: -0.08, w: 0.054, t: 0.046, b: 0.036, et: 2 }, { x: 0.1, w: 0.047, t: 0.045, b: 0.034, et: 1.7, eb: 1.7 },
@@ -937,25 +1339,33 @@ function defInterceptor() {
         // long spiked engine nacelles
         k.paint(side(lathe([[-0.405, NR * 1.0], [-0.3, NR * 1.08], [-0.1, NR * 1.08], [0.0, NR * 0.98], [0.05, NR * 0.8]], k.seg(16), { y: -0.002, z: NZ, capB: false }), s), { crease: 36 });
         k.intakeRound(0.05, -0.002, s * NZ, NR * 0.8);
-        k.nozzle(-0.5, -0.002, s * NZ, 0.029, 0.1);
-        k.paint(side(wing(WING), s), { crease: 26 });
-        // upturned winglet
+        k.nozzle(-0.5, -0.002, s * NZ, 0.029, 0.1, { vec: 1.25 });
+        // forward-swept wing with a full-span flaperon
+        k.flapWing(WING, s, 0.72, [[0.125, 0.285, [S.BANK, -s * 0.55, S.PITCH, -0.16, S.BRAKE, 0.4, S.TWITCH, s * 0.06]]]);
+        k.wingTrim(WING, s, 0.06, 0.29, 0.1);
+        // upturned winglet (the port one can be shot away)
         {
-          const wl = wing([{ z: 0, xl: 0.135, xt: 0.035, y: 0, th: 0.011 }, { z: 0.05, xl: 0.085, xt: 0.02, y: 0, th: 0.005 }]);
-          k.solid(side(move(rotX(wl, 62 * DEG), 0, 0.004, 0.3), s), lin(P.accent), { crease: 26 });
+          const wl = () => k.solid(side(move(rotX(wing([{ z: 0, xl: 0.135, xt: 0.035, y: 0, th: 0.011 }, { z: 0.05, xl: 0.085, xt: 0.02, y: 0, th: 0.005 }]), 62 * DEG), 0, 0.004, 0.3), s), lin(P.accent), { crease: 26 });
+          if (s < 0) {
+            k.shed(1, wl);
+            k.stump(wingRing({ z: 0.3, xl: 0.135, xt: 0.035, y: 0.004, th: 0.011 }, WPROF).map((p) => [p[0], p[1], s * p[2]]), [0, Math.sin(62 * DEG), s * Math.cos(62 * DEG)], 1, 0.016);
+          } else wl();
         }
         k.navLight(0.07, 0.012, s * 0.298, s > 0 ? NAV_GREEN : NAV_RED);
-        // canards (all-moving)
-        k.paint(side(wing(CAN), s), { crease: 26, hinge: { p: [0.23, 0.004, s * 0.03], a: [0, 0, 1], k: s * -0.35 } });
-        // nacelle fins, canted out
+        // canards: all-moving, and never quite still
+        k.slab(CAN, s, 0.23, [S.PITCH, 0.34, S.BANK, -s * 0.4, S.YAW, -s * 0.12, S.TWITCH, s * 0.16]);
+        // nacelle fins, canted out (rudders; the starboard one can be shot away)
         {
-          const fin = wing([{ z: 0, xl: -0.24, xt: -0.4, y: 0, th: 0.012 }, { z: 0.095, xl: -0.36, xt: -0.445, y: 0, th: 0.005 }]);
-          k.solid(side(move(rotX(fin, 58 * DEG), 0, 0.024, NZ + 0.008), s), lin(P.base2), { crease: 26 });
-          k.navLight(-0.425, 0.024 + 0.095 * 0.85 + 0.003, s * (NZ + 0.008 + 0.095 * 0.53), NAV_WHITE, CH.STROBE, 0.007);
+          const fin = k.fin([{ z: 0, xl: -0.24, xt: -0.4, y: 0, th: 0.012 }, { z: 0.095, xl: -0.36, xt: -0.445, y: 0, th: 0.005 }], 58 * DEG, 0.024, NZ + 0.008, s, { col: lin(P.base2), brk: s > 0 ? 2 : 0, rot: [S.YAW, -0.36, S.TWITCH, 0.08] });
+          k.in(fin.part, () => k.navLight(-0.425, 0.024 + 0.095 * 0.85 + 0.003, s * (NZ + 0.008 + 0.095 * 0.53), NAV_WHITE, CH.STROBE, 0.007));
         }
-        // cheek guns
+        // cheek guns; tier 2 runs a second pair out from under the intakes, tier 3 a coil lance out of each wingtip
+        const gi = s > 0 ? 0 : 1, gs = s > 0 ? 'A' : 'B';
         k.solid(side(lathe([[0.14, 0.003], [0.18, 0.009], [0.27, 0.009], [0.3, 0.006]], k.seg(8), { y: -0.012, z: 0.036 }), s), B2, { crease: 35 });
-        k.barrel(0.25, 0.375, -0.012, s * 0.036, 0.0045);
+        k.gun(G1[gi], 0.21, 0.375, -0.012, s * 0.036, 0.0045, { set: gs, breech: 0.305 });
+        k.solid(side(lathe([[-0.1, 0.002], [-0.05, 0.0085], [0.05, 0.0085], [0.075, 0.006]], k.seg(8), { y: -0.037, z: NZ }), s), B2, { crease: 35 });
+        k.gun(G2[gi], 0.03, 0.175, -0.037, s * NZ, 0.0042, { set: gs, tier: 2, breech: 0.082 });
+        k.gun(G3[gi], 0.075, 0.215, 0.004, s * 0.291, 0.0038, { set: gs, tier: 3, coil: 2, breech: 0.14 });
         // accent light strip on the nacelle
         k.glowBox(-0.28, -0.1, NR * 1.06 - 0.003, NR * 1.06 - 0.001, s * NZ - 0.0013, s * NZ + 0.0013, P.glow.map((v) => v * 0.2), CH.ACCENT);
         k.vents(-0.37, -0.31, NR * 1.02 - 0.002, s * NZ - 0.012, s * NZ + 0.012, 3);
@@ -967,6 +1377,17 @@ function defInterceptor() {
         }
       }
       k.solid(wingBlade(-0.1, 0.058, 0.022, 0.026), DK, { crease: 30 });
+      // overdrive vents on the nacelle shoulders, airbrakes on the upper wing roots
+      k.hatch(-0.085, -0.03, NZ - 0.009, NZ + 0.009, [0.0312, 0.0298], { sym: true, open: [S.OD, 0.8], glow: K3(GOLDC, 0.5) });
+      k.hatch(-0.24, -0.15, 0.05, 0.1, [wTop(WING, -0.24, 0.075), wTop(WING, -0.15, 0.075)], { sym: true, open: [S.BRAKE, 1.0] });
+      k.tear(1, -0.03, wTop(WING, -0.03, 0.2), -0.2, 0.055, 0.04);
+      k.tear(2, 0.005, wTop(WING, 0.005, 0.225), 0.225, 0.05, 0.036, { skew: -0.3 });
+      k.emitter(0.405, -0.018, 0, 0.007, { col: B2 });
+      k.scanner(-0.22, 0.048, 0, 0.01);
+      k.hatch(-0.12, -0.03, 0.003, 0.02, -0.046, { up: -1, sym: true, open: [S.ROCKET, 1.25], col: B2, glow: [4, 0.5, 0.2], glowCh: CH.ROCKET });
+      k.keel(-0.195, -0.13, -0.046, 0.015, { frames: 2, scoop: 0.155, beacon: -0.16, col: B2 });
+      k.gear(0.24, -F.at(0.24).b, 0, GND, { foot: 'wheel', ya: -F.at(0.17).b, r: 0.0032, w: 0.006 });
+      k.gear(-0.18, -0.002 - NR * 1.08, NZ, GND, { foot: 'skid', w: 0.007, r: 0.0036 });
       k.solid(box(-0.2, 0.14, -0.046, -0.03, -0.022, 0.022, 0.007), B2, { crease: 30 });
       k.navLight(-0.43, 0.022, 0, NAV_WHITE, CH.STROBE, 0.007);
       k.muzzles.unshift({ x: 0.5, y: 0, z: 0 });
@@ -1023,9 +1444,12 @@ function defJuggernaut() {
     { x: 0.478, w: 0.034, t: 0.018, b: 0.024, et: 3, eb: 3 },
   ];
   return {
-    zr: 0.44, P, breach: [[-0.05, 0.2, 0.1], [0.12, -0.08, 0.07]],
+    zr: 0.44, P, feel: { ctl: 230, eng: 320 },
+    breach: [[-0.2, -0.2, 0.085], [-0.03, -0.06, 0.06, 0.083], [-0.06, 0.3375, 0.055, 0.05], [0.25, 0.04, 0.06]],
     geo(k) {
-      const q = k.q, A = lin(P.accent), B2 = lin(P.base2), DK = lin(P.dark);
+      const q = k.q, A = lin(P.accent), B2 = lin(P.base2), DK = lin(P.dark), GND = -0.128;
+      const G1 = k.gunSlots(1, { ext: 0.035, recoil: 0.024 }), G2 = k.gunSlots(2, { stow: [-0.13, 0, 0], recoil: 0.018 });
+      const G3 = k.part({ mov: [S.ONE, -0.1, 0, 0, S.W3, 0.1, 0, 0, S.FIREA, -0.01, 0, 0], vis: [0, S.W3, 1], ao: false });
       const F = fuselage(FK, { n: k.seg(28), sub: q >= 1 ? 4 : 2 });
       k.paint(F.tris, { crease: 34 });
       // raised armoured deck + bow plate
@@ -1046,8 +1470,8 @@ function defJuggernaut() {
         k.solid(box(TX + 0.046, TX + 0.078, TY + 0.012, TY + 0.036, -0.026, 0.026, 0.006), DK, { crease: 28 }); // mantlet
         for (const s of [1, -1]) {
           const bz = s * 0.0125, by = TY + 0.024;
-          k.barrel(TX + 0.07, TX + 0.225, by, bz, 0.0052, { muzzle: false });
-          k.metal(lathe([[TX + 0.085, 0.0082], [TX + 0.15, 0.0082]], k.seg(10), { y: by, z: bz }), TM, 30); // thermal sleeve
+          k.gun(G1[1], TX + 0.045, TX + 0.225, by, bz, 0.0052, { set: 'B', muzzle: false, breech: TX + 0.085 });
+          k.in(G1[1], () => k.metal(lathe([[TX + 0.085, 0.0082], [TX + 0.15, 0.0082]], k.seg(10), { y: by, z: bz }), TM, 30)); // thermal sleeve
           k.solid(side(box(TX - 0.03, TX + 0.022, TY + 0.014, TY + 0.034, 0.047, 0.058, 0.003), s), B2, { crease: 28 }); // stowage bins
           if (q >= 1) for (const bx of [-0.02, 0.012]) k.metal(side(box(TX + bx, TX + bx + 0.005, TY + 0.033, TY + 0.0365, 0.049, 0.056), s), METAL, 30);
         }
@@ -1064,8 +1488,18 @@ function defJuggernaut() {
         // wing root: a thick fairing that swells out of the hull side and thins into the wing
         k.paint(side(wing(ROOT, { tip: false }), s), { crease: 40 });
         // appliqué armour: two overlapping plates on the wing, a pauldron over the intake, a cheek plate on the bow
-        k.paint(side(plate([[0.07, 0.165], [0.045, 0.27], [-0.09, 0.27], [-0.09, 0.165]], 0.01, 0.0275, 0.005), s), { crease: 25 });
+        {
+          const ap = () => k.paint(side(plate([[0.07, 0.165], [0.045, 0.27], [-0.09, 0.27], [-0.09, 0.165]], 0.01, 0.0275, 0.005), s), { crease: 25 });
+          if (s > 0) k.shed(2, ap, [-0.085, 0.04, 0.172, 0.264, 0.022]); else ap();
+        }
         k.paint(side(plate([[-0.11, 0.18], [-0.11, 0.275], [-0.25, 0.275], [-0.27, 0.2], [-0.24, 0.18]], 0.008, 0.0235, 0.004), s), { crease: 25, shade: 0.92 });
+        // heavy elevon slab hung off the back of each pod
+        {
+          const el = k.part({ p: [PX0 - 0.002, -0.002, s * (PZ0 + PZ1) / 2], a: [0, 0, 1], rot: [S.BANK, -s * 0.5, S.PITCH, -0.32, S.BRAKE, s * 0.3] });
+          k.in(el, () => k.paint(side(loft([ringRect(PX0 - 0.004, -0.02, 0.016, PZ0 + 0.016, PZ1 - 0.016, 0.005), ringRect(PX0 - 0.06, -0.012, 0.008, PZ0 + 0.014, PZ1 - 0.014, 0.004), ringRect(PX0 - 0.105, -0.004, 0.001, PZ0 + 0.018, PZ1 - 0.018, 0.001)]), s), { crease: 28 }));
+          k.metal(side(box(PX0 - 0.012, PX0 + 0.01, -0.008, 0.004, PZ0 + 0.03, PZ0 + 0.042), s), GUNMETAL, 30);
+          k.metal(side(box(PX0 - 0.012, PX0 + 0.01, -0.008, 0.004, PZ1 - 0.042, PZ1 - 0.03), s), GUNMETAL, 30);
+        }
         k.paint(side(plate([[0.15, 0.108], [0.115, 0.192], [-0.04, 0.192], [-0.07, 0.108]], 0.03, 0.045, 0.005), s), { crease: 25 });
         k.paint(side(plate([[0.42, 0.036], [0.31, 0.062], [0.2, 0.086], [0.2, 0.05], [0.31, 0.03]], 0.02, 0.047, 0.004), s), { crease: 25, shade: 0.92 });
         if (q >= 1) for (const [bx, bz] of [[0.045, 0.18], [0.03, 0.255], [-0.075, 0.18], [-0.075, 0.255], [-0.125, 0.195], [-0.125, 0.262], [-0.23, 0.262]]) k.metal(side(latheY([[0.02, 0.0045], [0.0295, 0.0045], [0.0305, 0.003]], 6, bx, bz), s), METAL, 30);
@@ -1096,18 +1530,40 @@ function defJuggernaut() {
         k.nozzle(-0.475, -0.004, s * 0.2, 0.03, 0.085);
         // slab fins
         {
-          const fin = wing([{ z: 0, xl: -0.2, xt: -0.42, y: 0, th: 0.024 }, { z: 0.09, xl: -0.31, xt: -0.445, y: 0, th: 0.014 }]);
-          k.paint(side(move(rotX(fin, 80 * DEG), 0, 0.05, 0.118), s), { crease: 26 });
-          k.navLight(-0.4, 0.05 + 0.09 + 0.006, s * 0.134, NAV_WHITE, CH.STROBE, 0.008);
+          const fin = k.fin([{ z: 0, xl: -0.2, xt: -0.42, y: 0, th: 0.024 }, { z: 0.09, xl: -0.31, xt: -0.445, y: 0, th: 0.014 }], 80 * DEG, 0.05, 0.118, s, { brk: s < 0 ? 1 : 0, rot: [S.YAW, -0.26], at: 0.4 });
+          k.in(fin.part, () => k.navLight(-0.4, 0.05 + 0.09 + 0.006, s * 0.134, NAV_WHITE, CH.STROBE, 0.008));
         }
         // side skirt armour
         k.paint(side(box(-0.3, 0.1, -0.03, 0.03, 0.128, 0.15, 0.008), s), { crease: 28, shade: 0.85 });
         k.glowBox(-0.2, 0.06, 0.0545, 0.0565, s * 0.1 - 0.002, s * 0.1 + 0.002, P.glow.map((v) => v * 0.3), CH.ACCENT);
         if (q >= 1) for (const bx of [-0.26, -0.14, -0.02, 0.07]) k.metal(side(box(bx, bx + 0.012, 0.028, 0.034, 0.134, 0.146, 0.002), s), METAL, 30);
       }
-      // chin cannon
+      // chin cannon; tier 2 runs a lighter barrel out either side of it, tier 3 slides a coil shroud up the main gun
       k.solid(box(0.22, 0.42, -0.07, -0.04, -0.03, 0.03, 0.01), B2, { crease: 30 });
-      k.barrel(0.36, 0.5, -0.052, 0, 0.011);
+      k.gun(G1[0], 0.32, 0.5, -0.052, 0, 0.011, { set: 'A', breech: 0.43 });
+      for (const s of [1, -1]) k.gun(G2[s > 0 ? 0 : 1], 0.33, 0.475, -0.057, s * 0.0195, 0.0055, { set: s > 0 ? 'A' : 'B', tier: 2, breech: 0.428 });
+      k.in(G3, () => {
+        k.metal(lathe([[0.385, 0.014], [0.395, 0.0185], [0.455, 0.0185], [0.462, 0.014]], k.seg(12), { y: -0.052, capA: false, capB: false }), GUNMETAL, 30);
+        for (const cx of [0.405, 0.425, 0.445]) k.glowCone(cx - 0.005, 0.0192, K3(P.glow, 0.5), 0, cx + 0.005, 0.0192, K3(P.glow, 0.5), 0, -0.052, 0, k.seg(12), CH.COIL);
+      });
+      // vectoring paddles over and under the main nozzles: they follow the stick and spread on afterburner
+      for (const up of [1, -1]) {
+        const pd = k.part({ p: [-0.43, up * 0.054, 0], a: [0, 0, 1], rot: [S.PITCH, -0.34, S.AB, -up * 0.22, S.ONE, up * 0.05, S.THR, -up * 0.05] });
+        k.in(pd, () => { for (const s of [1, -1]) k.solid(side(loft([ringRect(-0.425, up > 0 ? 0.05 : -0.062, up > 0 ? 0.062 : -0.05, 0.022, 0.112, 0.004), ringRect(-0.47, up > 0 ? 0.052 : -0.06, up > 0 ? 0.06 : -0.052, 0.024, 0.11, 0.003), ringRect(-0.5, up > 0 ? 0.054 : -0.058, up > 0 ? 0.058 : -0.054, 0.03, 0.104, 0.0015)]), s), B2, { crease: 28 }); });
+        for (const s of [1, -1]) k.metal(side(box(-0.44, -0.4, up > 0 ? 0.046 : -0.056, up > 0 ? 0.056 : -0.046, 0.06, 0.072), s), GUNMETAL, 30);
+      }
+      // pod tops: rocket hatches forward, airbrakes aft; overdrive vents on the deck
+      k.hatch(-0.02, 0.08, PZ0 + 0.022, PZ1 - 0.022, 0.05, { sym: true, open: [S.ROCKET, 1.2], glow: [4, 0.5, 0.2], glowCh: CH.ROCKET });
+      k.hatch(-0.19, -0.1, PZ0 + 0.022, PZ1 - 0.022, 0.05, { sym: true, open: [S.BRAKE, 1.05], th: 0.004 });
+      k.hatch(0.03, 0.1, 0.03, 0.07, 0.083, { sym: true, open: [S.OD, 0.8], glow: K3(GOLDC, 0.5) });
+      for (const s of [1, -1]) { k.trim([0.12, 0.083, s * 0.058], [-0.02, 0.083, s * 0.088], 0.0025); k.trim([-0.02, 0.083, s * 0.088], [-0.32, 0.083, s * 0.088], 0.0025); }
+      k.tear(1, -0.03, 0.083, -0.06, 0.06, 0.045);
+      k.tear(2, -0.06, 0.05, 0.3375, 0.05, 0.05, { skew: -0.3 });
+      k.emitter(0.482, 0.0, 0, 0.012, { col: DK });
+      k.scanner(0.09, 0.083, 0, 0.014);
+      k.keel(-0.28, -0.02, -0.078, 0.05, { frames: 4, scoop: 0.195, beacon: -0.15, col: B2 });
+      k.gear(0.14, -0.078, 0, GND, { foot: 'pad', r: 0.006, w: 0.011 });
+      k.gear(-0.05, -0.046, (PZ0 + PZ1) / 2, GND, { foot: 'pad', r: 0.0065, w: 0.013 });
       k.solid(box(-0.3, 0.16, -0.078, -0.052, -0.07, 0.07, 0.012), B2, { crease: 30 });
       // tail bumper between the mains
       k.solid(box(-0.475, -0.42, -0.02, 0.03, -0.014, 0.014, 0.005), DK, { crease: 30 });
@@ -1176,9 +1632,14 @@ function defGhost() {
   ];
   const EZ = 0.088;
   return {
-    zr: 0.42, P, breach: [[-0.1, 0.18, 0.09], [0.1, -0.1, 0.06]],
+    zr: 0.42, P, feel: { ctl: 170, eng: 260 },
+    breach: [[-0.16, 0.3, 0.07], [-0.04, -0.165, 0.06, 0.0215], [-0.165, 0.255, 0.05, 0.0135], [0.2, -0.04, 0.05]],
     geo(k) {
-      const q = k.q, B2 = lin(P.base2), DK = lin(P.dark);
+      const q = k.q, B2 = lin(P.base2), DK = lin(P.dark), GND = -0.092, FAC = WPROF_FACET;
+      const G1 = k.gunSlots(1, { ext: 0.025, recoil: 0.01 }), G2 = k.gunSlots(2, { stow: [-0.11, 0, 0], recoil: 0.01 }), G3 = k.gunSlots(3, { stow: [-0.1, 0, 0], recoil: 0.008 });
+      // silent control: no hinges anywhere — vanes slide aft out of the sawtooth trailing edge instead
+      const vIn = k.part({ mov: [S.PITCH, -0.055, 0, 0, S.BRAKE, -0.05, 0, 0], ao: false });
+      const vEng = k.part({ mov: [S.THR, -0.014, 0, 0, S.AB, -0.03, 0, 0, S.ONE, 0.014, 0, 0] });
       const F = fuselage([
         { x: -0.475, w: 0.03, t: 0.006, b: 0.006, et: 1.3, eb: 1.3 }, { x: -0.38, w: 0.07, t: 0.022, b: 0.016, et: 1.3, eb: 1.3 },
         { x: -0.18, w: 0.108, t: 0.048, b: 0.03, et: 1.3, eb: 1.3 }, { x: 0.06, w: 0.1, t: 0.056, b: 0.032, et: 1.3, eb: 1.3 },
@@ -1201,7 +1662,9 @@ function defGhost() {
           // radar-blocker grille across the intake mouth
           for (let i = 0; i < 5; i++) { const gz = EZ + (i - 2) * 0.0105; k.solid(side(box(0.078, 0.098, y - 0.012, y + 0.016, gz - 0.0016, gz + 0.0016), s), DK, { crease: 14 }); }
           k.solid(side(box(0.082, 0.094, y + 0.001, y + 0.004, EZ - 0.027, EZ + 0.027), s), DK, { crease: 14 });
-          k.nozzle(-0.345, y, s * EZ, 0.036, 0.085, { sy: 0.46, sz: 1.2 });
+          k.nozzle(-0.345, y, s * EZ, 0.036, 0.085, { sy: 0.46, sz: 1.2, vec: 0.35, iris: 0.5 });
+          // eyelid vanes over and under the slot, drawn aft as the throttle opens
+          k.in(vEng, () => { for (const vy of [y + 0.0195, y - 0.0225]) k.solid(side(box(-0.352, -0.275, vy, vy + 0.003, EZ - 0.04, EZ + 0.04, 0.001), s), DK, { crease: 14 }); });
           // exhaust trough: heat tiles stepping down to the trailing edge, flanked by two blade fences
           for (let i = 0; i < 4; i++) k.solid(side(box(-0.44 + i * 0.022, -0.424 + i * 0.022, 0.004, 0.012 + i * 0.002, EZ - 0.032, EZ + 0.032, 0.0015), s), lin(0x2a2630), { crease: 14 });
           for (const fz of [EZ - 0.045, EZ + 0.047]) k.solid(side(move(rotX(wing([{ z: 0, xl: -0.3, xt: -0.45, y: 0, th: 0.006 }, { z: 0.022, xl: -0.35, xt: -0.455, y: 0, th: 0.003 }], { prof: WPROF_FACET }), 90 * DEG), 0, 0.008, fz), s), B2, { crease: 14 });
@@ -1226,15 +1689,36 @@ function defGhost() {
         k.metal(side(lathe([[-0.3, 0.004], [-0.27, 0.011], [-0.12, 0.011], [-0.085, 0.004]], 6, { y: -0.009, z: 0.37 }), s), GUNMETAL, 20);
         k.glowBall(-0.2, 0.004, s * 0.37, 0.011, P.glow.map((v) => v * 0.6), CH.ACCENT);
         k.navLight(-0.13, 0.003, s * 0.372, s > 0 ? NAV_GREEN : NAV_RED, CH.NAV, 0.009);
-        // recessed guns
-        k.barrel(0.3, 0.42, -0.002, s * 0.047, 0.0045);
+        // outboard drag vane (roll: one side runs out, the other stays buried) and the inboard pair (pitch)
+        {
+          // (thin blades buried in the wing just ahead of the trailing edge, each with a lit rear edge)
+          const TE = (z) => wAt(WING, z).xt, Y = (z) => wAt(WING, z).y, IN = 0.013;
+          const vane = (z0, z1, d) => {
+            const t = loft([-0.0009, 0.0009].map((dy) => [[TE(z0) + IN, Y(z0) + dy, z0], [TE(z0) + d, Y(z0) + dy, z0], [TE(z1) + d, Y(z1) + dy, z1], [TE(z1) + IN, Y(z1) + dy, z1]]));
+            k.solid(side(t, s), lin(P.accent2), { crease: 14 });
+            const c = P.glow.map((v) => v * 0.45), e = (z, dx, dy) => [TE(z) + IN + dx, Y(z) + dy, s * z];
+            for (const dy of [0.0012, -0.0012]) { k.glow(e(z0, 0, dy), e(z1, 0, dy), e(z1, 0.006, dy), c, c, c, CH.ACCENT); k.glow(e(z0, 0, dy), e(z1, 0.006, dy), e(z0, 0.006, dy), c, c, c, CH.ACCENT); }
+          };
+          const vOut = k.part({ mov: [S.BANK, s * 0.07, 0, 0, S.BRAKE, -0.06, 0, 0], ao: false });
+          k.in(vOut, () => vane(0.224, 0.294, 0.13));
+          k.in(vIn, () => vane(0.052, 0.12, 0.12));
+        }
+        // recessed guns; tier 2 slides a second pair out of the leading edge, tier 3 a coil lance out of each emitter node
+        const gi = s > 0 ? 0 : 1, gs = s > 0 ? 'A' : 'B';
+        k.gun(G1[gi], 0.27, 0.42, -0.002, s * 0.047, 0.0045, { set: gs, breech: 0.34 });
+        k.gun(G2[gi], 0.17, 0.335, 0.0, s * 0.085, 0.0042, { set: gs, tier: 2, breech: 0.275 });
+        k.gun(G3[gi], 0.02, 0.175, 0.001, s * 0.215, 0.0038, { set: gs, tier: 3, coil: 2, breech: 0.11 });
+        k.wingTrim(WING, s, 0.05, 0.36, 0.12, { prof: FAC });
         // faceted armour tiles on the wing
-        k.paint(side(plate([[0.1, 0.13], [-0.1, 0.13], [-0.18, 0.2], [0.02, 0.2]], 0.006, 0.0215, 0.004), s), { crease: 14 });
+        {
+          const ap = () => k.paint(side(plate([[0.1, 0.13], [-0.1, 0.13], [-0.18, 0.2], [0.02, 0.2]], 0.006, 0.0215, 0.004), s), { crease: 14 });
+          if (s > 0) k.shed(2, ap, [-0.11, 0.04, 0.138, 0.192, 0.0165]); else ap();
+        }
         k.paint(side(plate([[-0.06, 0.225], [-0.2, 0.225], [-0.27, 0.285], [-0.13, 0.285]], 0.002, 0.0135, 0.003), s), { crease: 14 });
         k.paint(side(plate([[0.2, 0.06], [0.06, 0.115], [-0.02, 0.115], [-0.02, 0.06]], 0.012, 0.03, 0.004), s), { crease: 14, shade: 0.9 });
         k.vents(-0.24, -0.14, 0.047, s * EZ - 0.02, s * EZ + 0.02, 4);
-        // downturned tip fins
-        if (q >= 1) k.solid(side(move(rotX(wing([{ z: 0, xl: -0.12, xt: -0.29, y: 0, th: 0.008 }, { z: 0.045, xl: -0.2, xt: -0.3, y: 0, th: 0.004 }], { prof: WPROF_FACET }), -50 * DEG), 0, -0.01, 0.362), s), B2, { crease: 14 });
+        // downturned tip fins (the port one can be shot away)
+        k.fin([{ z: 0, xl: -0.12, xt: -0.29, y: 0, th: 0.008 }, { z: 0.045, xl: -0.2, xt: -0.3, y: 0, th: 0.004 }], -50 * DEG, -0.01, 0.362, s, { col: B2, prof: FAC, crease: 14, brk: s < 0 ? 1 : 0, rot: [S.YAW, 0.2], at: 0.3 });
       }
       // dorsal shield emitter: hex dome with a glowing ring
       k.metal(latheY([[0.03, 0.046], [0.054, 0.042], [0.064, 0.03], [0.068, 0.02], [0.068, 0.0005]], 6, -0.13, 0), lin(0x4a4660), 14);
@@ -1248,7 +1732,22 @@ function defGhost() {
         // focusing crystal and three buttress vanes
         k.glowTris(latheY([[0.068, 0.0075], [0.078, 0.005], [0.085, 0.0004]], 6, EX, 0), P.glow.map((v) => v * 0.7), CH.ACCENT);
         for (let j = 0; j < 3; j++) k.metal(rotY(box(EX + 0.03, EX + 0.064, 0.03, 0.056, -0.004, 0.004, 0.002), (j / 3) * TAU + Math.PI / 3, EX, 0), GUNMETAL, 14);
+        // a sensor arm sweeps round the crown of the dome
+        const sw = k.part({ p: [EX, 0, 0], a: [0, 1, 0], rot: [S.SPIN, 0.6] });
+        k.in(sw, () => {
+          k.metal(box(EX + 0.006, EX + 0.03, 0.0685, 0.0725, -0.003, 0.003, 0.001), GUNMETAL, 14);
+          k.glowBox(EX + 0.024, EX + 0.03, 0.0725, 0.0745, -0.0025, 0.0025, P.glow.map((v) => v * 0.6), CH.ACCENT);
+        });
       }
+      // overdrive vents on the engine humps, missile bays in the upper wing, battle damage on the armour tiles
+      k.hatch(-0.1, -0.045, EZ - 0.012, EZ + 0.012, [0.0455, 0.0445], { sym: true, open: [S.OD, 0.75], glow: K3(GOLDC, 0.5), col: B2 });
+      k.hatch(-0.29, -0.2, 0.152, 0.196, [wTop(WING, -0.29, 0.174, 1, FAC), wTop(WING, -0.2, 0.174, 1, FAC)], { sym: true, open: [S.ROCKET, 1.15], glow: [4, 0.5, 0.2], glowCh: CH.ROCKET, col: B2 });
+      k.tear(1, -0.04, 0.0215, -0.165, 0.07, 0.045);
+      k.tear(2, -0.165, 0.0135, 0.255, 0.06, 0.04, { skew: -0.3 });
+      k.emitter(0.365, -0.014, 0, 0.0075, { col: DK });
+      k.keel(-0.28, -0.03, -0.04, 0.028, { frames: 3, scoop: 0.215, beacon: -0.2, col: DK });
+      k.gear(0.16, -0.04, 0, GND, { foot: 'skid', r: 0.0034, w: 0.006 });
+      k.gear(-0.15, wTop(WING, -0.15, 0.15, -1, FAC), 0.15, GND, { foot: 'skid', r: 0.0036, w: 0.007, ya: wTop(WING, -0.24, 0.15, -1, FAC) });
       // dorsal ridge: a knife-edged spine from the canopy to the tail
       k.paint(loft([[[0.1, 0.05, 0], [0.1, 0.04, 0.012], [0.1, 0.04, -0.012]], [[-0.06, 0.066, 0], [-0.06, 0.046, 0.02], [-0.06, 0.046, -0.02]], [[-0.3, 0.04, 0], [-0.3, 0.028, 0.016], [-0.3, 0.028, -0.016]], [[-0.45, 0.012, 0], [-0.45, 0.008, 0.006], [-0.45, 0.008, -0.006]]]), { crease: 14, shade: 0.9 });
       k.navLight(-0.46, 0.012, 0, NAV_WHITE, CH.STROBE, 0.008);
@@ -1307,9 +1806,11 @@ function defAce() {
   const CAN = [{ z: 0.04, xl: 0.245, xt: 0.135, y: 0.006, th: 0.012 }, { z: 0.155, xl: 0.155, xt: 0.105, y: 0.006, th: 0.006 }];
   const PZ = 0.278, PR = 0.029;
   return {
-    zr: 0.36, P, breach: [[-0.15, 0.12, 0.08], [0.05, -0.04, 0.05]],
+    zr: 0.36, P, feel: { ctl: 55, eng: 110 },
+    breach: [[-0.215, 0.144, 0.05], [-0.265, -0.228, 0.05, wTop(WING, -0.265, 0.228)], [0.26, 0.052, 0.045, 0.027], [0.05, -0.04, 0.05]],
     geo(k) {
-      const q = k.q, B2 = lin(P.base2), DK = lin(P.dark), G = P.glow;
+      const q = k.q, B2 = lin(P.base2), DK = lin(P.dark), G = P.glow, GND = -0.094;
+      const G1 = k.gunSlots(1, { ext: 0.03 }), G2 = k.gunSlots(2, { stow: [-0.13, 0, 0] }), G3 = k.gunSlots(3, { stow: [-0.1, 0, 0], recoil: 0.01 });
       const F = fuselage([
         { x: -0.41, w: 0.048, t: 0.04, b: 0.036, et: 2.2 }, { x: -0.22, w: 0.06, t: 0.05, b: 0.04, et: 2.2 },
         { x: 0.0, w: 0.06, t: 0.052, b: 0.04, et: 2 }, { x: 0.16, w: 0.052, t: 0.044, b: 0.036, et: 1.8, eb: 1.8 },
@@ -1333,34 +1834,51 @@ function defAce() {
         if (q >= 1) for (const cx of [0.34, 0.375, 0.41, 0.445]) k.metal(side(box(cx - 0.004, cx + 0.004, -0.012, 0.012, 0.03, 0.037, 0.0015), s), GUNMETAL, 30);
       }
       k.metal(lathe([[0.3, 0.03], [0.324, 0.03], [0.332, 0.023], [0.326, 0.017], [0.312, 0.014]], k.seg(14), { capA: false, capB: false }), METAL, 28);
-      k.glowCone(0.32, 0.0001, G.map((v) => v * 0.9), 0, 0.32, 0.017, G.map((v) => v * 0.4), 0, 0, 0, k.seg(14), CH.ACCENT);
+      k.glowCone(0.3185, 0.0001, G.map((v) => v * 0.5), 0, 0.3185, 0.017, G.map((v) => v * 0.2), 0, 0, 0, k.seg(14), CH.ACCENT);
+      k.emitter(0.3275, 0, 0, 0.0175, { housing: false, hub: 0.52 }); // the iris closes around the spike
       k.metal(lathe([[0.317, 0.0085], [0.4, 0.0055], [0.44, 0.001]], 8, {}), GUNMETAL, 30);
       for (const x of [0.345, 0.37, 0.395]) k.metal(lathe([[x - 0.004, 0.0105], [x + 0.004, 0.0105]], 8, {}), METAL, 30);
       // centre engine
       k.nozzle(-0.5, 0.002, 0, 0.044, 0.12);
       for (const s of [1, -1]) {
-        k.paint(side(wing(WING), s), { crease: 26 });
-        k.paint(side(wing(CAN), s), { crease: 26, hinge: { p: [0.19, 0.006, s * 0.04], a: [0, 0, 1], k: s * -0.35 } });
+        // wing: inboard flap (airbrake) and aileron; all-moving canards
+        k.flapWing(WING, s, 0.78, [[0.062, 0.15, [S.BRAKE, 0.6, S.PITCH, -0.14]], [0.16, 0.248, [S.BANK, -s * 0.55, S.PITCH, -0.12]]]);
+        k.wingTrim(WING, s, 0.06, 0.255, 0.1);
+        k.slab(CAN, s, 0.19, [S.PITCH, 0.34, S.BANK, -s * 0.38]);
         // wingtip engine pods
         k.paint(side(lathe([[-0.435, PR * 0.95], [-0.32, PR * 1.05], [-0.16, PR * 1.0], [-0.1, PR * 0.8]], k.seg(14), { y: 0, z: PZ, capB: false }), s), { crease: 36 });
         k.intakeRound(-0.1, 0, s * PZ, PR * 0.8);
         k.nozzle(-0.5, 0, s * PZ, 0.024, 0.07);
         k.navLight(-0.25, PR + 0.002, s * (PZ + 0.012), s > 0 ? NAV_GREEN : NAV_RED);
         {
-          const fin = wing([{ z: 0, xl: -0.28, xt: -0.42, y: 0, th: 0.01 }, { z: 0.07, xl: -0.37, xt: -0.45, y: 0, th: 0.004 }]);
-          k.solid(side(move(rotX(fin, 70 * DEG), 0, PR * 0.8, PZ), s), DK, { crease: 26 });
+          // (rudder; the port one can be shot away)
+          k.fin([{ z: 0, xl: -0.28, xt: -0.42, y: 0, th: 0.01 }, { z: 0.07, xl: -0.37, xt: -0.45, y: 0, th: 0.004 }], 70 * DEG, PR * 0.8, PZ, s, { col: DK, brk: s < 0 ? 2 : 0, rot: [S.YAW, -0.3], at: 0.35 });
         }
-        // long wing-root cannons
+        // long wing-root cannons; tier 2 runs a pair out of the belly, tier 3 a rail out of each fork prong
+        const gi = s > 0 ? 0 : 1, gs = s > 0 ? 'A' : 'B';
         k.solid(side(lathe([[-0.16, 0.004], [-0.1, 0.017], [0.0, 0.017], [0.04, 0.011]], k.seg(10), { y: -0.002, z: 0.092 }), s), DK, { crease: 34 });
-        k.barrel(0.02, 0.285, -0.002, s * 0.092, 0.0072);
+        k.gun(G1[gi], -0.02, 0.285, -0.002, s * 0.092, 0.0072, { set: gs, breech: 0.055 });
         k.solid(side(lathe([[-0.17, 0.003], [-0.12, 0.012], [-0.06, 0.012], [-0.03, 0.008]], k.seg(8), { y: -0.004, z: 0.135 }), s), DK, { crease: 34 });
-        k.barrel(-0.045, 0.14, -0.004, s * 0.135, 0.0055);
+        k.gun(G1[1 - gi], -0.08, 0.14, -0.004, s * 0.135, 0.0055, { set: s > 0 ? 'B' : 'A', breech: -0.02 });
+        k.gun(G2[gi], 0.15, 0.31, -0.043, s * 0.0135, 0.0048, { set: gs, tier: 2, breech: 0.212 });
+        k.gun(G3[gi], 0.37, 0.5, 0.0, s * 0.061, 0.0042, { set: gs, tier: 3, coil: 2, breech: 0.49 });
         k.vents(-0.3, -0.22, 0.045, s * 0.03 - 0.012, s * 0.03 + 0.012, 3);
         if (q >= 1) k.solid(side(move(rotX(wing([{ z: 0, xl: -0.2, xt: -0.36, y: 0, th: 0.008 }, { z: 0.045, xl: -0.29, xt: -0.38, y: 0, th: 0.004 }]), -75 * DEG), 0, -0.03, 0.03), s), DK, { crease: 26 });
       }
-      // tall racing fin
-      k.paint(move(rotX(wing([{ z: 0, xl: -0.14, xt: -0.4, y: 0, th: 0.014 }, { z: 0.07, xl: -0.26, xt: -0.43, y: 0, th: 0.01 }, { z: 0.125, xl: -0.36, xt: -0.455, y: 0, th: 0.005 }]), 90 * DEG), 0, 0.04, 0), { crease: 26 });
-      k.navLight(-0.43, 0.17, 0, NAV_WHITE, CH.STROBE, 0.007);
+      // tall racing fin: the top is the rudder (and the first thing to go)
+      {
+        const fin = k.fin([{ z: 0, xl: -0.14, xt: -0.4, y: 0, th: 0.014 }, { z: 0.07, xl: -0.26, xt: -0.43, y: 0, th: 0.01 }, { z: 0.125, xl: -0.36, xt: -0.455, y: 0, th: 0.005 }], 90 * DEG, 0.04, 0, 1, { brk: 1, rot: [S.YAW, -0.34] });
+        k.in(fin.part, () => k.navLight(-0.43, 0.17, 0, NAV_WHITE, CH.STROBE, 0.007));
+      }
+      // overdrive vents and missile bays in the upper wing, battle damage
+      k.hatch(-0.26, -0.19, 0.082, 0.12, [wTop(WING, -0.26, 0.1), wTop(WING, -0.19, 0.1)], { sym: true, open: [S.OD, 0.8], glow: K3(GOLDC, 0.5) });
+      k.hatch(-0.262, -0.185, 0.166, 0.2, [wTop(WING, -0.262, 0.183), wTop(WING, -0.185, 0.183)], { sym: true, open: [S.ROCKET, 1.2], glow: [4, 0.5, 0.2], glowCh: CH.ROCKET });
+      k.tear(1, -0.265, wTop(WING, -0.265, 0.228), -0.228, 0.05, 0.036);
+      k.tear(2, 0.26, 0.027, 0.052, 0.05, 0.04, { skew: -0.3 });
+      k.scanner(-0.09, 0.058, 0, 0.01);
+      k.keel(-0.24, -0.02, -0.052, 0.018, { frames: 3, scoop: 0.215, beacon: -0.13, col: B2 });
+      k.gear(0.13, -0.052, 0, GND, { foot: 'wheel', r: 0.0034, w: 0.006 });
+      k.gear(-0.25, -PR * 1.05, PZ, GND, { foot: 'skid', r: 0.0036, w: 0.007 });
       k.solid(box(-0.26, 0.2, -0.052, -0.034, -0.026, 0.026, 0.008), B2, { crease: 30 });
       k.muzzles.unshift({ x: 0.44, y: 0, z: 0 });
     },
@@ -1429,13 +1947,33 @@ float s3n(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
   return mix(mix(s3h(i), s3h(i + vec2(1.0, 0.0)), f.x), mix(s3h(i + vec2(0.0, 1.0)), s3h(i + vec2(1.0, 1.0)), f.x), f.y); }
 float s3f(vec2 p){ return 0.5 * s3n(p) + 0.3 * s3n(p * 2.13 + 7.1) + 0.2 * s3n(p * 4.7 + 3.3); }
 `;
+// Rig: aRig = (slot, weight). uPa[slot] = quaternion xyz + emissive level, uPb[slot] = offset + scale
+// (0 hides the part, anything else scales it across the X axis: the nozzle and emitter irises).
+const GLSL_RIG = `
+attribute vec2 aRig; uniform vec4 uPa[${NP}]; uniform vec4 uPb[${NP}];
+vec3 s3q(vec3 v, vec4 q){ return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v); }
+vec3 s3pose(vec3 v, vec4 q, vec4 b){ return s3q(v * vec3(step(1e-4, b.w), b.w, b.w), q) + b.xyz; }
+`;
 const VERT_HEAD = `
-varying vec3 vS3Pos;
+varying vec3 vS3Pos; varying vec3 vS3N; varying float vS3Nb;
+${GLSL_RIG}
 #ifdef S3_HINGE
-varying vec3 vS3N; varying float vS3Sw;
-attribute vec3 aHingeP; attribute vec4 aHingeA; uniform float uBank;
-vec3 s3rot(vec3 v, vec3 k, float a){ float c = cos(a), s = sin(a); return v * c + cross(k, v) * s + k * dot(k, v) * (1.0 - c); }
+varying float vS3Sw;
 #endif
+`;
+const VERT_NORMAL = `
+int s3i = int(aRig.x + 0.1);
+vec4 s3A = uPa[s3i], s3B = uPb[s3i];
+vec4 s3Q = vec4(s3A.xyz, sqrt(max(0.0, 1.0 - dot(s3A.xyz, s3A.xyz))));
+vS3N = objectNormal; vS3Nb = step(0.2, aRig.x - float(s3i)); // (slot + 0.25 marks parts the breaches must not burn through)
+#ifdef S3_HINGE
+vS3Sw = step(0.8, uv.x) * step(0.4, abs(uv.y - 0.5));
+#endif
+if (s3i > 0) objectNormal = normalize(mix(objectNormal, s3q(objectNormal, s3Q), aRig.y));
+`;
+const VERT_BEGIN = `
+vS3Pos = transformed;
+if (s3i > 0) transformed = mix(transformed, s3pose(transformed, s3Q, s3B), aRig.y);
 `;
 // Plan projection is only right for faces that look up. Faces that look sideways or down take the
 // livery's colour blocks (a blurred sample: no smeared lines or chips) and get their own panelling,
@@ -1466,10 +2004,10 @@ float s3faces(vec3 p, float sideW, float bellyW) {
 }
 `;
 const FRAG_HEAD = `
-uniform float uFlash; uniform float uDamage; uniform vec4 uTint; uniform float uTime; uniform float uFade; uniform vec4 uBr[2]; uniform vec4 uSheen;
-varying vec3 vS3Pos;
+uniform float uFlash; uniform float uDamage; uniform vec4 uTint; uniform float uTime; uniform float uFade; uniform vec4 uBr[4]; uniform vec4 uSheen;
+varying vec3 vS3Pos; varying vec3 vS3N; varying float vS3Nb;
 #ifdef S3_HINGE
-varying vec3 vS3N; varying float vS3Sw;
+varying float vS3Sw;
 #endif
 ${GLSL_NOISE}
 ${GLSL_FACES}
@@ -1506,18 +2044,25 @@ float s3soot = 0.0; float s3hot = 0.0;
   #endif
   if (uDamage > 0.001) {
     vec2 q = vS3Pos.xz;
-    float n = s3f(q * 9.0 + uBr[0].xy * 31.0);
-    float a = mix(0.86, 0.4, uDamage);
-    s3soot = smoothstep(a, a + 0.1, n) * 0.8;
-    for (int i = 0; i < 2; i++) {
-      float r = uBr[i].z * smoothstep(0.12 + 0.3 * float(i), 0.6 + 0.35 * float(i), uDamage);
+    // scorches first: soot dragged aft in streaks, spreading as the hull takes more
+    float n = mix(s3f(vec2(q.x * 5.0, q.y * 16.0) + uBr[0].xy * 31.0), s3f(q * 9.0 + 4.0), 0.4);
+    float a = mix(0.69, 0.34, uDamage);
+    s3soot = smoothstep(a, a + 0.12, n) * 0.85;
+    // then the breaches, one after another: burnt skin around a hole with the frames showing and fire underneath.
+    // They are punched along Y, so only skin that faces up or down takes them (no smears down a fin).
+    float flat_ = smoothstep(0.3, 0.65, abs(normalize(vS3N).y)) * (1.0 - vS3Nb);
+    for (int i = 0; i < 4; i++) {
+      float r = uBr[i].z * smoothstep(uBr[i].w, uBr[i].w + 0.28, uDamage) * flat_;
       if (r > 0.0005) {
         float d = length(q - uBr[i].xy) + (s3n(q * 34.0 + float(i) * 9.0) - 0.5) * r * 0.9;
         float core = 1.0 - smoothstep(r * 0.45, r, d);
-        s3soot = max(s3soot, 1.0 - smoothstep(r * 0.8, r * 2.1, d));
+        s3soot = max(s3soot, 1.0 - smoothstep(r * 0.8, r * 2.3, d));
         float crack = pow(1.0 - abs(2.0 * s3n(q * 42.0 + 3.0) - 1.0), 6.0);
         float rim = smoothstep(r * 0.72, r * 0.92, d) * (1.0 - smoothstep(r * 0.92, r * 1.08, d));
-        s3hot += core * (0.02 + crack * crack * 1.1) + rim * (0.25 + 0.5 * crack);
+        float frame = s3line(q * 44.0, 0.8);
+        float pulse = 0.55 + 0.45 * sin(uTime * 0.013 + float(i) * 2.1 + n * 20.0);
+        s3hot += core * (0.03 * pulse + crack * crack * 0.7) * (1.0 - 0.9 * frame) + rim * (0.22 + 0.4 * crack);
+        diffuseColor.rgb += vec3(0.05, 0.048, 0.045) * frame * core;
       }
     }
     s3hot *= 0.72 + 0.28 * sin(uTime * 0.011 + n * 40.0);
@@ -1545,8 +2090,8 @@ function patchStd(mat, U, kind) { // kind 0 hull, 1 mech, 2 glass
     for (const k in U) sh.uniforms[k] = U[k];
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\n' + VERT_HEAD)
-      .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\n#ifdef S3_HINGE\nfloat s3a = aHingeA.w * uBank;\nvS3N = objectNormal; vS3Sw = step(0.8, uv.x) * step(0.4, abs(uv.y - 0.5));\nobjectNormal = s3rot(objectNormal, aHingeA.xyz, s3a);\n#endif')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\n#ifdef S3_HINGE\ntransformed = aHingeP + s3rot(transformed - aHingeP, aHingeA.xyz, s3a);\n#endif\nvS3Pos = transformed;');
+      .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\n' + VERT_NORMAL)
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n' + VERT_BEGIN);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', '#include <common>\n' + FRAG_HEAD)
       .replace('#include <map_fragment>', FRAG_MAP)
@@ -1563,15 +2108,21 @@ function patchStd(mat, U, kind) { // kind 0 hull, 1 mech, 2 glass
 
 const EMIS_VERT = `
 attribute vec3 aCol; attribute vec2 aCh;
-uniform float uLv[6]; uniform float uFlame; uniform float uTime; uniform vec4 uTint;
+uniform float uLv[${NCH}]; uniform float uFlame; uniform float uTime; uniform vec4 uTint;
 varying vec3 vCol;
+${GLSL_RIG}
 void main() {
   int ch = int(aCh.x + 0.5);
+  int s3i = int(aRig.x + 0.1);
+  vec4 s3A = uPa[s3i], s3B = uPb[s3i];
   vec3 c = aCol;
-  if (ch >= 4) { float mx = max(c.r, max(c.g, c.b)); c = mix(c, uTint.rgb * mx, uTint.a); }
+  if (ch == 4 || ch == 5) { float mx = max(c.r, max(c.g, c.b)); c = mix(c, uTint.rgb * mx, uTint.a); }
+  if (ch == 7) c *= 0.5 + 0.5 * sin(uTime * 0.011 + position.x * 75.0 + position.y * 48.0 + position.z * 31.0); // heat haze crawling aft
+  c *= s3A.w;
   vCol = c * uLv[ch];
   vec3 p = position;
   p.x -= aCh.y * uFlame * (1.0 + 0.16 * sin(uTime * 0.045 + position.z * 380.0 + position.y * 517.0));
+  if (s3i > 0) p = mix(p, s3pose(p, vec4(s3A.xyz, sqrt(max(0.0, 1.0 - dot(s3A.xyz, s3A.xyz)))), s3B), aRig.y);
   vec4 mv = modelViewMatrix * vec4(p, 1.0);
   if (ch == 1 && aCh.y > 0.0) { // plume: seen end-on its layers pile up, so thin it and let the nozzle show through
     vec3 ax = normalize((modelViewMatrix * vec4(1.0, 0.0, 0.0, 0.0)).xyz);
@@ -1626,37 +2177,84 @@ export class Ships3D {
         if (x < x0) x0 = x; if (x > x1) x1 = x; if (z < z0) z0 = z; if (z > z1) z1 = z; if (y < y0) y0 = y; if (y > y1) y1 = y;
       }
     }
+    for (const b of [k.hull, k.mech]) { // stowed / hidden parts stay out of the contact shading
+      const n = b.pos.length / 3, sk = new Uint8Array(n);
+      for (let i = 0; i < n; i++) sk[i] = k.parts[Math.floor(b.rig[i * 2])].ao ? 0 : 1;
+      b.skip = sk;
+    }
     bakeAO([k.hull, k.mech], { vox: this.quality >= 1 ? 0.0085 : 0.012 });
+    // wound sites: the breaches the shader burns through the skin (their height read off the hull), plus the engine that gutters
+    const topY = (x, z) => {
+      for (const rad of [0.02, 0.04, 0.08]) {
+        let y = -Infinity;
+        const p = k.hull.pos, rg = k.hull.rig;
+        for (let i = 0; i < p.length; i += 3) if (rg[(i / 3) * 2] < 1 && Math.abs(p[i] - x) < rad && Math.abs(p[i + 2] - z) < rad && p[i + 1] > y) y = p[i + 1];
+        if (y > -Infinity) return y;
+      }
+      return 0;
+    };
+    const BR = (def.breach || [[0, 0.1, 0.08], [0.1, -0.05, 0.06]]).slice(0, 4);
+    while (BR.length < 4) { const b = BR[BR.length - 2]; BR.push([b[0] - 0.1, -b[1], b[2] * 0.85]); }
+    const BT = [0.12, 0.32, 0.52, 0.85];
+    const n0 = k.nozzles[0] || { x: -0.5, y: 0, z: 0 };
+    const wd = BR.map((b, i) => ({ x: b[0], y: b[3] ?? topY(b[0], b[1]), z: b[1], at: BT[i] }));
+    wd.splice(3, 0, { x: n0.x, y: n0.y, z: n0.z, at: 0.7 });
     const sc = 1 / (x1 - x0), ox = (x0 + x1) / 2, oz = (z0 + z1) / 2;
     const fix = (p) => { for (let i = 0; i < p.length; i += 3) { p[i] = (p[i] - ox) * sc; p[i + 1] *= sc; p[i + 2] = (p[i + 2] - oz) * sc; } };
     for (const b of [k.hull, k.mech, k.glass, k.emis]) fix(b.pos);
-    fix(k.hull.hp);
     for (let i = 1; i < k.emis.ch.length; i += 2) k.emis.ch[i] *= sc;
     const pt = (p) => ({ ...p, x: (p.x - ox) * sc, y: p.y * sc, z: (p.z - oz) * sc, ...(p.r != null ? { r: p.r * sc } : {}) });
+    for (const P of k.parts) {
+      fix(P.p);
+      if (P.mov) for (let i = 0; i < P.mov.length; i += 4) { P.mov[i + 1] *= sc; P.mov[i + 2] *= sc; P.mov[i + 3] *= sc; }
+    }
     const mk = (b, extra) => {
       const geo = new T.BufferGeometry();
       geo.setAttribute('position', new T.Float32BufferAttribute(b.pos, 3));
       if (b.nrm) geo.setAttribute('normal', new T.Float32BufferAttribute(b.nrm, 3));
       if (b.nrm) geo.setAttribute('color', new T.Float32BufferAttribute(b.col, 3));
+      geo.setAttribute('aRig', new T.Float32BufferAttribute(b.rig, 2));
       if (extra) extra(geo);
       geo.computeBoundingSphere();
       geo.computeBoundingBox();
+      // moving parts swing outside the rest pose (gear, canopy, plume): pad the culling volume
+      geo.boundingSphere.radius *= 1.35;
       return geo;
     };
+    // pieces breakOff() sheds: the same triangles as a rigid mesh of its own, centred on itself
+    const debris = [];
+    for (const brk of [1, 2]) {
+      const h = k.hull, pos = [], nrm = [], col = [], uv = [];
+      for (const P of k.parts) if (P.brk === brk) for (let r = 0; r < P.range.length; r += 2) for (let v = P.range[r]; v < P.range[r + 1]; v++) {
+        pos.push(h.pos[v * 3], h.pos[v * 3 + 1], h.pos[v * 3 + 2]); nrm.push(h.nrm[v * 3], h.nrm[v * 3 + 1], h.nrm[v * 3 + 2]);
+        col.push(h.col[v * 3], h.col[v * 3 + 1], h.col[v * 3 + 2]); uv.push(h.uv[v * 2], h.uv[v * 2 + 1]);
+      }
+      if (!pos.length) continue;
+      const c = [0, 0, 0], n = pos.length / 3;
+      for (let i = 0; i < pos.length; i += 3) { c[0] += pos[i] / n; c[1] += pos[i + 1] / n; c[2] += pos[i + 2] / n; }
+      for (let i = 0; i < pos.length; i += 3) { pos[i] -= c[0]; pos[i + 1] -= c[1]; pos[i + 2] -= c[2]; }
+      const geo = new T.BufferGeometry();
+      geo.setAttribute('position', new T.Float32BufferAttribute(pos, 3));
+      geo.setAttribute('normal', new T.Float32BufferAttribute(nrm, 3));
+      geo.setAttribute('color', new T.Float32BufferAttribute(col, 3));
+      geo.setAttribute('uv', new T.Float32BufferAttribute(uv, 2));
+      geo.setAttribute('aRig', new T.Float32BufferAttribute(new Float32Array(n * 2), 2));
+      geo.computeBoundingSphere();
+      debris.push({ geo, c, brk, tris: n / 3 });
+    }
     g = {
-      hull: mk(k.hull, (geo) => {
-        geo.setAttribute('uv', new T.Float32BufferAttribute(k.hull.uv, 2));
-        geo.setAttribute('aHingeP', new T.Float32BufferAttribute(k.hull.hp, 3));
-        geo.setAttribute('aHingeA', new T.Float32BufferAttribute(k.hull.ha, 4));
-      }),
+      hull: mk(k.hull, (geo) => geo.setAttribute('uv', new T.Float32BufferAttribute(k.hull.uv, 2))),
       mech: mk(k.mech),
       glass: mk(k.glass),
       emis: mk(k.emis, (geo) => {
         geo.setAttribute('aCol', new T.Float32BufferAttribute(k.emis.col, 3));
         geo.setAttribute('aCh', new T.Float32BufferAttribute(k.emis.ch, 2));
       }),
-      nozzles: k.nozzles.map(pt), muzzles: k.muzzles.map(pt),
-      breach: (def.breach || [[0, 0.1, 0.08], [0.1, -0.05, 0.06]]).map(([x, z, r]) => [(x - ox) * sc, (z - oz) * sc, r * sc]),
+      nozzles: k.nozzles.map(pt),
+      // muzzles: [0] is the centreline reference, then the guns in tier order (stable)
+      muzzles: k.muzzles.map((m, i) => ({ part: 0, tier: 1, ...m, i })).sort((a, b) => a.tier - b.tier || a.i - b.i).map(pt),
+      breach: BR.map(([x, z, r], i) => [(x - ox) * sc, (z - oz) * sc, r * sc, BT[i]]),
+      wounds: wd.map(pt), parts: k.parts, debris, groundY: k.groundY * sc,
       size: [1, (y1 - y0) * sc, (z1 - z0) * sc],
       tris: { hull: k.hull.pos.length / 9, mech: k.mech.pos.length / 9, glass: k.glass.pos.length / 9, emis: k.emis.pos.length / 9 },
     };
@@ -1679,10 +2277,10 @@ export class Ships3D {
     return t;
   }
 
-  /** stats for a ship that has been built: { tris: {hull,mech,glass,emis,total}, drawCalls, size, buildMs } */
+  /** stats for a ship that has been built: { tris: {hull,mech,glass,emis,total}, drawCalls, parts (rig slots used), size, buildMs } */
   info(id) {
     const g = this._geometry(id);
-    return { tris: g.tris, drawCalls: 4, size: g.size, buildMs: this.buildMs[id] };
+    return { tris: g.tris, drawCalls: 4, parts: g.parts.length - 1, size: g.size, buildMs: this.buildMs[id] };
   }
 
   build(id, opts = {}) {
@@ -1691,11 +2289,15 @@ export class Ships3D {
     const g = this._geometry(id), tex = this._textures(id), def = this._def(GEO_KEY[id] || id);
     if (this.buildMs[id] == null && typeof performance !== 'undefined') this.buildMs[id] = performance.now() - t0;
 
-    const lv = [1, 1, 1, 1, 1, 1];
+    const lv = new Array(NCH).fill(0);
+    lv[CH.STATIC] = 1;
+    // rig pose, shared by all four materials: quaternion xyz + emissive level, offset + scale
+    const pa = new Float32Array(NP * 4), pb = new Float32Array(NP * 4), pT = new Float32Array(NP * 3);
+    for (let i = 0; i < NP; i++) pa[i * 4 + 3] = pb[i * 4 + 3] = 1;
     const U = {
       uFlash: { value: 0 }, uDamage: { value: 0 }, uTint: { value: new T.Vector4(1, 1, 1, 0) }, uTime: { value: 0 },
-      uFade: { value: 1 }, uBank: { value: 0 }, uSheen: { value: new T.Vector4(...(def.P.sheen || [0, 0, 0, 0])) }, uBr: { value: g.breach.map((b, i) => new T.Vector4(b[0], b[1], b[2], i)) },
-      uLv: { value: lv }, uFlame: { value: 0.3 },
+      uFade: { value: 1 }, uSheen: { value: new T.Vector4(...(def.P.sheen || [0, 0, 0, 0])) }, uBr: { value: g.breach.map((b) => new T.Vector4(b[0], b[1], b[2], b[3])) },
+      uLv: { value: lv }, uFlame: { value: 0.3 }, uPa: { value: pa }, uPb: { value: pb },
     };
     const hull = patchStd(new T.MeshStandardMaterial({
       vertexColors: true, map: tex ? tex.map : null, normalMap: tex ? tex.normal : null,
@@ -1709,7 +2311,7 @@ export class Ships3D {
       vertexColors: true, roughness: 0.045, metalness: 0.0, envMapIntensity: 0.3, transparent: true, opacity: GLASS_A, depthWrite: false,
     }), U, 2);
     const emis = new T.ShaderMaterial({
-      uniforms: { uLv: U.uLv, uFlame: U.uFlame, uTime: U.uTime, uTint: U.uTint, uFade: U.uFade, uFlash: U.uFlash },
+      uniforms: { uLv: U.uLv, uFlame: U.uFlame, uTime: U.uTime, uTint: U.uTint, uFade: U.uFade, uFlash: U.uFlash, uPa: U.uPa, uPb: U.uPb },
       vertexShader: EMIS_VERT, fragmentShader: EMIS_FRAG,
       blending: T.AdditiveBlending, transparent: true, depthWrite: false, side: T.DoubleSide,
     });
@@ -1722,21 +2324,110 @@ export class Ships3D {
     mg.renderOrder = 1; me.renderOrder = 2;
     group.add(mh, mm, mg, me);
 
-    const st = { thrust: 1, damage: 0, opacity: 1, time: 0, flick: 1 };
+    // --- state. Setters only store targets; update() eases the channels and poses the rig. ---
+    const feel = def.feel || {}, CTL = feel.ctl ?? 80, ENG = feel.eng ?? 140, TW = feel.twitch ?? 0;
+    const parts = g.parts, C = new Float32Array(S.N);
+    C[S.ONE] = 1; C[S.GUT] = 1;
+    const st = {
+      thrust: 1, damage: 0, opacity: 1, time: 0, flick: 1, snap: true,
+      bank: 0, pitch: 0, yaw: 0, gearT: 0, gear: 0, canopyT: 0, canopy: 0, laserT: 0, od: 0, tier: 1, w2: 0, w3: 0,
+      fireA: 0, fireB: 0, next: 0, heat: 0, rocket: -1, brk: 0,
+    };
+    const ud = group.userData;
     const applyEngine = () => {
       const t = st.thrust;
       lv[CH.ENGINE] = (0.22 + 0.8 * t + (t > 1 ? (t - 1) * 0.9 : 0)) * st.flick;
       U.uFlame.value = Math.max(0, t - 0.1) * (t > 1 ? 0.6 + (t - 1) * 0.75 : 0.6) * st.flick;
     };
-    const ud = group.userData;
+    const sstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+    const sum = (terms, from) => { let v = 0; for (let j = from; j < terms.length; j += 2) v += C[terms[j]] * terms[j + 1]; return v; };
+    const pose = () => {
+      for (let i = 1; i < parts.length; i++) {
+        const P = parts[i], a = P.a;
+        let qx = 0, qy = 0, qz = 0, qw = 1;
+        if (P.rot) { const h = sum(P.rot, 0) * 0.5, sn = Math.sin(h); qx = a[0] * sn; qy = a[1] * sn; qz = a[2] * sn; qw = Math.cos(h); }
+        if (P.rot2) { // second axis, applied after the first: q = q2 * q1
+          const h = sum(P.rot2, 0) * 0.5, sn = Math.sin(h), b = P.a2, bx = b[0] * sn, by = b[1] * sn, bz = b[2] * sn, bw = Math.cos(h);
+          const x = bw * qx + bx * qw + by * qz - bz * qy, y = bw * qy - bx * qz + by * qw + bz * qx, z = bw * qz + bx * qy - by * qx + bz * qw;
+          qw = bw * qw - bx * qx - by * qy - bz * qz; qx = x; qy = y; qz = z;
+        }
+        let tx = 0, ty = 0, tz = 0;
+        if (P.mov) { const m = P.mov; for (let j = 0; j < m.length; j += 4) { const c = C[m[j]]; tx += c * m[j + 1]; ty += c * m[j + 2]; tz += c * m[j + 3]; } }
+        let sc = 1;
+        if (P.vis) sc = P.vis[0] + sum(P.vis, 1) > 0.001 ? 1 : 0;
+        if (P.iris) sc *= Math.max(0.05, 1 + sum(P.iris, 0));
+        if (qw < 0) { qx = -qx; qy = -qy; qz = -qz; qw = -qw; }
+        // v' = p + t + R((v - p) * s)  →  R(v * s) + [p + t - R(p * s)]
+        const px = P.p[0] * (sc > 1e-4 ? 1 : 0), py = P.p[1] * sc, pz = P.p[2] * sc;
+        const cx = qy * pz - qz * py + qw * px, cy = qz * px - qx * pz + qw * py, cz = qx * py - qy * px + qw * pz;
+        const o = i * 4;
+        pa[o] = qx; pa[o + 1] = qy; pa[o + 2] = qz; pa[o + 3] = P.glow ? Math.max(0, P.glow[0] + sum(P.glow, 1)) : 1;
+        pb[o] = P.p[0] + tx - (px + 2 * (qy * cz - qz * cy)); pb[o + 1] = P.p[1] + ty - (py + 2 * (qz * cx - qx * cz)); pb[o + 2] = P.p[2] + tz - (pz + 2 * (qx * cy - qy * cx)); pb[o + 3] = sc;
+        pT[i * 3] = tx; pT[i * 3 + 1] = ty; pT[i * 3 + 2] = tz;
+      }
+      const M = ud.muzzles;
+      let n = 0;
+      for (let i = 0; i < M.length; i++) {
+        const m = M[i], r = g.muzzles[i], q = r.part * 3;
+        m.x = r.x + pT[q]; m.y = r.y + pT[q + 1]; m.z = r.z + pT[q + 2];
+        m.active = r.tier <= 1 || (r.tier === 2 ? C[S.W2] : C[S.W3]) > 0.5;
+        if (m.active) n = i + 1;
+      }
+      ud.muzzleCount = n;
+    };
     ud.shipId = id;
     ud.nozzles = g.nozzles.map((n) => ({ ...n }));
-    ud.muzzles = g.muzzles.map((m) => ({ ...m }));
+    ud.muzzles = g.muzzles.map((m) => ({ x: m.x, y: m.y, z: m.z, tier: m.tier, active: m.tier <= 1 }));
+    ud.muzzleCount = ud.muzzles.length;
     ud.size = g.size.slice();
+    ud.groundY = g.groundY; // lowest point of the lowered gear: sit the hull at -groundY * scale above a deck
+    ud.wounds = g.wounds.map((w) => ({ x: w.x, y: w.y, z: w.z, heat: 0 }));
+    ud.woundCount = 0;
+    const mkPiece = (d) => {
+      const m = new T.Mesh(d.geo, hull);
+      m.name = 'debris:' + id; m.userData.center = d.c.slice();
+      m.userData.dispose = () => { m.removeFromParent(); }; // geometry and material stay with the hull
+      return m;
+    };
+    const pieces = g.debris.map(mkPiece);
     ud.setThrust = (t) => { st.thrust = clamp(+t || 0, 0, 2); applyEngine(); };
-    ud.setBank = (b) => { U.uBank.value = clamp(+b || 0, -1, 1); };
+    ud.setBank = (b) => { st.bank = clamp(+b || 0, -1, 1); };
+    ud.setPitch = (v) => { st.pitch = clamp(+v || 0, -1, 1); };
+    ud.setYaw = (v) => { st.yaw = clamp(+v || 0, -1, 1); };
+    ud.setGear = (v) => { st.gearT = clamp(+v || 0, 0, 1); };
+    ud.setCanopy = (v) => { st.canopyT = clamp(+v || 0, 0, 1); };
+    ud.setWeapon = (tier) => { st.tier = clamp(Math.round(+tier || 1), 1, 3); };
+    ud.setFire = () => { if ((st.next ^= 1)) st.fireA = 1; else st.fireB = 1; st.heat = Math.min(1, st.heat + 0.14); };
+    ud.setRocket = () => { st.rocket = 0; };
+    ud.setLaser = (v) => { st.laserT = clamp(+v || 0, 0, 1); };
+    ud.setOverdrive = (on) => { st.od = on ? 1 : 0; };
     ud.setFlash = (v) => { U.uFlash.value = clamp(+v || 0, 0, 1); };
-    ud.setDamage = (d) => { st.damage = U.uDamage.value = clamp(+d || 0, 0, 1); };
+    ud.repair = () => {
+      st.brk = 0; st.damage = U.uDamage.value = 0; ud.woundCount = 0;
+      for (const w of ud.wounds) w.heat = 0; // (pieces already handed out by breakOff() are the caller's: they keep tumbling)
+    };
+    ud.setDamage = (d) => {
+      d = clamp(+d || 0, 0, 1);
+      if (d === st.damage) return;
+      if (d === 0) { ud.repair(); return; }
+      st.damage = U.uDamage.value = d;
+      let n = 0;
+      for (let i = 0; i < ud.wounds.length; i++) { const h = clamp((d - g.wounds[i].at) / 0.25, 0, 1); ud.wounds[i].heat = h; if (h > 0) n = i + 1; }
+      ud.woundCount = n;
+    };
+    // Shed the next pre-cut piece (two per hull). Returns a parentless mesh of it posed in the hull's
+    // local frame — position = where it sat, geometry centred on itself so it tumbles about its own
+    // middle — or null when nothing is left to lose. It shares the hull material; the caller parents
+    // it, and calls its userData.dispose() when done. repair() / setDamage(0) grow the parts back.
+    ud.breakOff = () => {
+      if (st.brk >= pieces.length) return null;
+      let m = pieces[st.brk];
+      if (m.parent) m = pieces[st.brk] = mkPiece(g.debris[st.brk]); // the last one shed is still flying
+      const c = m.userData.center;
+      st.brk++;
+      m.position.set(c[0], c[1], c[2]); m.quaternion.set(0, 0, 0, 1); m.scale.setScalar(1); m.visible = true;
+      return m;
+    };
     ud.setOpacity = (a) => {
       a = clamp(a == null ? 1 : +a, 0, 1);
       if (a === st.opacity) return;
@@ -1751,21 +2442,66 @@ export class Ships3D {
       U.uTint.value.set(rgb[0] / m, rgb[1] / m, rgb[2] / m, amount);
     };
     ud.update = (dtMs, timeMs) => {
-      const t = timeMs == null ? (st.time += dtMs || 0) : (st.time = timeMs);
+      const dt = clamp(+dtMs || 0, 0, 100), snap = st.snap;
+      const t = timeMs == null ? (st.time += dt) : (st.time = timeMs);
       U.uTime.value = t % 1e6;
       const d = st.damage;
+      const ease = (tau) => (snap ? 1 : 1 - Math.exp(-dt / tau));
+      const toward = (v, to, ms) => (snap ? to : v + clamp(to - v, -dt / ms, dt / ms));
+      // controls
+      const kc = ease(CTL);
+      C[S.BANK] += (st.bank - C[S.BANK]) * kc; C[S.PITCH] += (st.pitch - C[S.PITCH]) * kc; C[S.YAW] += (st.yaw - C[S.YAW]) * kc;
+      C[S.BRAKE] += (Math.max(0, -st.pitch) - C[S.BRAKE]) * ease(CTL * 1.6);
+      C[S.BANKP] = Math.max(0, C[S.BANK]); C[S.BANKN] = Math.max(0, -C[S.BANK]);
+      C[S.TWITCH] = TW * (0.5 * Math.sin(t * 0.031) + 0.5 * Math.sin(t * 0.047 + 1.3)) * Math.min(1, 0.22 + Math.abs(C[S.BANK]) + Math.abs(C[S.PITCH]) + Math.abs(C[S.YAW]));
+      C[S.THR] += (Math.min(1, st.thrust) - C[S.THR]) * ease(ENG); C[S.AB] += (clamp(st.thrust - 1, 0, 1) - C[S.AB]) * ease(ENG * 0.7);
+      // gear (doors lead the legs), canopy, weapons
+      st.gear = toward(st.gear, st.gearT, 700); st.canopy = toward(st.canopy, st.canopyT, 900);
+      C[S.GEARD] = sstep(0, 0.45, st.gear); C[S.GEARL] = sstep(0.3, 1, st.gear); C[S.CANOPY] = sstep(0, 1, st.canopy);
+      st.w2 = toward(st.w2, st.tier >= 2 ? 1 : 0, 400); st.w3 = toward(st.w3, st.tier >= 3 ? 1 : 0, 400);
+      C[S.W2] = sstep(0, 1, st.w2); C[S.W3] = sstep(0, 1, st.w3);
+      const fd = Math.exp(-dt / 70);
+      C[S.FIREA] = st.fireA; C[S.FIREB] = st.fireB; // (shown at full kick on the frame it fires, then decays)
+      lv[CH.FLASHA] = st.fireA * st.fireA; lv[CH.FLASHB] = st.fireB * st.fireB;
+      lv[CH.BHEAT] = st.heat;
+      st.fireA = st.fireA < 0.01 ? 0 : st.fireA * fd; st.fireB = st.fireB < 0.01 ? 0 : st.fireB * fd;
+      st.heat *= Math.exp(-dt / 1700);
+      let rk = 0;
+      if (st.rocket >= 0) { // bay door: snaps open, holds, slams shut
+        const r = st.rocket;
+        rk = r < 50 ? r / 50 : r < 240 ? 1 : r < 400 ? 1 - (r - 240) / 160 : 0;
+        st.rocket = r >= 400 ? -1 : r + dt;
+      }
+      C[S.ROCKET] = rk; lv[CH.ROCKET] = rk;
+      C[S.LASER] = toward(C[S.LASER], st.laserT, 130); C[S.OD] = toward(C[S.OD], st.od, 350);
+      lv[CH.LASER] = C[S.LASER] * (0.85 + 0.15 * Math.sin(t * 0.09));
+      lv[CH.COIL] = C[S.W3] * (0.6 + 0.2 * Math.sin(t * 0.012)) + Math.max(C[S.FIREA], C[S.FIREB]) * 1.4;
+      lv[CH.AB] = C[S.AB]; lv[CH.SHIM] = C[S.OD]; lv[CH.GOLD] = C[S.OD] * (0.82 + 0.18 * Math.sin(t * 0.009));
+      // idle life
+      C[S.SPIN] = (t * 0.0034) % TAU; C[S.BREATHE] = 0.5 + 0.5 * Math.sin(t * 0.0021); C[S.SWEEP] = Math.sin(t * 0.0015);
+      // damage stages: panels peel at ~0.45 and ~0.65, one engine gutters from 0.7, pieces go when breakOff() says
+      const kd = ease(160);
+      C[S.DMG1] += (sstep(0.38, 0.5, d) - C[S.DMG1]) * kd; C[S.DMG2] += (sstep(0.58, 0.7, d) - C[S.DMG2]) * kd;
+      C[S.BRK1] = st.brk >= 1 ? 1 : 0; C[S.BRK2] = st.brk >= 2 ? 1 : 0;
+      const cough = Math.sin(t * 0.019) * Math.sin(t * 0.0071 + 1.0);
+      C[S.GUT] = d >= 0.7 ? 0.05 + 0.4 * Math.max(0, cough) * Math.max(0, cough) + (Math.sin(t * 0.13) > 0.95 ? 0.8 : 0) : 1;
+      lv[CH.SPARK] = 0.3 + 0.7 * Math.abs(Math.sin(t * 0.021) * Math.sin(t * 0.0137 + 2.0)) + (Math.sin(t * 0.171) > 0.9 ? 0.9 : 0);
       // engine: fine shimmer, plus sputter when badly hurt
       let f = 1 + 0.05 * Math.sin(t * 0.045) + 0.03 * Math.sin(t * 0.113 + 1.7);
       if (d > 0.45) { const n = Math.sin(t * 0.031) * Math.sin(t * 0.0173 + 2.0); if (n > 1.25 - d) f *= 0.35; }
       st.flick = f; applyEngine();
-      // nav lights steady with a slow breath; strobes double-flash; damage makes them stutter
+      // nav lights blink together (red port, green starboard); the white strobes double-flash; damage makes both stutter
       const ph = (t % 1500) / 1500;
-      let nav = 0.85 + 0.15 * Math.sin(t * 0.004), strobe = (ph < 0.05 || (ph > 0.12 && ph < 0.17)) ? 1.6 : 0.04;
+      let nav = clamp((Math.sin((t * TAU) / 1300) + 0.45) * 3.5, 0.1, 1), strobe = (ph < 0.05 || (ph > 0.12 && ph < 0.17)) ? 1.6 : 0.04;
       if (d > 0.6 && Math.sin(t * 0.05) * Math.sin(t * 0.023) > 0.2) { nav *= 0.15; strobe *= 0.2; }
       lv[CH.NAV] = nav; lv[CH.STROBE] = strobe;
-      lv[CH.ACCENT] = (0.85 + 0.15 * Math.sin(t * 0.0025)) * (d > 0.75 ? 0.5 + 0.5 * Math.sin(t * 0.04) : 1);
+      lv[CH.ACCENT] = (0.85 + 0.15 * Math.sin(t * 0.0025)) * (d > 0.75 ? 0.5 + 0.5 * Math.sin(t * 0.04) : 1) * (1 + 0.5 * C[S.OD]);
       lv[CH.COCKPIT] = 1 - d * 0.4;
+      pose();
+      st.snap = false;
     };
+    // jump every eased channel straight to its target (after spawning a ship in a given state)
+    ud.settle = () => { st.snap = true; st.fireA = st.fireB = st.heat = 0; st.rocket = -1; ud.update(0, st.time); };
     ud.dispose = () => { for (const m of mats) { m.dispose(); this.live.delete(m); } };
     if (opts.tint) ud.setTint(opts.tint, opts.tintAmount ?? 1);
     ud.setThrust(opts.thrust ?? 1);
@@ -1776,7 +2512,7 @@ export class Ships3D {
   dispose() {
     for (const m of this.live) m.dispose();
     this.live.clear();
-    for (const g of this.geo.values()) { g.hull.dispose(); g.mech.dispose(); g.glass.dispose(); g.emis.dispose(); }
+    for (const g of this.geo.values()) { g.hull.dispose(); g.mech.dispose(); g.glass.dispose(); g.emis.dispose(); for (const d of g.debris) d.geo.dispose(); }
     for (const t of this.tex.values()) { t.map.dispose(); t.orm.dispose(); t.normal.dispose(); }
     this.geo.clear(); this.tex.clear(); this.defs.clear();
   }

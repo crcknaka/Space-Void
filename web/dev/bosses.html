@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SPACE VOID — bosses3d viewer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; height: 100%; background: #04060b; color: #9fb4cc; font: 12px/1.35 ui-monospace, Menlo, monospace; overflow: hidden; }
+  #out { display: block; }
+  #err { position: fixed; left: 0; top: 0; right: 0; margin: 0; color: #ff8080; background: rgba(50, 0, 0, .88); white-space: pre-wrap; z-index: 9; padding: 0 8px; max-height: 70vh; overflow: hidden; font-size: 12px; }
+  #hud { position: fixed; left: 8px; bottom: 6px; white-space: pre; text-shadow: 0 1px 2px #000; }
+  #nav { position: fixed; right: 8px; bottom: 6px; text-align: right; }
+  #nav a { color: #ff9a6f; margin-left: 8px; text-decoration: none; }
+</style>
+<script type="importmap">{ "imports": { "three": "../vendor/three.module.min.js" } }</script>
+</head>
+<body>
+<pre id="err"></pre>
+<canvas id="out"></canvas>
+<div id="hud"></div>
+<div id="nav"></div>
+<script>
+  // visible error overlay (headless screenshots have no console)
+  const errBox = document.getElementById('err');
+  const showErr = (m) => { errBox.textContent += String(m).slice(0, 1800) + '\n'; };
+  window.addEventListener('error', (e) => showErr('ERROR: ' + (e.message || e) + (e.filename ? ` @ ${e.filename.split('/').pop()}:${e.lineno}:${e.colno}` : '')));
+  window.addEventListener('unhandledrejection', (e) => showErr('REJECTION: ' + (e.reason && (e.reason.stack || e.reason.message) || e.reason)));
+</script>
+<script type="module">
+/*
+  ?level=1..N  (&mega=0|1 overrides level % 5)
+  &view=top|tilt|chase|cockpit          the four game cameras, boss at in-game scale and position (world 1564x880)
+       |beauty|front|nose|under|rear|side|plan   close-ups
+  &sheet=1        contact sheet of levels 1..12 (&from=13 for the next twelve, &sv=beauty|plan|nose…)
+  &states=1       one boss through its states (&sv=beauty)
+  state: &damage=0..1  &blown=2 (the first two) | &blown=0,3 (those; &ago=ms since they went)  &charge=laser:1,bay:0.6  &flash=0..1  &shield=1
+         &arrive=0..1  &phase2=ms since the shell blew  &death=0..1 (&after=ms past the end)
+  &t=ms frozen time (default 4000; &t= empty animates)   &q=0.5 low quality   &fx=0 no particles   &dist=1   &zoom=2&cx=.7&cy=.5
+  &timings=1      slice count and build time in the HUD
+  &life=1         build / dispose every level 1..12 twice and report leaked geometries
+*/
+import * as THREE from 'three';
+import { EffectComposer } from '../vendor/three-addons/postprocessing/EffectComposer.js';
+import { RenderPass } from '../vendor/three-addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from '../vendor/three-addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from '../vendor/three-addons/postprocessing/OutputPass.js';
+import { RoomEnvironment } from '../vendor/three-addons/environments/RoomEnvironment.js';
+const { Bosses3D } = await import('../js/bosses3d.js?v=' + Date.now());
+const { Fx3D } = await import('../js/fx3d.js');
+const { genBoss, BOSS_VIEW } = await import('../js/bossgen.js');
+const { fitTransform } = await import('../js/mesh3d.js');
+const { Ships3D } = await import('../js/ships3d.js');
+
+const Q = new URLSearchParams(location.search);
+const num = (k, d) => (Q.has(k) && Q.get(k) !== '' && isFinite(+Q.get(k)) ? +Q.get(k) : d);
+const P = {
+  level: num('level', 1), view: Q.get('view') || 'beauty', damage: num('damage', 0), flash: num('flash', 0), shield: !!num('shield', 0),
+  arrive: num('arrive', 1), death: num('death', 0), after: num('after', 0), phase2: Q.has('phase2') ? num('phase2', 3000) : null,
+  ago: num('ago', 700), dist: num('dist', 1), q: num('q', 1), t: Q.has('t') ? (Q.get('t') === '' ? null : num('t', 4000)) : 4000, fx: num('fx', 1),
+};
+const blown = !Q.get('blown') ? [] : Q.get('blown').includes(',') ? Q.get('blown').split(',').map(Number) : [...Array(+Q.get('blown')).keys()]; // a count, or a list with a comma
+const charges = {};
+for (const kv of (Q.get('charge') || '').split(',')) { const [k, v] = kv.split(':'); if (k) charges[k] = v === undefined ? 1 : +v; }
+const WW = 1564, WH = 880, FOV = 50;
+
+const out = document.getElementById('out'), ctx = out.getContext('2d');
+const VW = window.innerWidth, VH = window.innerHeight;
+out.width = VW; out.height = VH;
+
+const glc = document.createElement('canvas');
+const gl = new THREE.WebGLRenderer({ canvas: glc, antialias: true, powerPreference: 'high-performance', preserveDrawingBuffer: true });
+gl.setPixelRatio(1);
+gl.toneMapping = THREE.ACESFilmicToneMapping;
+gl.toneMappingExposure = 1.0;
+gl.debug.onShaderError = (g, prog, vs, fs) => {
+  showErr('SHADER ERROR\n' + g.getProgramInfoLog(prog) + '\nVS: ' + g.getShaderInfoLog(vs) + '\nFS: ' + g.getShaderInfoLog(fs));
+};
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(Q.get('bg') ? '#' + Q.get('bg') : 0x05070c);
+const cam = new THREE.PerspectiveCamera(FOV, 16 / 9, 5, 30000);
+{ // same lighting rig as view3d.js
+  const pmrem = new THREE.PMREMGenerator(gl);
+  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+  scene.environmentIntensity = 0.55;
+  pmrem.dispose();
+  const sun = new THREE.DirectionalLight(0xfff0dc, 2.7);
+  sun.position.set(-0.45, 1, 0.55);
+  scene.add(sun, new THREE.HemisphereLight(0x8fb8ff, 0x1a1420, 0.9));
+}
+{ // star field
+  const n = 1400, pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
+  let s = 7; const R = () => ((s = (s * 16807) % 2147483647) / 2147483647);
+  for (let i = 0; i < n; i++) {
+    const u = R() * 2 - 1, a = R() * 6.283, r = Math.sqrt(1 - u * u), b = 0.15 + R() * R() * 1.4;
+    pos.set([Math.cos(a) * r * 9000, u * 9000, Math.sin(a) * r * 9000], i * 3);
+    col.set([b * (0.8 + R() * 0.3), b * 0.9, b * (0.9 + R() * 0.4)], i * 3);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  scene.add(new THREE.Points(g, new THREE.PointsMaterial({ size: 2.2, sizeAttenuation: false, vertexColors: true })));
+}
+const rt = new THREE.WebGLRenderTarget(256, 256, { type: THREE.HalfFloatType, samples: 4 });
+const composer = new EffectComposer(gl, rt);
+composer.setPixelRatio(1);
+composer.addPass(new RenderPass(scene, cam));
+composer.addPass(new UnrealBloomPass(new THREE.Vector2(256, 256), 0.5, 0.8, 0.9)); // strength, radius, threshold as in view3d
+composer.addPass(new OutputPass());
+
+const fx = new Fx3D(THREE, scene, { quality: P.q });
+const bosses = new Bosses3D(THREE, { fx: P.fx ? fx : null, quality: P.q });
+const heroes = new Ships3D(THREE, { quality: P.q });
+const root = new THREE.Group();
+scene.add(root);
+const player = heroes.build('vanguard');
+player.scale.setScalar(60);
+
+// a boss exactly as the game stages it: bossgen's fit, facing -X
+const made = new Map();
+let slices = 0, buildMs = 0;
+function makeBoss(level, key = '') {
+  const id = level + '|' + key;
+  if (made.has(id)) return made.get(id);
+  const gen = genBoss(level), mega = Q.has('mega') ? !!num('mega', 0) : level % 5 === 0;
+  const size = Math.min(210, 150 * (1 + (level - 1) * 0.06));
+  const fit = fitTransform(gen.core, size, size, BOSS_VIEW, 0.9);
+  const t0 = performance.now();
+  slices = 0;
+  while (!bosses.prepare(level, gen, { mega })) slices++;
+  const g = bosses.build(level, gen, { mega });
+  buildMs = performance.now() - t0;
+  const b = { g, gen, mega, size, scale: fit.scale * 1.08, level, stats: { ...bosses.info() } };
+  g.rotation.order = 'YXZ';
+  made.set(id, b);
+  return b;
+}
+function place(b, x, z, rotY = Math.PI) {
+  b.g.position.set(x, 0, z); b.g.scale.setScalar(b.scale); b.g.rotation.set(0, rotY, 0);
+  b.world = { x, y: 0, z, scale: b.scale, rotY };
+  root.add(b.g);
+}
+
+const CLOSE = {
+  beauty: { p: [-0.72, 0.42, 0.62], d: 235 }, front: { p: [-1, 0.3, 0.42], d: 225 }, nose: { p: [-1, 0.14, 0.0], d: 215 },
+  under: { p: [-0.56, -0.6, 0.6], d: 235 }, rear: { p: [0.8, 0.4, 0.5], d: 235 }, side: { p: [0, 0.08, 1], d: 240 },
+  plan: { p: [0, 1, 0.0001], up: [0, 0, -1], d: 270 }, tilt45: { p: [0, 0.71, 0.71], d: 260 },
+};
+function setCam(view, aspect, b, dist = 1) {
+  const hTop = (WH / 2) / Math.tan((FOV * Math.PI) / 360);
+  cam.aspect = aspect; cam.up.set(0, 1, 0);
+  const bx = b ? b.world.x : 0, bz = b ? b.world.z : 0;
+  if (view === 'top') { cam.fov = FOV; cam.position.set(0, hTop, 0.01); cam.up.set(0, 0, -1); cam.lookAt(0, 0, 0); }
+  else if (view === 'tilt') { cam.fov = FOV; cam.position.set(0, hTop * 0.76, WH * 0.04 + hTop * 0.76); cam.lookAt(0, 0, WH * 0.04); }
+  else if (view === 'chase') { cam.fov = 40; cam.position.set(-380 - 630, 380, 0); cam.lookAt(-380 + 470, 0, 0); }
+  else if (view === 'cockpit') { cam.fov = 62; const px = -WW / 2 + WW / 3, pz = num('pz', 0); cam.position.set(px + 10, 96, pz); cam.lookAt(px + 10 + Math.cos(0.2) * 600, 96 - Math.sin(0.2) * 600, pz); }
+  else {
+    const c = CLOSE[view] || CLOSE.beauty, v = new THREE.Vector3(...c.p).normalize().multiplyScalar(c.d * dist * (b ? b.scale : 1) * (aspect < 1.3 ? 1.3 : 1));
+    cam.fov = 30; cam.position.set(bx + v.x, v.y, bz + v.z); cam.up.set(...(c.up || [0, 1, 0])); cam.lookAt(bx, num('ty', 0), bz);
+  }
+  cam.updateProjectionMatrix(); cam.updateMatrixWorld();
+}
+const GAME_VIEWS = ['top', 'tilt', 'chase', 'cockpit'];
+
+// run the last stretch of the timeline so particles, wreckage and eased state are where they would be at time T
+function simulate(b, st, T, w, h, pre = 1800) {
+  const u = b.g.userData, dt = 1000 / 60, t0 = T - pre;
+  const dq = st.death || 0, tDeath = T - dq * 1700 - (st.after || 0);
+  let p2 = false; const bl = new Set();
+  fx.clear();
+  for (let t = t0; t <= T + 0.01; t += dt) {
+    fx.update(dt, cam, h);
+    u.setDamage(st.damage || 0); u.setFlash(st.flash || 0); u.setShield(!!st.shield); u.setArrive(st.arrive ?? 1);
+    for (const k of ['laser', 'sweep', 'ram', 'volley', 'bay']) u.setCharge(k, (st.charges && st.charges[k]) || 0);
+    for (const i of st.blown || []) if (!bl.has(i) && t >= T - (st.ago ?? 700)) { bl.add(i); u.blowTurret(i); }
+    if (st.phase2 != null && !p2 && t >= T - st.phase2) { p2 = true; u.setPhase2(); }
+    if (dq > 0 && t >= tDeath) u.setDeath(Math.min(1, (t - tDeath) / 1700), t);
+    b.gen.turrets.forEach((tr, i) => { if (u.turrets[i]) u.turrets[i].rotation.y = Math.sin(t * 0.0006 + i * 1.9) * 0.5 * (i < 2 ? 1 : 0.7); });
+    u.update(dt, t, b.world);
+    if (!st.death && !p2) for (const n of u.nozzles) fx.exhaust(b.world.x - n.x * b.scale, n.y * b.scale, b.world.z - n.z * b.scale, 1, 0, n.r * b.scale * 2.2, { color: 'enemy' });
+    fx.commit();
+  }
+}
+gl.info.autoReset = false;
+let calls = 0, tris = 0;
+function renderGL(w, h) { gl.setSize(w, h, false); composer.setSize(w, h); gl.info.reset(); composer.render(); calls = gl.info.render.calls; tris = gl.info.render.triangles; }
+function label(str, x, y, col = '#8fa6c0') { ctx.fillStyle = col; ctx.font = '12px ui-monospace, Menlo, monospace'; ctx.fillText(str, x, y); }
+function tile(x, y, w, h, text) { renderGL(w, h); ctx.drawImage(glc, 0, 0, w, h, x, y, w, h); if (text) label(text, x + 8, y + 16); }
+const hud = document.getElementById('hud');
+const fmt = (b) => `L${b.level} ${b.stats.cls}${b.mega ? ' (MEGA)' : ''}: ${b.stats.tris} tris, ${b.stats.draws} draws, ${b.stats.sections} sections, ${b.gen.turrets.length} turrets · whole frame incl. fx + post: ${calls} calls ${tris} tris`;
+const ST = () => ({ damage: P.damage, flash: P.flash, shield: P.shield, arrive: P.arrive, death: P.death, after: P.after, phase2: P.phase2, blown, ago: P.ago, charges });
+
+function drawOne(T) {
+  root.clear();
+  const b = makeBoss(P.level), game = GAME_VIEWS.includes(P.view);
+  place(b, game ? WW / 2 - 150 - b.size / 2 : 0, num('bz', 0));
+  if (game) { player.position.set(P.view === 'cockpit' ? -9999 : -380, 0, 0); root.add(player); player.userData.update?.(16, T); }
+  setCam(P.view, VW / VH, b, P.dist);
+  simulate(b, ST(), T, VW, VH);
+  const zoom = num('zoom', 1), cx = num('cx', 0.5), cy = num('cy', 0.5);
+  renderGL(VW, VH);
+  const sw = VW / zoom, sh = VH / zoom, sx0 = Math.max(0, Math.min(VW - sw, cx * VW - sw / 2)), sy0 = Math.max(0, Math.min(VH - sh, cy * VH - sh / 2));
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(glc, sx0, sy0, sw, sh, 0, 0, VW, VH);
+  hud.textContent = fmt(b) + (Q.get('timings') ? `\nbuild ${buildMs.toFixed(0)} ms in ${slices + 1} slices` : '') + (window.lifeReport ? '\n' + window.lifeReport : '') + `\nprograms ${gl.info.programs.length}`;
+}
+function drawSheet(T) {
+  const from = num('from', 1), cols = 4, rows = 3, tw = Math.floor(VW / cols), th = Math.floor(VH / rows), sv = Q.get('sv') || 'beauty';
+  for (let i = 0; i < cols * rows; i++) {
+    root.clear();
+    const b = makeBoss(from + i);
+    place(b, 0, 0);
+    setCam(sv, tw / th, b, P.dist * 0.9);
+    simulate(b, ST(), T, tw, th, 400);
+    tile((i % cols) * tw, Math.floor(i / cols) * th, tw, th, `L${b.level} ${b.stats.cls}${b.mega ? ' MEGA' : ''} · ${(b.stats.tris / 1000).toFixed(0)}k tris · ${b.stats.draws} draws`);
+  }
+}
+function drawStates(T) {
+  const sv = Q.get('sv') || 'beauty', mega = P.level % 5 === 0;
+  const S = [
+    ['normal', {}], ['damage 0.35', { damage: 0.35 }], ['damage 0.7', { damage: 0.7 }], ['damage 1 + 2 turrets blown', { damage: 1, blown: [0, 2], ago: 500 }],
+    ['charge laser', { charges: { laser: 1 } }], ['charge ram', { charges: { ram: 1 } }], ['charge bay + volley', { charges: { bay: 1, volley: 1 } }], ['shield + flash 0.6', { shield: true, flash: 0.6 }],
+    ['arrive 0.3', { arrive: 0.3 }], ['arrive 0.7', { arrive: 0.7 }], mega ? ['phase 2 +600 ms', { phase2: 600, damage: 0.5 }] : ['death 0.3', { death: 0.3 }], mega ? ['phase 2 +3 s', { phase2: 3000, damage: 0.6 }] : ['death 0.6', { death: 0.6 }],
+    mega ? ['phase 2, damage 0.9', { phase2: 4000, damage: 0.9, charges: { sweep: 1 } }] : ['death 0.85', { death: 0.85 }], ['death 1', mega ? { phase2: 5000, death: 1 } : { death: 1 }], ['death 1 + 1.2 s', mega ? { phase2: 6000, death: 1, after: 1200 } : { death: 1, after: 1200 }], ['flash 1', { flash: 1 }],
+  ];
+  const cols = 4, rows = 4, tw = Math.floor(VW / cols), th = Math.floor(VH / rows);
+  S.forEach(([name, st], i) => {
+    root.clear();
+    const b = makeBoss(P.level, 's' + i);
+    place(b, 0, 0);
+    setCam(sv, tw / th, b, P.dist * (st.death || st.phase2 ? 1.5 : 0.95));
+    simulate(b, st, T, tw, th, st.phase2 ? Math.max(1800, st.phase2 + 300) : 1800);
+    tile((i % cols) * tw, Math.floor(i / cols) * th, tw, th, name);
+  });
+}
+function draw(T) {
+  ctx.fillStyle = '#04060b'; ctx.fillRect(0, 0, VW, VH);
+  if (Q.get('sheet')) drawSheet(T); else if (Q.get('states')) drawStates(T); else drawOne(T);
+}
+
+try {
+  bosses.warmup(gl, cam, scene);
+  if (Q.get('life')) { // lifecycle: nothing may be left on the GPU once every boss is disposed
+    const lib = new Bosses3D(THREE, { fx: null, quality: P.q }), g0 = gl.info.memory.geometries, tmp = new THREE.Group();
+    scene.add(tmp);
+    let peak = 0;
+    for (let pass = 0; pass < 2; pass++) for (let lv = 1; lv <= 12; lv++) {
+      const gen = genBoss(lv), g = lib.build(lv, gen, {});
+      tmp.add(g); g.userData.update(16, 1000, { x: 0, y: 0, z: 0, scale: 1, rotY: Math.PI });
+      setCam('beauty', 1.7, null); gl.setRenderTarget(rt); gl.render(scene, cam); gl.setRenderTarget(null);
+      peak = Math.max(peak, gl.info.memory.geometries - g0);
+      g.userData.dispose();
+    }
+    lib.dispose(); scene.remove(tmp);
+    showErr.call(null, ''); errBox.textContent = errBox.textContent.trim();
+    window.lifeReport = `lifecycle: 24 builds, peak +${peak} geometries, after dispose +${gl.info.memory.geometries - g0}, programs ${gl.info.programs.length}`;
+  }
+  draw(P.t ?? 4000);
+  if (P.t == null && !Q.get('sheet') && !Q.get('states')) { // live: keep simulating forward in real time
+    const b = makeBoss(P.level), u = b.g.userData;
+    let last = performance.now(), T = 4000;
+    const loop = (now) => {
+      const dt = Math.min(50, now - last); last = now; T += dt;
+      fx.update(dt, cam, VH);
+      b.gen.turrets.forEach((tr, i) => { if (u.turrets[i]) u.turrets[i].rotation.y = Math.sin(T * 0.0006 + i * 1.9) * 0.5; });
+      u.update(dt, T, b.world);
+      for (const n of u.nozzles) fx.exhaust(b.world.x - n.x * b.scale, n.y * b.scale, b.world.z - n.z * b.scale, 1, 0, n.r * b.scale * 2.2, { color: 'enemy' });
+      fx.commit();
+      renderGL(VW, VH); ctx.drawImage(glc, 0, 0);
+      requestAnimationFrame(loop);
+    };
+    requestAnimationFrame(loop);
+  }
+  const lv = P.level;
+  document.getElementById('nav').innerHTML = [...Array(12).keys()].map((i) => `<a href="?level=${i + 1}&view=${P.view}">${i + 1}</a>`).join('') + '<br>' +
+    [...GAME_VIEWS, ...Object.keys(CLOSE)].map((v) => `<a href="?level=${lv}&view=${v}">${v}</a>`).join('') + '<br>' +
+    `<a href="?sheet=1">sheet</a><a href="?sheet=1&sv=plan">sheet plan</a><a href="?states=1&level=${lv}">states</a><a href="?level=${lv}&view=${P.view}&t=">live</a>`;
+} catch (e) { showErr('FATAL: ' + (e.stack || e)); }
+</script>
+</body>
+</html>

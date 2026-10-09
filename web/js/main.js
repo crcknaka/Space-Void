@@ -175,6 +175,30 @@ async function boot() {
   } else if (params.get('screen') === 'hangar') { // debug: open the hangar directly
     const { HangarState } = await import('./hangar.js');
     app.setState(new HangarState(app));
+  } else if (params.get('screen') === 'weapons' || params.get('screen') === 'upgrades') { // debug: a hangar tab
+    const { HangarState } = await import('./hangar.js');
+    const st = new HangarState(app);
+    st.tab = params.get('screen');
+    app.setState(st);
+  } else if (params.get('screen') === 'options') { // debug: settings
+    const { OptionsState } = await import('./options.js');
+    app.setState(new OptionsState(app));
+  } else if (params.get('screen') === 'scores' || params.get('screen') === 'scoresdemo') { // debug: leaderboard (demo = sample rows, no API)
+    const { ScoresState } = await import('./scores.js');
+    const st = new ScoresState(app);
+    if (params.get('screen') === 'scoresdemo') {
+      st.load = () => {
+        st.data = {
+          top: ['NOVA', 'KESTREL', 'VOIDWALKER', 'ILJA', 'ORION-7', 'MAVERICK', 'PIXEL', 'DRIFTER', 'ECHO', 'ZENITH']
+            .map((name, i) => ({ name, score: Math.round(48200 / (1 + i * 0.37)), mode: i % 4 === 1 ? 'coop' : 'single' })),
+          you: { rank: 27, score: 6120 },
+        };
+      };
+    }
+    app.setState(st);
+  } else if (params.get('screen') === 'local') { // debug: the LOCAL 2P menu page
+    app.goMenu();
+    app.state.goPage('local');
   } else if (mode === 'single') app.setState(new GameState(app, false));
   else if (mode === 'coop') app.setState(new GameState(app, true));
   else if (mode === 'daily') app.setState(new GameState(app, false, { daily: true }));
@@ -185,7 +209,7 @@ async function boot() {
   // debug: start straight in a 3D camera (?view=tilt|chase) — headless screenshots, tuning
   const view = params.get('view');
   if (view === 'classic') app.view3d.enabled = false;
-  else if (['top', 'tilt', 'chase'].includes(view)) { app.view3d.enabled = true; app.view3d.mode = view; app.view3d.snapCam = true; }
+  else if (['top', 'tilt', 'chase', 'cockpit'].includes(view)) { app.view3d.enabled = true; app.view3d.mode = view; app.view3d.snapCam = true; }
   if (app.view3d.enabled) app.view3d.load(); // warm up behind the menu
 
   // debug: fast-forward game time deterministically (?mode=single&ff=30000)
@@ -194,6 +218,14 @@ async function boot() {
   for (let t = 0; t < ff; t += 16.67) {
     app.state.update(16.67);
     input.endStep();
+  }
+  // debug: open a run straight on an overlay (?mode=single&hud=pause | &hud=over) — HUD screenshots
+  if (params.get('hud') === 'pause') app.state.togglePause?.();
+  else if (params.get('hud') === 'over' && app.state.buildOverMenu) {
+    const st = app.state;
+    st.over = true; st.overAlpha = 0.5; st.overMenu = st.buildOverMenu();
+    st.reward = { total: 240 };
+    st.lb = { status: 'done', rank: 3, name: 'ILJA', top: ['NOVA', 'KESTREL', 'ILJA', 'ORION-7', 'MAVERICK'].map((name, i) => ({ name, score: Math.round(48200 / (1 + i * 0.37)) })) };
   }
   if (params.has('log')) {
     const pre = document.createElement('pre');
@@ -280,7 +312,7 @@ async function boot() {
       }
       window.__svlog?.push?.(`ERR ${e.message}`);
     }
-    g.drawImage(vignette, 0, 0, W, H);
+    if (!app.state?.anim) g.drawImage(vignette, 0, 0, W, H); // (the menu screens light themselves)
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);

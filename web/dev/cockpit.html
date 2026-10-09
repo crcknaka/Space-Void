@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SPACE VOID — cockpit3d viewer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; height: 100%; background: #04060b; color: #9fb4cc; font: 12px/1.35 ui-monospace, Menlo, monospace; overflow: hidden; }
+  canvas { display: block; }
+  #err { position: fixed; left: 0; top: 0; right: 0; margin: 0; color: #ff8080; background: rgba(50, 0, 0, .88); white-space: pre-wrap; z-index: 9; padding: 0 8px; max-height: 70vh; overflow: hidden; font-size: 12px; }
+  #hud { position: fixed; left: 8px; bottom: 6px; white-space: pre; text-shadow: 0 1px 2px #000; opacity: .8; }
+  #nav { position: fixed; right: 8px; bottom: 6px; text-align: right; opacity: .8; }
+  #nav a { color: #6fa8ff; margin-left: 8px; text-decoration: none; }
+</style>
+<script type="importmap">{ "imports": { "three": "../vendor/three.module.min.js" } }</script>
+</head>
+<body>
+<pre id="err"></pre>
+<div id="hud"></div>
+<div id="nav"></div>
+<script>
+  // visible error overlay (headless screenshots have no console)
+  const errBox = document.getElementById('err');
+  const showErr = (m) => { errBox.textContent += String(m).slice(0, 1800) + '\n'; };
+  window.addEventListener('error', (e) => showErr('ERROR: ' + (e.message || e) + (e.filename ? ` @ ${e.filename.split('/').pop()}:${e.lineno}:${e.colno}` : '')));
+  window.addEventListener('unhandledrejection', (e) => showErr('REJECTION: ' + (e.reason && (e.reason.stack || e.reason.message) || e.reason)));
+</script>
+<script type="module">
+/*
+  ?ship=vanguard|interceptor|juggernaut|ghost|ace|player1|player2
+  &hp=3 &hpMax=4          hull points (damage state follows from them)
+  &hits=3                 N hits from varied directions, or an explicit list  hits=side:front:power,side:front:power
+  &hitAt=250              the last hit lands this many ms before the frame (sparks / flash / flicker visible)
+  &shield=1 &shieldhit=1  energy dome, and a shielded hit just before the frame
+  &dead=600               the ship died this many ms before the frame
+  &warp=0..1 &boost=1 &ion=0..1 &boss=0..1 &warning=1 &od=0..1 &odon=1
+  &steer=-1..1 &throttle=-1..1 &bank=rad &fire=1 (shot on the last frame) &tier=1..3 &laser=0..1 &ext=0..1 (explosion light) &extside=-1..1
+  &sun=x,y,z              sun direction in cockpit space
+  &t=ms                   freeze: simulate 0..t in 60 Hz steps and render once (default: run live)
+  &q=0.5                  low quality   &fov=62   &noworld=1   &nopost=1
+  &dbg=1                  look at the cockpit from outside (orbit with &yaw=deg &pitch=deg &dist=m)
+  &stats=0                hide the read-out
+*/
+import * as THREE from 'three';
+import { EffectComposer } from '../vendor/three-addons/postprocessing/EffectComposer.js';
+import { RenderPass } from '../vendor/three-addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from '../vendor/three-addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from '../vendor/three-addons/postprocessing/OutputPass.js';
+const { Cockpit3D, COCKPIT_IDS } = await import('../js/cockpit3d.js?v=' + Date.now());
+
+const Q = new URLSearchParams(location.search);
+const num = (k, d) => (Q.has(k) && Q.get(k) !== '' && isFinite(+Q.get(k)) ? +Q.get(k) : d);
+const P = {
+  ship: Q.get('ship') || 'vanguard', hp: num('hp', 4), hpMax: num('hpMax', 4), hits: Q.get('hits') || '', hitAt: num('hitAt', 250),
+  shield: num('shield', 0), shieldhit: num('shieldhit', 0), dead: num('dead', -1), warp: num('warp', 0), boost: num('boost', 0), ion: num('ion', 0),
+  boss: num('boss', -1), warning: num('warning', 0), od: num('od', 0.4), odon: num('odon', 0), steer: num('steer', 0), throttle: num('throttle', 0), bank: num('bank', 0),
+  fire: num('fire', 0), tier: num('tier', 1), laser: num('laser', 0), ext: num('ext', 0), extside: num('extside', 0.7),
+  t: Q.has('t') ? num('t', 4000) : null, q: num('q', 1), fov: num('fov', 62), dbg: num('dbg', 0),
+};
+const VW = window.innerWidth, VH = window.innerHeight;
+
+const gl = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance', preserveDrawingBuffer: true });
+gl.setPixelRatio(1); gl.setSize(VW, VH);
+gl.toneMapping = THREE.ACESFilmicToneMapping; gl.toneMappingExposure = 1.0;
+gl.debug.onShaderError = (g, prog, vs, fs) => { showErr('SHADER ERROR\n' + g.getProgramInfoLog(prog) + '\nVS: ' + g.getShaderInfoLog(vs) + '\nFS: ' + g.getShaderInfoLog(fs)); };
+document.body.appendChild(gl.domElement);
+
+/* ---- a stand-in world: the camera of the cockpit mode over a play plane ---- */
+const world = new THREE.Scene();
+world.background = new THREE.Color(0x04060b);
+const wcam = new THREE.PerspectiveCamera(P.fov + (P.boost ? 6 : 0) + P.warp * 16, VW / VH, 5, 60000);
+const EYE_H = 96, PITCH = 11.5 * Math.PI / 180;
+wcam.position.set(0, EYE_H, 0);
+wcam.up.set(0, 1, 0);
+wcam.lookAt(Math.cos(PITCH) * 1000, EYE_H - Math.sin(PITCH) * 1000, 0);
+wcam.rotateZ(-P.bank * 0.5);
+const sunDirW = new THREE.Vector3(...(Q.get('sun') ? Q.get('sun').split(',').map(Number) : [0.5, 0.55, 0.55])).normalize();
+const enemies = [];
+if (!Q.get('noworld')) {
+  world.add(new THREE.HemisphereLight(0x8fb8ff, 0x1a1420, 0.9));
+  const sun = new THREE.DirectionalLight(0xfff0dc, 2.7); sun.position.copy(sunDirW); world.add(sun);
+  { // stars
+    const n = 2200, pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
+    let s = 7; const R = () => ((s = (s * 16807) % 2147483647) / 2147483647);
+    for (let i = 0; i < n; i++) {
+      const u = R() * 2 - 1, a = R() * 6.283, r = Math.sqrt(1 - u * u), b = 0.2 + R() * R() * 1.6;
+      pos.set([Math.cos(a) * r * 40000, u * 40000, Math.sin(a) * r * 40000], i * 3);
+      col.set([b * (0.8 + R() * 0.3), b * 0.9, b * (0.9 + R() * 0.4)], i * 3);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    world.add(new THREE.Points(g, new THREE.PointsMaterial({ size: 2, sizeAttenuation: false, vertexColors: true })));
+  }
+  { // planet and a nebula smear
+    const pl = new THREE.Mesh(new THREE.SphereGeometry(9000, 64, 32), new THREE.MeshStandardMaterial({ color: 0x3a6ea8, roughness: 0.9, emissive: 0x06101c }));
+    pl.position.set(30000, 2500, -15000); world.add(pl);
+    const moon = new THREE.Mesh(new THREE.SphereGeometry(1400, 32, 16), new THREE.MeshStandardMaterial({ color: 0x9a8f86, roughness: 1 }));
+    moon.position.set(26000, 9000, 9000); world.add(moon);
+  }
+  { // play-plane grid so the framing can be judged
+    const g = new THREE.GridHelper(6000, 60, 0x16405a, 0x0d2233); g.position.set(2800, 0, 0); world.add(g);
+  }
+  const em = (c, k) => new THREE.MeshBasicMaterial({ color: new THREE.Color(c).multiplyScalar(k) });
+  const hull = new THREE.MeshStandardMaterial({ color: 0x8a3b3b, roughness: 0.5, metalness: 0.4 });
+  const cone = new THREE.ConeGeometry(22, 60, 6); cone.rotateZ(Math.PI / 2);
+  [[420, -60, 0], [640, 90, 0], [900, -180, 0], [1050, 30, 0], [1400, 220, 0], [1500, -320, 0], [760, 260, 0], [330, 150, 0]].forEach(([x, z, k], i) => {
+    const m = new THREE.Mesh(cone, hull); m.position.set(x, 0, z); world.add(m); enemies.push([x, z, 0, 60]);
+    const e = new THREE.Mesh(new THREE.SphereGeometry(7, 8, 6), em(0xff5030, 3)); e.position.set(x + 34, 0, z); world.add(e);
+  });
+  const rockG = new THREE.IcosahedronGeometry(1, 1), rockM = new THREE.MeshStandardMaterial({ color: 0x6b6258, roughness: 1, flatShading: true });
+  [[560, -260, 46], [1180, 380, 80], [980, -40, 30]].forEach(([x, z, r]) => { const m = new THREE.Mesh(rockG, rockM); m.scale.setScalar(r); m.position.set(x, 0, z); world.add(m); enemies.push([x, z, 2, r * 2]); });
+  const bolt = new THREE.BoxGeometry(46, 3, 3);
+  [[150, -10], [260, 10], [380, -10], [500, 10], [700, -10]].forEach(([x, z]) => { const m = new THREE.Mesh(bolt, em(0x40d0ff, 4)); m.position.set(x, 0, z); world.add(m); });
+  [[300, -50], [520, 70], [810, -150]].forEach(([x, z]) => { const m = new THREE.Mesh(new THREE.SphereGeometry(6, 8, 6), em(0xff9020, 4)); m.position.set(x, 0, z); world.add(m); enemies.push([x, z, 1, 10]); });
+  { const m = new THREE.Mesh(new THREE.OctahedronGeometry(16), em(0x40ff80, 2.5)); m.position.set(620, 0, -200); world.add(m); enemies.push([620, -200, 4, 30]); }
+  if (P.boss >= 0) { const m = new THREE.Mesh(new THREE.BoxGeometry(260, 80, 320), hull); m.position.set(1250, 0, 0); world.add(m); enemies.push([1250, 0, 3, 300]); }
+  if (P.ext > 0) { const m = new THREE.Mesh(new THREE.SphereGeometry(60, 16, 12), em(0xffa040, 5 * P.ext)); m.position.set(260, 20, P.extside * 190); world.add(m); }
+}
+
+/* ---- cockpit ---- */
+const cp = new Cockpit3D(THREE, { renderer: gl, quality: P.q });
+cp.setShip(P.ship);
+window.cp = cp;
+
+const rt = new THREE.WebGLRenderTarget(VW, VH, { type: THREE.HalfFloatType, samples: 4 });
+const composer = new EffectComposer(gl, rt);
+composer.setPixelRatio(1); composer.setSize(VW, VH);
+const dbgCam = new THREE.PerspectiveCamera(50, VW / VH, 0.02, 50);
+if (P.dbg) {
+  const yaw = num('yaw', 150) * Math.PI / 180, pitch = num('pitch', 25) * Math.PI / 180, dist = num('dist', 2.6);
+  dbgCam.position.set(0.5 + Math.cos(yaw) * Math.cos(pitch) * dist, -0.15 + Math.sin(pitch) * dist, Math.sin(yaw) * Math.cos(pitch) * dist);
+  dbgCam.lookAt(0.5, -0.15, 0);
+  cp.scene.background = new THREE.Color(0x20242c);
+  composer.addPass(new RenderPass(cp.scene, dbgCam));
+} else {
+  composer.addPass(new RenderPass(world, wcam));
+  const cpass = new RenderPass(cp.scene, cp.camera);
+  cpass.clear = false; cpass.clearDepth = true;
+  composer.addPass(cpass);
+}
+if (!Q.get('nopost')) composer.addPass(new UnrealBloomPass(new THREE.Vector2(VW, VH), 0.5, 0.8, 0.9));
+composer.addPass(new OutputPass());
+
+/* ---- state ---- */
+const FIELD = 1564;
+const blips = new Float32Array(160 * 4);
+enemies.forEach(([x, z, kind, size], i) => blips.set([x / FIELD, z / FIELD, kind, size / FIELD], i * 4));
+// the sun as the cockpit sees it (world camera is pitched down, the interior is level with it)
+const sunC = sunDirW.clone().applyQuaternion(wcam.quaternion.clone().invert());
+const sunDir = new THREE.Vector3(-sunC.z, sunC.y, sunC.x);
+const S = {
+  steer: P.steer, throttle: P.throttle, bank: P.bank, boost: !!P.boost, warp: P.warp, speed: 0.45 + P.boost * 0.4, shake: 0,
+  firing: !!P.fire, fireTier: P.tier, fireStamp: 0, laser: P.laser, rocketStamp: 0,
+  hp: P.hp, hpMax: P.hpMax, shield: !!P.shield, invuln: false, overdrive: P.od, overdriveOn: !!P.odon, rockets: 3, lasers: 2, laserCharge: 0.7, score: 48250, level: 7, combo: 12, mult: 3,
+  bossHp: P.boss, warning: !!P.warning, ion: P.ion, dead: false, paused: false,
+  sunDir, sunColor: new THREE.Color(1.0, 0.94, 0.84), ambient: new THREE.Color(0.2, 0.25, 0.34),
+  extLight: { r: 1, g: 0.6, b: 0.25, i: 0, side: P.extside },
+  blips, blipCount: enemies.length, laneL: -0.33, laneR: 0.23,
+};
+// hit script
+let hitList = [];
+if (P.hits) {
+  if (/^\d+$/.test(P.hits)) {
+    const D = [[0.8, 0.9, 0.7], [-0.9, 0.6, 0.9], [0.3, 1, 0.5], [-0.5, 1, 0.8], [1, -0.4, 1], [-1, 0, 0.6], [0.55, 0.8, 1], [-0.25, 1, 0.9], [0.9, 0.2, 0.7], [-0.7, 0.9, 1]];
+    for (let i = 0; i < +P.hits; i++) hitList.push(D[i % D.length]);
+  } else hitList = P.hits.split(',').map((h) => h.split(':').map(Number));
+}
+const T_END = P.t ?? 4000;
+const events = [];
+hitList.forEach((h, i) => events.push({ at: T_END - P.hitAt - (hitList.length - 1 - i) * 180, fn: () => cp.hit({ side: h[0], front: h[1] ?? 1, power: h[2] ?? 0.7 }) }));
+if (P.shieldhit) events.push({ at: T_END - 220, fn: () => cp.hit({ side: 0.6, front: 1, power: 0.9, shielded: true }) });
+events.sort((a, b) => a.at - b.at);
+let simT = 0, evI = 0;
+function step(dt) {
+  simT += dt;
+  while (evI < events.length && events[evI].at <= simT) events[evI++].fn();
+  S.dead = P.dead >= 0 && simT >= T_END - P.dead;
+  S.extLight.i = P.ext * (simT >= T_END - 120 ? 1 : 0);
+  if (P.fire) S.fireStamp = Math.floor(simT / 140) + (simT >= T_END - 20 ? 1000 : 0);      // a steady burst, one shot on the frame itself
+  if (!P.dbg) { cp.camera.fov = wcam.fov; cp.camera.aspect = wcam.aspect; }
+  cp.update(dt, simT, S);
+}
+const hud = document.getElementById('hud');
+function stats() {
+  if (Q.get('stats') === '0') return;
+  gl.info.autoReset = false; gl.info.reset();
+  gl.setRenderTarget(rt); gl.render(cp.scene, cp.camera); gl.setRenderTarget(null);
+  const calls = gl.info.render.calls, tris = gl.info.render.triangles;
+  gl.info.autoReset = true;
+  hud.textContent = `${P.ship}  cockpit pass: ${calls} draws, ${tris} tris   cockpit programs ${window.__cpProgs}   warmup ${window.__warm} ${window.__build.toFixed(0)} ms`;
+}
+
+try {
+  const t0 = performance.now();
+  gl.setRenderTarget(rt);
+  // frozen frames run under virtual time, where timers outrun the GPU: start the compile but do not wait for it
+  if (P.t != null) { cp.warmup(gl); window.__warm = 'started'; } else { await cp.warmup(gl); window.__warm = 'ok'; }
+  gl.setRenderTarget(null);
+  window.__build = performance.now() - t0;
+  // everything the cockpit will ever draw must be compiled by now: a cockpit-only frame may add no program
+  let progs = gl.info.programs.length;
+  if (!P.dbg) { cp.camera.fov = wcam.fov; cp.camera.aspect = wcam.aspect; cp.update(0, 0, S); gl.setRenderTarget(rt); gl.render(cp.scene, cp.camera); gl.setRenderTarget(null); cp.reset(); }
+  if (gl.info.programs.length !== progs) showErr('programs compiled after warmup: ' + progs + ' → ' + gl.info.programs.length);
+  window.__cpProgs = progs;
+  gl.compile(world, wcam); composer.render();
+  progs = gl.info.programs.length;
+  if (P.t != null) {
+    while (simT < T_END - 1e-6) step(Math.min(1000 / 60, T_END - simT));
+    composer.render(); composer.render();
+    stats();
+    if (gl.info.programs.length !== progs) showErr('programs compiled after warmup: ' + progs + ' → ' + gl.info.programs.length);
+  } else {
+    let last = performance.now(), n = 0;
+    const loop = (now) => {
+      const dt = Math.max(0, Math.min(50, now - last)); last = now;
+      step(dt);
+      if (simT > T_END + 3000 && (P.hits || P.dead >= 0)) { simT = 0; evI = 0; cp.reset(); }
+      composer.render();
+      if (n++ % 60 === 0) stats();
+      requestAnimationFrame(loop);
+    };
+    requestAnimationFrame(loop);
+  }
+  const keep = [...Q.entries()].filter(([k]) => k !== 'ship').map(([k, v]) => `&${k}=${v}`).join('');
+  document.getElementById('nav').innerHTML = [...COCKPIT_IDS, 'player2'].map((i) => `<a href="?ship=${i}${keep}">${i}</a>`).join('') + '<br>' +
+    [['clean', ''], ['hp2', '&hp=2&hits=3'], ['hp1', '&hp=1&hits=7'], ['dead', '&hp=0&hits=5&dead=500&t=4000'], ['shield', '&shield=1&shieldhit=1'], ['warp', '&warp=1'], ['ion', '&ion=1'], ['boss', '&boss=0.6&warning=1']]
+      .map(([n, q]) => `<a href="?ship=${P.ship}${q}">${n}</a>`).join('');
+} catch (e) { showErr('FATAL: ' + (e.stack || e)); }
+</script>
+</body>
+</html>
