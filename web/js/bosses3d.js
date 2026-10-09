@@ -43,6 +43,10 @@
 //     setPhase2({instant})  MEGA: the shell is thrown clear over ~3 s and the core unfolds
 //     setDeath(q, tMs)      q 0..1 over the 1.7 s sequence; keep calling update() after q = 1 and the pieces keep drifting
 //     update(dtMs, tMs, world)   world = { x, y, z, scale, rotY } of the group — every particle is emitted in world space
+//     setStage(n, {instant})  n = 0,1,2: armour plates blown off by a ring of charges, hidden guns run out, the light turns angry
+//     hit(x, y, z, power)   a shot landed (model units, hull frame): flash, white-hot rim cooling to a permanent scorch (last 12 kept)
+//     detachWreck()         → one parentless Object3D in world space holding the broken hull; the caller then drives
+//                             wreck.userData.update(dtMs, tMs) / .scroll / .done / .dispose(); this group is left hidden and disposable
 //     dispose()
 //
 // MEGA sizing: the core is modelled in hull units (about 0.9 of the hull's length across, like the sim's core
@@ -73,10 +77,11 @@ const M = { PAINT: 0, METAL: 1, GLASS: 2, DECKS: 3, EMIS: 4, BIO: 5, PLASMA: 6, 
 // emissive channels (index into uBLv)
 const CH = {
   STATIC: 0, ENGINE: 1, NAV: 2, STROBE: 3, ACCENT: 4, LASER: 5, SWEEP: 6, RAM: 7, VOLLEY: 8, BAY: 9, SHIELD: 10, BEACON: 11,
-  STUMP: 12, /* 12..15 */ CORE: 16, BEAM: 17, BIO: 18, SEAM: 19, N: 24,
+  STUMP: 12, /* 12..15 */ CORE: 16, BEAM: 17, BIO: 18, SEAM: 19, STG1: 20, STG2: 21, N: 24,
 };
 // vertex animation tracks (index into uBAn)
-const AN = { BAY: 1, RAM: 2, PEEL: 3, LASER: 4, DEPLOY: 5, N: 8 };
+const AN = { BAY: 1, RAM: 2, PEEL: 3, LASER: 4, DEPLOY: 5, STAGE1: 6, STAGE2: 7, UNF1: 8, UNF2: 9, N: 10 };
+const HITS = 12;
 
 const PITCH = lin(0x060709), DARK = lin(0x191b20), GUN = lin(0x33373f), STEEL = lin(0x6b717b), HEAT = lin(0x4a3d34);
 const ENG = { hot: [5.2, 3.9, 2.3], mid: [4.2, 1.4, 0.28], rim: [2.2, 0.45, 0.07] };
@@ -260,7 +265,7 @@ function hullLoft(stations, o = {}) {
 /* ========================================================================== */
 
 function newBuf() {
-  return { pos: [], nrm: [], col: [], prm: [], anm: [], key: [], sec: [], gpos: [], gcol: [], gprm: [], gkey: [], gsec: [] };
+  return { pos: [], nrm: [], col: [], prm: [], anm: [], piv: [], spun: false, key: [], sec: [], gpos: [], gcol: [], gprm: [], gkey: [], gsec: [] };
 }
 // smooth normals inside one part: faces meeting at a vertex under `crease` degrees share a normal
 function smoothNormals(t, fn, crease) {
@@ -292,6 +297,8 @@ class Kit {
     this.nozzles = []; this.wounds = []; this.rot = []; this.blasts = [];
     this.emitter = [60, 0, 0]; this.bays = []; this.cuts = [];
     this.tier = 0; // 0..3: how baroque this boss is (later levels carry more of everything)
+    this.R2 = makeRng(0x51A6E); // spin seeds for parts that fly off (kept off the design stream)
+    this.stagePts = [null, [], []]; this.cityN = 0;
     this.use('hull');
   }
   use(name) { let b = this.bufs.get(name); if (!b) this.bufs.set(name, (b = newBuf())); this.cur = b; return this; }
@@ -319,6 +326,11 @@ class Kit {
       for (let v = 0; v < 9; v += 3) { const x = t[i + v]; if (x < x0) x0 = x; if (x > x1) x1 = x; sx += x; sy += t[i + v + 1]; sz += t[i + v + 2]; }
     }
     const sm = o.crease ? smoothNormals(t, fn, o.crease) : null;
+    // parts on a fly-off track tumble about their own centre: death peel keeps its plates (negative spin), stage armour shrinks away
+    const fly = an && (an[3] === AN.PEEL || an[3] === AN.STAGE1 || an[3] === AN.STAGE2);
+    const spin = fly ? (1 + Math.floor(this.R2() * 126)) * (an[3] === AN.PEEL ? -1 : 1) : 0, c3 = n * 3;
+    const px = fly ? Math.round((sx / c3) * 64) : 0, py = fly ? Math.round((sy / c3) * 64) : 0, pz = fly ? Math.round((sz / c3) * 64) : 0;
+    if (fly) b.spun = true;
     const whole = o.whole ?? (x1 - x0 < 18), cnt = n * 3;
     const wkey = sx / cnt + 2.5 * Math.sin((sz / cnt) * 0.23 + 1.3) + 1.5 * Math.sin((sy / cnt) * 0.6);
     for (let f = 0; f < n; f++) {
@@ -331,6 +343,7 @@ class Kit {
         b.col.push(col[0], col[1], col[2]);
         b.prm.push(mat, win, ch, ph);
         b.anm.push(ax, ay, az, aw);
+        b.piv.push(px, py, pz, spin);
       }
       if (whole) b.key.push(wkey);
       else {
@@ -556,16 +569,37 @@ class Kit {
 /* ========================================================================== */
 
 const HULL_VERT_HEAD = /* glsl */`
-attribute vec4 aPrm; attribute vec4 aAnm;
+attribute vec4 aPrm; attribute vec4 aAnm; attribute vec4 aPiv;
 uniform float uBAn[${AN.N}]; uniform vec3 uBArr;
 varying vec3 vBP; varying vec3 vBN; varying vec4 vBPrm;
+float bK; mat3 bR;
+`;
+// track progress, and for parts that fly off the rotation about their own pivot (normals turn with them)
+const HULL_VERT_NORMAL = /* glsl */`
+#include <beginnormal_vertex>
+{
+  float bc = floor(aAnm.w / 16.0), bd = (aAnm.w - bc * 16.0) / 16.0;
+  bK = bc > 0.5 ? max(0.0, uBAn[int(bc)] - bd) / (1.0 - bd) : 0.0;
+  bR = mat3(1.0);
+  if (aPiv.w != 0.0 && bK > 0.0) {
+    vec3 ax = normalize(vec3(sin(aPiv.w * 1.7), cos(aPiv.w * 2.3), sin(aPiv.w * 3.1 + 1.0)));
+    float an = bK * (2.0 + abs(aPiv.w) * 0.05), c = cos(an), s = sin(an), ic = 1.0 - c;
+    bR = mat3(c + ax.x * ax.x * ic, ax.y * ax.x * ic + ax.z * s, ax.z * ax.x * ic - ax.y * s,
+              ax.x * ax.y * ic - ax.z * s, c + ax.y * ax.y * ic, ax.z * ax.y * ic + ax.x * s,
+              ax.x * ax.z * ic + ax.y * s, ax.y * ax.z * ic - ax.x * s, c + ax.z * ax.z * ic);
+    objectNormal = bR * objectNormal;
+  }
+}
 `;
 const HULL_VERT_BEGIN = /* glsl */`
 #include <begin_vertex>
 {
-  float bc = floor(aAnm.w / 16.0), bd = (aAnm.w - bc * 16.0) / 16.0;
-  float bk = bc > 0.5 ? max(0.0, uBAn[int(bc)] - bd) / (1.0 - bd) : 0.0;
-  transformed += aAnm.xyz * (bk / 64.0);
+  if (aPiv.w != 0.0 && bK > 0.0) {
+    vec3 pv = aPiv.xyz / 64.0;
+    float fly = bK * (2.0 - min(bK, 1.0));                          // thrown hard, slowing
+    float gone = aPiv.w > 0.0 ? smoothstep(0.8, 1.0, bK) : 0.0;     // stage armour dwindles out of sight; death plates stay
+    transformed = pv + bR * (transformed - pv) * (1.0 - gone) + aAnm.xyz * (fly / 64.0);
+  } else transformed += aAnm.xyz * (bK / 64.0);
   transformed.x -= uBArr.x * max(0.0, uBArr.z - transformed.x);   // hyperspace stretch, anchored at the nose
 }
 vBP = position; vBN = normal; vBPrm = aPrm;
@@ -573,6 +607,8 @@ vBP = position; vBN = normal; vBPrm = aPrm;
 const HULL_FRAG_HEAD = /* glsl */`
 uniform float uBT; uniform vec4 uBS; uniform vec4 uBK;
 uniform vec4 uBWound[8]; uniform float uBTear[8]; uniform float uBLv[${CH.N}]; uniform vec3 uBAcc;
+uniform vec4 uBG;            // x anger (stage mood), y fire heat left (1 → 0 as a wreck cools), z burn-away 0..1
+uniform vec4 uBHit[${HITS}];   // hit marks: x, z (hull space), time of impact (s), power (0 = empty slot)
 varying vec3 vBP; varying vec3 vBN; varying vec4 vBPrm;
 vec3 bEmis; float bRough; float bMetal;
 float bh21(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973)); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
@@ -612,7 +648,14 @@ const HULL_FRAG_COLOR = /* glsl */`
   float bPh = vBPrm.w / 255.0;
   if (bPh > 0.0) bLvl *= smoothstep(bPh * 0.8, bPh * 0.8 + 0.2, bLvl);
   vec3 bCol = diffuseColor.rgb;
-  float bFlick = 0.72 + 0.28 * sin(uBT * 23.0 + vBP.x * 2.1 + vBP.z * 3.3);
+  float bFlick = (0.72 + 0.28 * sin(uBT * 23.0 + vBP.x * 2.1 + vBP.z * 3.3)) * uBG.y;
+  // a wreck burns away at the end: eaten from noise, an ember line along the edge
+  float bEat = 0.0;
+  if (uBG.z > 0.0) {
+    float dn = bvn(vBP * 0.42 + 3.0) - (uBG.z * 1.2 - 0.12);
+    if (dn < 0.0) discard;
+    bEat = 1.0 - smoothstep(0.0, 0.03, dn);
+  }
 
   // --- wounds: scorch, then torn plating with a white-hot rim ---
   float bBurn = 0.0, bRim = 0.0, bGap = 9.0;
@@ -633,17 +676,37 @@ const HULL_FRAG_COLOR = /* glsl */`
     }
     bBurn = max(bBurn, smoothstep(1.0 - 0.42 * bHurt, 1.0 - 0.42 * bHurt + 0.2, bvn(vBP * 0.23 + 9.0 + uBK.z)) * 0.75);
   }
-
+  // --- hit marks: a flash, a white-hot rim cooling round a pit, then a scorch that stays ---
+  vec3 bHitE = vec3(0.0);
+  if (!bIn) {
+    float hn = (bvn(vBP * 1.6 + 5.0) - 0.5) * 0.36;
+    for (int i = 0; i < ${HITS}; i++) {
+      vec4 h = uBHit[i];
+      if (h.w <= 0.0) continue;
+      float d = length(vBP.xz - h.xy) / (1.6 + 2.4 * h.w) + hn;
+      if (d > 2.6) continue;
+      float age = max(0.0, uBT - h.z), heat = exp(-age * 1.5);
+      bBurn = max(bBurn, 1.0 - smoothstep(0.42, 1.0, d));                     // the scorch that stays
+      float rim = 1.0 - smoothstep(0.0, 0.1, abs(d - 0.44)), pit = 1.0 - smoothstep(0.1, 0.44, d);
+      bHitE += mix(vec3(1.5, 0.2, 0.02), vec3(5.0, 3.4, 1.7), heat * heat) * rim * heat;   // rim: white-hot → orange → dull red → out
+      bHitE += vec3(2.2, 0.5, 0.05) * pit * heat * (0.6 + 0.4 * bvn(vBP * 2.0 + uBT * 3.0));  // molten floor of the pit
+      bHitE += vec3(0.9, 0.7, 0.5) * (1.0 - smoothstep(0.0, 2.4, d)) * exp(-age * 12.0) * 0.5;   // the flash on the plating round it
+    }
+  }
   if (bIn) {
     // burning deck structure behind the plating
     float fl = bvn(vec3(vBP.xz * 0.35, uBT * 1.3)), fl2 = bvn(vBP * 1.2 + vec3(0.0, -uBT * 2.0, 0.0));
     float slab = smoothstep(0.28, 0.46, abs(fract(vBP.y / 2.6) - 0.5));
     float bulk = smoothstep(0.38, 0.5, abs(fract((vBP.x + vBP.z * 0.3) / 5.0) - 0.5));
     vec3 fire = mix(vec3(0.9, 0.11, 0.012), vec3(2.6, 0.95, 0.2), smoothstep(0.25, 0.8, fl2 * fl * 2.0));
-    bEmis = fire * (0.08 + 0.92 * uBK.w) * (1.0 - 0.94 * slab) * (1.0 - 0.8 * bulk) * (0.12 + 0.88 * smoothstep(0.3, 0.75, fl));
+    bEmis = fire * (0.08 * uBG.y + 0.92 * uBK.w) * (1.0 - 0.94 * slab) * (1.0 - 0.8 * bulk) * (0.12 + 0.88 * smoothstep(0.3, 0.75, fl));
     bCol = vec3(0.012); bRough = 0.9; bMetal = 0.0;
   } else if (bMat == 4.0) {
-    bEmis = bCol * bLvl; bCol = vec3(0.0); bRough = 0.6; bMetal = 0.0;
+    bEmis = bCol * bLvl; bRough = 0.6; bMetal = 0.0;
+    // the mood of the ship: accent light turns from its livery colour to an angry red as the stages go by
+    float bCh = floor(vBPrm.z + 0.5);
+    if (bCh == 4.0 || bCh == 19.0) bEmis = mix(bEmis, vec3(2.3, 0.36, 0.07) * dot(bEmis, vec3(0.4, 0.45, 0.15)), uBG.x * 0.8);
+    bCol = vec3(0.0);
   } else if (bMat == 6.0) {
     float n1 = bvn(vBP * 0.2 + vec3(0.0, uBT * 0.7, uBT * 0.3)), n2 = bvn(vBP * 0.55 - uBT * 0.9);
     bEmis = bCol * (0.35 + 1.5 * n1 * n2 + 0.7 * n1 * n1 * n1) * bLvl; bCol = vec3(0.0); bRough = 0.6; bMetal = 0.0;
@@ -666,7 +729,7 @@ const HULL_FRAG_COLOR = /* glsl */`
     // bioluminescent pores: a soft dot in the middle of one scale in eight
     float lit = step(0.9, ch) * dark * (1.0 - smoothstep(0.004, 0.035 + bAA * 0.1, d1)) * clamp(0.9 / bAA, 0.4, 1.0);
     bEmis += uBAcc * lit * (0.25 + 0.75 * pulse) * 0.6 * uBLv[18];
-    bEmis += uBAcc * groove * dark * uBS.x * (0.02 + 0.07 * pulse) * uBLv[18];   // the veins between the scales light as it is hurt
+    bEmis += uBAcc * groove * dark * (uBS.x * (0.02 + 0.07 * pulse) + uBG.x * (0.04 + 0.1 * pulse)) * uBLv[18];   // the veins between the scales light as it is hurt
     bRough = 0.26 + 0.3 * edge; bMetal = 0.55;
   } else {
     float wn = bvn(vBP * 0.6 + uBK.z);
@@ -689,11 +752,11 @@ const HULL_FRAG_COLOR = /* glsl */`
       if (strip > 0.5) {
         float fr = step(0.78, fract(bUV.x * 0.9)) + step(0.86, fract(bUV.y * 0.7));
         bCol = vec3(0.016, 0.015, 0.014) * (0.5 + 1.6 * min(fr, 1.0)); bRough = 0.85; bMetal = 0.5;
-        bEmis += vec3(1.5, 0.3, 0.03) * (1.0 - min(fr, 1.0)) * smoothstep(0.45, 0.8, bvn(vBP * 0.9 + vec3(0.0, uBT * 0.8, 0.0))) * 0.5;
+        bEmis += vec3(1.5, 0.3, 0.03) * (1.0 - min(fr, 1.0)) * smoothstep(0.45, 0.8, bvn(vBP * 0.9 + vec3(0.0, uBT * 0.8, 0.0))) * 0.5 * uBG.y;
       }
-      float th = 1.02 - max(0.34 * uBS.y, uBS.x * 0.26);
+      float th = 1.02 - max(max(0.34 * uBS.y, uBS.x * 0.26), uBG.x * 0.38);
       float crack = (1.0 - smoothstep(0.0, 0.26 + bAA, pn.z)) * smoothstep(th, th + 0.12, bvn(vBP * 0.17 + 4.0 + uBK.z));
-      bEmis += vec3(2.4, 0.55, 0.07) * crack * bFlick;
+      bEmis += vec3(2.4, 0.55, 0.07) * crack * mix(bFlick, uBG.y * (0.6 + 0.3 * sin(uBT * 3.0 + vBP.x * 0.3)), step(max(0.34 * uBS.y, uBS.x * 0.26), uBG.x * 0.38));
     }
     // lit window rows on walls: small panes in decks, whole decks dark, blocks of cabins lit together
     if (vBPrm.y > 0.5 && bSide > 0.5) {
@@ -709,6 +772,7 @@ const HULL_FRAG_COLOR = /* glsl */`
       float farx = clamp(fa.x * 2.0 - 0.5, 0.0, 1.0), fary = clamp(fa.y * 2.0 - 0.5, 0.0, 1.0);
       float wv = mix(on * mx, occ * 0.56, farx) * mix(my, 0.3 * mix(1.0, 0.6 / max(deckOn, 0.6), fary), fary);
       vec3 wc = mix(vec3(1.0, 0.7, 0.34), vec3(0.55, 0.8, 1.0), step(0.8, bh21(floor(id / vec2(23.0, 3.0)) + 1.7)));
+      wc = mix(wc, vec3(1.0, 0.3, 0.1), uBG.x * 0.55);
       bCol *= 1.0 - 0.6 * wv;
       bEmis += wc * wv * 2.8 * uBK.x * (1.0 - bBurn) * step(0.3, bGap);
     }
@@ -718,6 +782,8 @@ const HULL_FRAG_COLOR = /* glsl */`
     bEmis += (bCol * 1.2 + vec3(0.09, 0.075, 0.06)) * uBS.z;      // hit flash: the hull's own colour lifted, never white
   }
   bEmis += vec3(3.0, 0.85, 0.11) * bRim * bFlick;
+  if (!bLit) bEmis += bHitE;
+  bEmis += vec3(1.1, 0.24, 0.025) * bEat;
   float bFr = pow(1.0 - abs(dot(normalize(vNormal), normalize(vViewPosition))), 2.5);
   bEmis += vec3(0.16, 0.62, 1.3) * bFr * uBS.w * 0.45;             // shield sheen
   bEmis += vec3(0.22, 0.5, 1.2) * uBK.y * (0.4 + 0.6 * bFr);     // hyperspace glow
@@ -727,7 +793,7 @@ const HULL_FRAG_COLOR = /* glsl */`
 
 const GLOW_VERT = /* glsl */`
 attribute vec3 aCol; attribute vec4 aPrm;
-uniform float uBLv[${CH.N}]; uniform vec3 uBArr; uniform float uBT;
+uniform float uBLv[${CH.N}]; uniform vec3 uBArr; uniform float uBT; uniform vec4 uBG;
 varying vec3 vC;
 void main() {
   vec3 p = position;
@@ -735,7 +801,9 @@ void main() {
   float l = uBLv[int(aPrm.x + 0.5)], ph = aPrm.y / 255.0;
   if (ph > 0.0) l *= smoothstep(ph * 0.8, ph * 0.8 + 0.2, l);
   l *= 1.0 + aPrm.z / 255.0 * 0.3 * sin(uBT * 31.0 + p.x * 0.7 + p.z * 1.3);
-  vC = aCol * l;
+  vC = aCol * l * (1.0 - uBG.z);
+  float ch = floor(aPrm.x + 0.5);
+  if (ch == 4.0 || ch == 19.0) vC = mix(vC, vec3(2.3, 0.36, 0.07) * dot(vC, vec3(0.4, 0.45, 0.15)), uBG.x * 0.8);
   gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
 }`;
 const GLOW_FRAG = /* glsl */`
@@ -808,6 +876,18 @@ function dressHull(k, F, x0, x1, P, o = {}) {
       const z = s * (F.hw(x) * 0.9 + 0.2), y = F.top(x) * 0.55 + 0.5;
       flak(k, x, y, z, s);
     }
+    // spaced armour: skirt plates standing off the waist over o.skirt = [x from, x to]; blown off stage by stage,
+    // uncovering a lit conduit and a long gun that runs out through the gap
+    if (o.skirt) for (let x = o.skirt[0], i = 0; x - 7.6 >= o.skirt[1]; x -= 8, i++) {
+      const st = (i % 2) + 1, w0 = F.hw(x), w1 = F.hw(x - 7.6), R = k.R2, tr = st === 1 ? AN.STAGE1 : AN.STAGE2, ch = st === 1 ? CH.STG1 : CH.STG2;
+      const ring = (xx, w) => [[xx, -4.8, s * (w + 1.5)], [xx, 3.3, s * (w + 1.5)], [xx, 3.9, s * (w * 0.93)], [xx, 4.3, s * (w * 0.93)], [xx, 3.7, s * (w + 2.3)], [xx, -4.8, s * (w + 2.3)]];
+      k.add(loft([ring(x, w0), ring(x - 7.6, w1)]), i % 3 === 1 ? P.paint : P.hull2, { whole: true, anim: [(R() - 0.5) * 10, 3 + R() * 8, s * (12 + R() * 12), tr, R() * 0.4] });
+      k.em(box(x - 7.2, x - 0.4, 0.9, 1.3, s * (Math.min(w0, w1) + 1.02) - 0.08, s * (Math.min(w0, w1) + 1.02) + 0.08), [2.8, 0.6, 0.08], ch);
+      const gx = x - 3.8, gw = F.hw(gx), an = [0, 0, s * 4.2, st === 1 ? AN.UNF1 : AN.UNF2, 0];
+      k.metal(rod([gx, -1.2, s * (gw - 2.6)], [gx + 0.8, -1.2, s * (gw + 1.2)], 0.42, 5), GUN, { whole: true, anim: an });
+      k.em(ball(gx + 0.82, -1.2, s * (gw + 1.25), 0.4, 5, 2), [4, 1.5, 0.3], CH.VOLLEY, 0.4, { anim: an });
+      k.stagePts[st].push([x - 3.8, 0, s * (w0 + 2)]);
+    }
     const T = k.tier;
     // tier 1+: broadside guns low on the flank, muzzles that ripple on 'volley'
     if (T >= 1 && o.guns !== false) for (let x = x0 - 8, i = 0; x > x1 + 6; x -= 11 - T * 1.5, i++) {
@@ -848,6 +928,31 @@ function city(k, x0, x1, z0, z1, y, P, dens = 1) {
     if (c < 0.07) k.em(box(x - 0.12, x + 0.12, y + 0.08, y + 0.2, z - 0.12, z + 0.12), c < 0.035 ? [1.8, 1.6, 1.2] : mul(P.glow, 0.5), CH.STATIC);
     else k.add(box(x - l / 2, x + l / 2, y, y + h, z - w / 2, z + w / 2), c < 0.4 ? DARK : c < 0.7 ? P.hull2 : c < 0.9 ? GUN : P.hull, { mat: c > 0.55 ? M.METAL : M.STRUCT, whole: true });
   }
+  // The machinery starts the fight under armour. Each strip belongs to stage 1 or 2: when that stage comes its cover
+  // plates are blown off, the conduits underneath light up and guns rise out of the bed.
+  const st = (k.cityN++ % 2) + 1, xa = Math.min(x0, x1), xe = Math.max(x0, x1), za = Math.min(z0, z1), ze = Math.max(z0, z1), zc = (za + ze) / 2, R = k.R2;
+  const L = xe - xa, hot = [2.8, 0.6, 0.08], ch = st === 1 ? CH.STG1 : CH.STG2;
+  k.em(box(xa + 0.3, xe - 0.3, y + 0.1, y + 0.24, zc - 0.17, zc + 0.17), hot, ch);
+  for (let x = xa + 1.2; x < xe - 0.6; x += 2.6) k.em(box(x - 0.14, x + 0.14, y + 0.1, y + 0.2, za + 0.2, ze - 0.2), mul(hot, 0.7), ch, 0, { whole: true });
+  const ng = Math.max(1, Math.round(L / 8));
+  for (let i = 0; i < ng; i++) hardpoint(k, lerp(xa, xe, (i + 0.5) / ng), y, zc, st, Math.min(1, (ze - za) / 2.6));
+  const np = Math.max(1, Math.ceil(L / 6.5)), pl = L / np;
+  for (let i = 0; i < np; i++) {
+    const a = xa + i * pl - (i ? 0 : 0.3), e = xa + (i + 1) * pl - 0.14 + (i === np - 1 ? 0.44 : 0), t = box(a, e, y + 0.95, y + 1.3, za - 0.3, ze + 0.3, 0.12);
+    for (const v of box(a, e, y - 0.05, y + 0.95, za - 0.3, za - 0.12)) t.push(v);
+    for (const v of box(a, e, y - 0.05, y + 0.95, ze + 0.12, ze + 0.3)) t.push(v);
+    for (const v of box(a + 0.5, a + 1.1, y + 1.3, y + 1.42, za, ze)) t.push(v); // hazard bar
+    k.add(t, (i + st) % 3 === 0 ? P.paint : P.hull2, { whole: true, anim: [(R() - 0.5) * 16, 14 + R() * 12, (zc > 0.5 ? 1 : zc < -0.5 ? -1 : R() - 0.5) * (8 + R() * 14), st === 1 ? AN.STAGE1 : AN.STAGE2, R() * 0.4] });
+    k.stagePts[st].push([(a + e) / 2, y + 1, zc]);
+  }
+}
+// gun that waits under a cover plate and rises when its stage comes: twin barrels on a drum
+function hardpoint(k, x, y, z, st, sc = 1) {
+  const an = [0, 2.0, 0, st === 1 ? AN.UNF1 : AN.UNF2, 0], yy = y - 2.0, r = 0.85 * sc, o = { whole: true, anim: an };
+  k.metal(latheY([[yy + 1.9, r * 0.5], [yy + 1.5, r], [yy + 0.1, r * 1.1]], 6, x, z), GUN, o);
+  for (const d of [0.34, -0.34]) k.metal(rod([x + 0.3, yy + 1.35, z + d * sc], [x + 3.4 * sc, yy + 1.6, z + d * sc], 0.16 * sc, 4), DARK, o);
+  k.em(box(x + 3.4 * sc, x + 3.5 * sc, yy + 1.4, yy + 1.8, z - 0.5 * sc, z + 0.5 * sc), [4, 1.5, 0.3], CH.VOLLEY, 0.5, { anim: an });
+  k.em(latheY([[yy + 1.52, r * 1.04], [yy + 1.38, r * 1.08]], 6, x, z), [3.2, 0.7, 0.1], st === 1 ? CH.STG1 : CH.STG2, 0, { anim: an });
 }
 // tube swept along a path of [x, y, z, r] points (horns, tentacles, booms)
 function tube(pts, n = 6, o = {}) {
@@ -1003,7 +1108,7 @@ function* dreadnought(k, G) {
   k.decks(F.inner(0.86));
   bulkheads(k, F);
   belt(k, F, 44, -44, -3.4, 2.6, 1.0, [P.hull2, P.hull2, P.paint]);
-  dressHull(k, F, B(58), -57, P, { keep: (x) => Math.abs(x - 38) < 7 });
+  dressHull(k, F, B(58), -57, P, { keep: (x) => Math.abs(x - 38) < 7, skirt: [V === 2 ? 40 : B(56), -44] });
   yield;
   // --- foredeck, forward battery, deckhouse ---
   const yM = lerp(yA, yB, 0.5) - 0.3;
@@ -1131,7 +1236,7 @@ function* lance(k, G) {
   k.decks(F.inner(0.86));
   bulkheads(k, F);
   belt(k, F, 4, -44, -3, 2.4, 0.9, [P.hull2, P.paint, P.hull2]);
-  dressHull(k, F, 4, -57, P, { keep: (x) => x > -8 });
+  dressHull(k, F, 4, -57, P, { keep: (x) => x > -8, skirt: [2, -46] });
   yield;
   // --- forked prow ---
   for (const s of [1, -1]) {
@@ -1241,6 +1346,7 @@ function* carrier(k, G) {
   k.decks(F.inner(0.86));
   bulkheads(k, F);
   dressHull(k, F, 26, -57, P, { hatches: false, flak: false });
+  for (const s of [1, -1]) city(k, -52, -44.5, s * 2, s * (hw * 0.9 - 4), yB - 0.3, P, 0.5);
   yield;
   // --- bow: three hangar mouths under the foredeck ---
   const bw = hw * bk;
@@ -1380,7 +1486,7 @@ function* ram(k, G) {
   k.add(F.tris, P.hull, { win: 70 });
   k.decks(F.inner(0.86));
   bulkheads(k, F);
-  dressHull(k, F, 20, -56, P, { keep: (x) => Math.abs(x) < 8, ribs: 4.4 });
+  dressHull(k, F, 20, -56, P, { keep: (x) => Math.abs(x) < 8, ribs: 4.4, skirt: [-29, -55] });
   yield;
   // --- the plough: overlapping armour scales that slam forward and lock for the charge ---
   for (const s of [1, -1]) {
@@ -1532,7 +1638,16 @@ function* leviathan(k, G) {
     if (xb < -57) break;
     if (piv.some((p) => p[2] === 0 && p[0] < xa + 5.5 && p[0] > xb - 5.5)) continue; // the shields make way for the mounts
     const rs = [[xa, 0.5], [(xa + xb) / 2, 1.4], [xb, 2.7]].map(([x, lift]) => arc(x, lift).concat(arc(x, lift - 1.1, 0.26).reverse()));
-    k.add(loft(rs), i % 2 ? P.paint : P.hull2, { ...bio, whole: true, anim: [(R() - 0.5) * 6, 10 + R() * 8, (R() - 0.5) * 16, AN.PEEL, R() * 0.5] });
+    // every other shield is torn off at stage 1, the rest at stage 2: under each, raw organ and spines that push out
+    const stg = (i % 2) + 1, xm = (xa + xb) / 2 - 2;
+    k.add(loft(rs), i % 2 ? P.paint : P.hull2, { ...bio, whole: true, anim: [(R() - 0.5) * 10, 16 + R() * 10, (R() - 0.5) * 22, stg === 1 ? AN.STAGE1 : AN.STAGE2, R() * 0.4] });
+    for (const a of [Math.PI / 2 - 0.55, Math.PI / 2 + 0.55]) {
+      const q = surf(xm, a, 0.25);
+      k.add(ball(q[0], q[1], q[2], 2.5, 8, 4, 0.5), mul(P.glow, 0.7), { mat: M.PLASMA, ch: stg === 1 ? CH.STG1 : CH.STG2, crease: 60, whole: true });
+      const b = surf(xm - 3, a + (a > 1.6 ? 0.3 : -0.3), -5);
+      k.add(tube([[b[0] + 2, b[1], b[2], 1.2], [b[0], b[1] + 3, b[2], 0.7], [b[0] - 3, b[1] + 5.6, b[2], 0.05]], 5), P.pale, { ...bio, whole: true, anim: [0, 5.4, 0, stg === 1 ? AN.UNF1 : AN.UNF2, 0] });
+      k.stagePts[stg].push(surf(xm, a, 2));
+    }
     k.add(tube(arc(xb - 0.2, 2.9, 0.24, 8).map((p) => [p[0], p[1], p[2], 0.62]), 5), P.pale, { ...bio, whole: true });
     const c = surf(xb, Math.PI / 2, 2.6), h = 4.5 + (i % 3) * 1.6 + T;
     k.add(tube([[c[0] + 6, c[1] - 0.8, c[2], 1.6], [c[0] + 1, c[1] + h * 0.6, c[2], 0.9], [c[0] - 4.5, c[1] + h, c[2], 0.05]], 5), P.pale, { ...bio, whole: true });
@@ -1936,9 +2051,11 @@ export class Bosses3D {
   /* ------------------------------ materials ------------------------------ */
 
   _uniforms() {
-    const T = this.THREE, w = [];
+    const T = this.THREE, w = [], h = [];
     for (let i = 0; i < 8; i++) w.push(new T.Vector4(0, 0, 0, 0));
+    for (let i = 0; i < HITS; i++) h.push(new T.Vector4(0, 0, 0, 0));
     return {
+      uBG: { value: new T.Vector4(0, 1, 0, 0) }, uBHit: { value: h },
       uBT: { value: 0 }, uBS: { value: new T.Vector4(0, 0, 0, 0) }, uBK: { value: new T.Vector4(1, 0, 0, 0.3) },
       uBWound: { value: w }, uBTear: { value: new Float32Array(8) }, uBLv: { value: new Float32Array(CH.N) },
       uBAn: { value: new Float32Array(AN.N) }, uBArr: { value: new T.Vector3(0, 0, 66) }, uBAcc: { value: new T.Vector3(1, 1, 1) },
@@ -1951,6 +2068,7 @@ export class Bosses3D {
       for (const k in U) sh.uniforms[k] = U[k];
       sh.vertexShader = sh.vertexShader
         .replace('#include <common>', '#include <common>\n' + HULL_VERT_HEAD)
+        .replace('#include <beginnormal_vertex>', HULL_VERT_NORMAL)
         .replace('#include <begin_vertex>', HULL_VERT_BEGIN);
       sh.fragmentShader = sh.fragmentShader
         .replace('#include <common>', '#include <common>\n' + HULL_FRAG_HEAD)
@@ -1959,13 +2077,13 @@ export class Bosses3D {
         .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor = bMetal;')
         .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += bEmis;');
     };
-    mat.customProgramCacheKey = () => 'b3d-hull1';
+    mat.customProgramCacheKey = () => 'b3d-hull2';
     return mat;
   }
   _glowMat(U) {
     const T = this.THREE;
     return new T.ShaderMaterial({
-      uniforms: { uBLv: U.uBLv, uBArr: U.uBArr, uBT: U.uBT }, vertexShader: GLOW_VERT, fragmentShader: GLOW_FRAG,
+      uniforms: { uBLv: U.uBLv, uBArr: U.uBArr, uBT: U.uBT, uBG: U.uBG }, vertexShader: GLOW_VERT, fragmentShader: GLOW_FRAG,
       blending: T.AdditiveBlending, depthWrite: false, side: T.DoubleSide, transparent: true, fog: false,
     });
   }
@@ -2038,7 +2156,7 @@ function finalize(T, b, cuts, nSec) {
   for (let f = 0; f < gn; f++) gcount[(gof[f] = secIdx(b.gkey[f], b.gsec[f]))]++;
   const out = [];
   for (let s = 0; s < ns; s++) {
-    const m = count[s] * 3, pos = new Float32Array(m * 3), nrm = new Int8Array(m * 3), col = new Float32Array(m * 3), prm = new Uint8Array(m * 4), anm = new Int16Array(m * 4);
+    const m = count[s] * 3, pos = new Float32Array(m * 3), nrm = new Int8Array(m * 3), col = new Float32Array(m * 3), prm = new Uint8Array(m * 4), anm = new Int16Array(m * 4), piv = b.spun ? new Int16Array(m * 4) : null;
     let w = 0, cx = 0, cy = 0, cz = 0, r2 = 0;
     for (let f = 0; f < n; f++) {
       if (of[f] !== s) continue;
@@ -2050,6 +2168,7 @@ function finalize(T, b, cuts, nSec) {
         col[w * 3] = b.col[i * 3]; col[w * 3 + 1] = b.col[i * 3 + 1]; col[w * 3 + 2] = b.col[i * 3 + 2];
         prm[w * 4] = b.prm[i * 4]; prm[w * 4 + 1] = b.prm[i * 4 + 1]; prm[w * 4 + 2] = b.prm[i * 4 + 2]; prm[w * 4 + 3] = b.prm[i * 4 + 3];
         anm[w * 4] = b.anm[i * 4]; anm[w * 4 + 1] = b.anm[i * 4 + 1]; anm[w * 4 + 2] = b.anm[i * 4 + 2]; anm[w * 4 + 3] = b.anm[i * 4 + 3];
+        if (piv) { piv[w * 4] = b.piv[i * 4]; piv[w * 4 + 1] = b.piv[i * 4 + 1]; piv[w * 4 + 2] = b.piv[i * 4 + 2]; piv[w * 4 + 3] = b.piv[i * 4 + 3]; }
       }
     }
     const c = m ? [cx / m, cy / m, cz / m] : [0, 0, 0];
@@ -2060,6 +2179,7 @@ function finalize(T, b, cuts, nSec) {
     geo.setAttribute('color', new T.BufferAttribute(col, 3));
     geo.setAttribute('aPrm', new T.BufferAttribute(prm, 4));
     geo.setAttribute('aAnm', new T.BufferAttribute(anm, 4));
+    if (piv) geo.setAttribute('aPiv', new T.BufferAttribute(piv, 4)); // absent = (0,0,0,0): nothing spins
     geo.boundingSphere = new T.Sphere(new T.Vector3(c[0], c[1], c[2]), Math.sqrt(r2));
     let glow = null;
     if (gcount[s]) {
@@ -2108,6 +2228,7 @@ function* buildSteps(T, q, level, gen, mega, key) {
     key, cls, level, mega, refs: 0, orphan: false, gone: false, geos: [], pal: G.pal, piv,
     nozzles: k.nozzles, wounds: k.wounds.slice(0, 8), emitter: k.emitter, bays: k.bays, blasts: k.blasts,
     sections: null, turrets: [], rot: [], core: null, cuts: k.cuts.slice(), turSec: k.turSec || [],
+    stagePts: k.stagePts.map((l) => (l ? l.filter((p, i) => Math.floor(i * 9 / l.length) !== Math.floor((i - 1) * 9 / l.length)) : [])),
   };
   let tris = 0, draws = 0;
   const fin = (name, cuts, ns) => {
@@ -2132,8 +2253,8 @@ function* buildSteps(T, q, level, gen, mega, key) {
 function instance(lib, proto) {
   const T = lib.THREE, fx = lib.fx, g = new T.Group(), ud = g.userData;
   proto.refs++;
-  const U = lib._uniforms(), UT = { ...U, uBWound: lib._uniforms().uBWound, uBTear: { value: new Float32Array(8) }, uBS: { value: new T.Vector4(0, 0, 0, 0) } };
-  const UC = proto.core ? { ...U, uBWound: lib._uniforms().uBWound, uBTear: { value: new Float32Array(8) }, uBS: { value: new T.Vector4(0, 0, 0, 0) }, uBK: { value: new T.Vector4(1, 0, proto.level * 3.7, 0.3) } } : null;
+  const U = lib._uniforms(), UT = { ...U, uBWound: lib._uniforms().uBWound, uBHit: lib._uniforms().uBHit, uBTear: { value: new Float32Array(8) }, uBS: { value: new T.Vector4(0, 0, 0, 0) } };
+  const UC = proto.core ? { ...U, uBWound: lib._uniforms().uBWound, uBHit: lib._uniforms().uBHit, uBTear: { value: new Float32Array(8) }, uBS: { value: new T.Vector4(0, 0, 0, 0) }, uBK: { value: new T.Vector4(1, 0, proto.level * 3.7, 0.3) } } : null;
   const hullMat = lib._hullMat(U), turMat = lib._hullMat(UT), glowMat = lib._glowMat(U), coreMat = UC ? lib._hullMat(UC) : null;
   U.uBK.value.set(1, 0, proto.level * 1.37, 0.3);
   U.uBAcc.value.set(proto.pal.glow[0], proto.pal.glow[1], proto.pal.glow[2]);
@@ -2213,6 +2334,7 @@ function instance(lib, proto) {
     charge: { laser: 0, sweep: 0, ram: 0, volley: 0, bay: 0 }, ease: { laser: 0, sweep: 0, ram: 0, volley: 0, bay: 0 },
     blown: proto.turrets.map(() => false), blast: 0, final: false, phase2: false, p2t: -1, hullScale: 0, rot0: 0, lastWoundFx: 0,
     world: { x: 0, y: 0, z: 0, scale: 1, rotY: Math.PI },
+    stage: 0, stT: [0, 0, 0], stFx: [0, 0, 0], anger: 0, spinT: 0, limbT: 0, hitN: 0, detached: false,
   };
   const wOpen = new Float32Array(8), wTear = new Float32Array(8), wSeen = new Uint8Array(8);
   Lv[CH.STATIC] = 1; Lv[CH.ENGINE] = 1; Lv[CH.NAV] = 1; Lv[CH.ACCENT] = 1; Lv[CH.BIO] = 1; Lv[CH.SEAM] = 1; Lv[CH.CORE] = 1; Lv[CH.BEACON] = 1; Lv[CH.STROBE] = 1;
@@ -2225,9 +2347,11 @@ function instance(lib, proto) {
     return W;
   };
   const fire = (p, scale, light) => { const o = lib._fire; o.scale = scale; o.light = !!light; fx.fireTrail(p[0], p[1], p[2], o); };
+  // how far a piece has drifted tau seconds after it broke away: gathering way for two seconds, then slowing to a crawl
+  const drift = (tau) => (tau < 2 ? tau * (1 + 0.25 * tau) : 3 + 0.7 * (tau - 2));
   const placeSec = (s, tau, k = 1) => {
     if (tau <= 0) { s.mesh.matrix.identity(); s.mesh.matrixWorldNeedsUpdate = true; return; }
-    const e = tau * (1 + 0.25 * tau) * k; // drifts apart, slowly gathering way
+    const e = drift(tau) * k;
     lib._q.setFromAxisAngle(s.ax, s.w * tau * k);
     lib._v.set(s.c[0], s.c[1], s.c[2]).applyQuaternion(lib._q);
     lib._m.makeRotationFromQuaternion(lib._q);
@@ -2308,8 +2432,92 @@ function instance(lib, proto) {
     if (tMs != null) S.deathNow = tMs;
   };
 
+  // Health thresholds as events. Stage n blows its share of the outer armour off, runs the guns out from underneath
+  // and turns the ship's light angrier; { instant } restores a boss that was already there.
+  ud.setStage = (n, o) => {
+    n = Math.max(0, Math.min(2, n | 0));
+    for (let i = S.stage + 1; i <= n; i++) { S.stT[i] = (o && o.instant) || !S.live ? -1e9 : NaN; S.stFx[i] = (o && o.instant) || !S.live ? 1e9 : 0; }
+    S.stage = n;
+    if ((o && o.instant) || !S.live) S.anger = n * 0.5;
+  };
+  // A shot landed at (x, y, z), model units in the hull's own frame; power 0..1. The mark is projected down the Y axis.
+  ud.hit = (x, y, z, power = 0.5) => {
+    const onCore = S.phase2 && core, k = onCore ? 1 / (core.root.scale.x || 1) : 1;
+    (onCore ? UC : U).uBHit.value[S.hitN++ % HITS].set(x * k, z * k, S.tMs / 1000, Math.max(0.05, Math.min(1, power)));
+  };
+  // Hands the broken hull over as one parentless object in world space; from here on the caller owns it:
+  // wreck.userData.update(dtMs, tMs) every frame, .scroll (world units/s toward -X), .done, .dispose().
+  ud.detachWreck = () => {
+    if (S.detached) return null;
+    S.detached = true;
+    g.updateMatrixWorld(true);
+    const w = new T.Group(), wd = w.userData, onCore = S.phase2 && core, set = onCore ? core.secs : secs;
+    g.matrixWorld.decompose(w.position, w.quaternion, w.scale);
+    if (onCore) { w.add(core.root); hullRoot.visible = false; } else w.add(hullRoot); // (a shell still flying from phase 2 is let go)
+    for (const wr of wrecks) { wr.on = false; wr.m.visible = false; }
+    g.visible = false;
+    const t0 = S.tMs;
+    if (S.deathT0 == null) S.deathT0 = t0 - 1700;
+    proto.refs++;
+    lib._live.add(w);
+    let seed = (proto.level * 9301 + 49297) >>> 0, nextBoom = t0 + 120, nextShed = t0 + 300, gone = 0;
+    const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
+    const heat0 = U.uBK.value.w, peel0 = An[AN.PEEL], P3 = [0, 0, 0];
+    const at = (s, ox, oy, oz) => { lib._v.set(s.c[0] + ox, s.c[1] + oy, s.c[2] + oz).applyMatrix4(s.mesh.matrixWorld); P3[0] = lib._v.x; P3[1] = lib._v.y; P3[2] = lib._v.z; return P3; };
+    wd.done = false; wd.scroll = 60; wd.age = 0;
+    wd.update = (dtMs, tMs) => {
+      if (wd.disposed) return;
+      const dt = Math.min(0.1, Math.max(0, dtMs / 1000)), age = Math.max(0, (tMs - t0) / 1000), tdead = tMs - S.deathT0;
+      wd.age = age;
+      // the pieces carry on along the paths the break-up gave them, and the whole field falls astern with the scroll
+      for (let i = 0; i < set.length; i++) placeSec(set[i], Math.max(0.02 + age, (tdead - set[i].q * 1700) / 1000));
+      w.position.x -= wd.scroll * dt; gone += wd.scroll * dt;
+      w.updateMatrixWorld(true);
+      // fires die down, decks cool from orange to black over eight seconds, then the wreck burns away
+      const cool = Math.max(0, 1 - age / 8), c2 = cool * cool;
+      U.uBT.value = tMs / 1000;
+      U.uBG.value.y = c2; U.uBG.value.z = smooth(9, 12, age);
+      U.uBK.value.x = 0; U.uBK.value.w = heat0 * c2; if (UC) UC.uBK.value.w = heat0 * c2;
+      U.uBS.value.y = cool; U.uBS.value.z = 0; U.uBS.value.w = 0; UT.uBS.value.set(0, cool * 0.6, 0, 0); if (UC) { UC.uBS.value.y = cool; UC.uBS.value.z = 0; UC.uBS.value.w = 0; }
+      for (let i = 0; i < CH.N; i++) Lv[i] = 0;
+      Lv[CH.CORE] = c2 * 0.8; Lv[CH.SEAM] = c2 * 0.6; Lv[CH.STG1] = c2 * 0.5; Lv[CH.STG2] = c2 * 0.5; Lv[CH.BIO] = c2 * 0.5;
+      for (let i = 0; i < 4; i++) Lv[CH.STUMP + i] = S.blown[i] ? c2 * 0.5 : 0;
+      An[AN.PEEL] = peel0 + age * 0.22; An[AN.STAGE1] = 1; An[AN.STAGE2] = 1;
+      if (fx && dt > 0) {
+        const slot = Math.floor(tMs / 34);
+        for (let i = 0; i < set.length; i++) {
+          const s = set[i];
+          if (age < 6 && (slot + i) % 2 === 0) { const p = at(s, 0, 2, 0); fire(p, 0.2 + 0.5 * (1 - age / 6), false); }
+          else if (age >= 3 && age < 10 && (slot + i * 3) % 8 === 0) { const p = at(s, (rnd() - 0.5) * s.r * 0.5, 3, (rnd() - 0.5) * s.r * 0.4); fx.smokePuff(p[0], p[1], p[2], 16 + 14 * cool, FX_SMOKE); }
+        }
+        while (age < 2.2 && tMs >= nextBoom) { // secondary explosions walk the pieces while the magazines cook off
+          const s = set[Math.floor(rnd() * set.length) % set.length], p = at(s, (rnd() - 0.5) * s.r * 0.8, (rnd() - 0.3) * 6, (rnd() - 0.5) * s.r * 0.5);
+          fx.explosion(p[0], p[1], p[2], 0.26 + rnd() * 0.2, rnd() < 0.5 ? FX_POP : FX_POP_DARK);
+          fx.sparks(p[0], p[1], p[2], 6, 0, 0, FX_SPIT);
+          nextBoom += 170 + rnd() * 300;
+        }
+        while (age < 5 && tMs >= nextShed) { // plating keeps coming away
+          const s = set[Math.floor(rnd() * set.length) % set.length], p = at(s, (rnd() - 0.5) * s.r * 0.9, 1, (rnd() - 0.5) * s.r * 0.6);
+          fx.shrapnel(p[0], p[1], p[2], 3 + Math.floor(rnd() * 3), FX_PLATES);
+          nextShed += 260 + rnd() * 380;
+        }
+      }
+      if (age >= 12 || gone > 2600) wd.done = true;
+    };
+    wd.dispose = () => {
+      if (wd.disposed) return;
+      wd.disposed = true; wd.done = true;
+      lib._live.delete(w);
+      if (w.parent) w.parent.remove(w);
+      proto.refs--;
+      if (proto.orphan && proto.refs <= 0) disposeProto(proto);
+    };
+    return w;
+  };
+
   /* ------------------------------- update ------------------------------ */
   ud.update = (dtMs, tMs, world) => {
+    if (S.detached) return;
     const dt = Math.min(0.1, Math.max(0, dtMs / 1000)), t = tMs / 1000;
     S.tMs = tMs;
     if (world) { const w = S.world; w.x = world.x; w.y = world.y || 0; w.z = world.z; w.scale = world.scale || 1; w.rotY = world.rotY ?? Math.PI; }
@@ -2345,7 +2553,8 @@ function instance(lib, proto) {
     Lv[CH.ENGINE] = (a < 1 ? 0.5 + 0.9 * (1 - a) : 1) * (1 + 0.05 * Math.sin(tMs * 0.021) + E.ram * 1.3) * (dying ? alive * (0.4 + 0.6 * flicker) : 1);
     Lv[CH.NAV] = navOn * k;
     Lv[CH.ACCENT] = accOn * (0.82 + 0.18 * Math.sin(tMs * 0.0021)) * k;
-    Lv[CH.STROBE] = navOn * k * (((tMs % 1400) < 90 || ((tMs + 1220) % 1400) < 90) ? 1 : 0.06);
+    const sp = 1400 - 420 * S.stage; // the strobes quicken with every stage
+    Lv[CH.STROBE] = navOn * k * (((tMs % sp) < 90 || ((tMs + sp - 180) % sp) < 90) ? 1 : 0.06);
     Lv[CH.BEACON] = navOn * k * (0.5 + 0.5 * Math.sin(tMs * 0.0045));
     Lv[CH.LASER] = E.laser; Lv[CH.SWEEP] = E.sweep; Lv[CH.RAM] = E.ram; Lv[CH.VOLLEY] = E.volley;
     Lv[CH.BAY] = Math.max(E.bay, 0.12 * lightsOn) * (dying ? k : 1);
@@ -2359,6 +2568,25 @@ function instance(lib, proto) {
     for (let i = 0; i < turrets.length; i++) if (S.blown[i] && !S.phase2) Lv[CH.STUMP + i] = (0.6 + 0.4 * Math.sin(tMs * 0.03 + i * 2)) * (dq >= 1 ? 0.3 : 1);
     An[AN.BAY] = E.bay; An[AN.RAM] = E.ram; An[AN.LASER] = E.laser; An[AN.DEPLOY] = deploy;
     An[AN.PEEL] = dying ? smooth(0.08, 1, dq) * (1 + Math.max(0, (tMs - S.deathT0 - 1700) / 1700) * 0.6) : 0;
+    // stages: charges ripple round the armour, the plates go, the guns come out, the light turns
+    for (let i = 1; i <= 2; i++) {
+      const tr = i === 1 ? AN.STAGE1 : AN.STAGE2, un = i === 1 ? AN.UNF1 : AN.UNF2, ch = i === 1 ? CH.STG1 : CH.STG2;
+      if (S.stage < i) { An[tr] = dying ? sat(dq * 1.2) : 0; An[un] = 0; Lv[ch] = 0; continue; }
+      if (S.stT[i] !== S.stT[i]) S.stT[i] = tMs; // stamped on the first update after the call
+      const el = (tMs - S.stT[i]) / 1000, pts = proto.stagePts[i];
+      An[tr] = Math.max(sat((el - 0.15) / 2.2), dying ? sat(dq * 1.2) : 0); An[un] = smooth(0.6, 1.6, el);
+      Lv[ch] = smooth(0.15, 0.7, el) * (0.62 + 0.38 * Math.sin(tMs * 0.0055 * (1 + S.stage * 0.6) + i * 2)) * (dying ? Math.max(0.3, k) : 1);
+      if (fx && S.live) while (S.stFx[i] < pts.length && el * 1000 >= S.stFx[i] * 60) {
+        const q = pts[S.stFx[i]++], p = toWorld(q[0], q[1], q[2]);
+        fx.explosion(p[0], p[1], p[2], 0.11, S.stFx[i] % 3 ? FX_POP_DARK : FX_POP);
+        if (S.stFx[i] % 2) fx.sparks(p[0], p[1], p[2], 5, 0, 0, FX_SPIT);
+      }
+    }
+    S.anger += (S.stage * 0.5 - S.anger) * (S.live ? 1 - Math.exp(-dt * 2.2) : 1);
+    U.uBG.value.x = S.anger;
+    Lv[CH.ENGINE] *= 1 + 0.5 * S.anger;
+    if (S.stage === 2 && !dying) U.uBK.value.x *= 0.82 + 0.18 * Math.sin(tMs * 0.047) * Math.sin(tMs * 0.019);
+    S.spinT += dtMs * (1 + 1.4 * S.anger); S.limbT += dtMs * (1 + 0.5 * S.damage + 0.9 * S.anger);
 
     // turrets rise out of their wells; rotating gear
     for (let i = 0; i < bodies.length; i++) { bodies[i].position.y = -(1 - deploy) * 7; bodies[i].visible = deploy > 0.02; }
@@ -2366,7 +2594,7 @@ function instance(lib, proto) {
     const sway = dying ? Math.max(0, 1 - dq * 1.4) : 1 + S.damage * 0.7, tense = Math.max(E.laser, E.volley, E.ram);
     for (let i = 0; i < rots.length; i++) {
       const r = rots[i];
-      r.m.rotation[r.axis] = r.swing ? r.base + r.swing * sway * Math.sin(tMs * r.speed * (1 + S.damage * 0.5) + r.ph) + r.flex * tense : tMs * r.speed;
+      r.m.rotation[r.axis] = r.swing ? r.base + r.swing * sway * (1 + 0.6 * S.anger) * Math.sin(S.limbT * r.speed + r.ph) + r.flex * tense : S.spinT * r.speed;
     }
 
     // blown turrets: tumbling, burning wreckage
@@ -2407,7 +2635,7 @@ function instance(lib, proto) {
         hullRoot.rotation.y = -(S.world.rotY - S.rot0);
         for (const s of secs) placeSec(s, tau, 1.5);
         if (fx && tau < 2.2) for (let i = 0; i < secs.length; i += 2) {
-          const s = secs[(i + (Math.floor(tMs / 50) & 1)) % secs.length], e = tau * (1 + 0.25 * tau) * 1.5;
+          const s = secs[(i + (Math.floor(tMs / 50) & 1)) % secs.length], e = drift(tau) * 1.5;
           const p = toWorld((s.c[0] + s.v[0] * e) * ks, (s.c[1] + s.v[1] * e) * ks, (s.c[2] + s.v[2] * e) * ks);
           fire(p, 0.9, false);
         }
@@ -2444,7 +2672,7 @@ function instance(lib, proto) {
           }
         }
         if (fx && S.live && tau > 0 && tau < 4 && ((i + Math.floor(tMs / 34)) & 1)) {
-          const e = tau * (1 + 0.25 * tau), p = toWorld(s.c[0] + s.v[0] * e, s.c[1] + s.v[1] * e, s.c[2] + s.v[2] * e);
+          const e = drift(tau), p = toWorld(s.c[0] + s.v[0] * e, s.c[1] + s.v[1] * e, s.c[2] + s.v[2] * e);
           fire(p, 0.6, false);
         }
       }
@@ -2507,5 +2735,6 @@ const FX_POP = Object.freeze({ shockwave: false }), FX_POP_DARK = Object.freeze(
 const FX_CHIPS = Object.freeze({ speed: 220, trail: 1 }), FX_BURST = Object.freeze({ speed: 320, trail: 3 });
 const FX_SPRAY = Object.freeze({ spread: 3.1, speed: 380 }), FX_SPIT = Object.freeze({ spread: 3.1, speed: 220, life: 340 });
 const FX_FINAL = Object.freeze({ tint: Object.freeze([1, 0.8, 0.6]), shockwave: false });
+const FX_PLATES = Object.freeze({ speed: 150, shape: 'plate', size: 7, trail: 0 });
 const FX_ARCS = Object.freeze({ rate: 10 }), FX_SMOKE = Object.freeze({ dark: 0.8, life: 800 });
 

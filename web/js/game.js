@@ -446,6 +446,7 @@ export class GameState extends BaseWorld {
   // Elite: golden aura, triple hp/points, guaranteed power-up drop on death.
   makeElite(e) {
     e.elite = true;
+    e.img = this.app.images[`enemy_${e.type}_elite`] || e.img; // (baked from the 3D elite hull, when available)
     e.health = Math.max(2, e.health * 3);
     e.points *= 3;
   }
@@ -476,6 +477,7 @@ export class GameState extends BaseWorld {
     for (const dy of [-1, 1]) {
       const f = new Enemy(this.app.images, Math.max(1, this.level - 1), 'basic', this.time);
       f.w = 32; f.h = 20; f.health = 1; f.points = 5;
+      f.img = this.app.images.enemy_drone || f.img;
       f.x = e.x; f.y = clamp(e.y + dy * 16, 20, H - 20);
       f.vx = -(3 + this.level * 0.2);
       f.vy = dy * rand(1, 2.6);
@@ -495,13 +497,23 @@ export class GameState extends BaseWorld {
     lead.y = clamp(lead.y, 100, H - 100);
     if (this.level >= 3 && randInt(1, 100) <= 12) this.makeElite(lead);
     this.introEnemy(lead, { x: bx });
-    for (const s of [1, -1]) {
+    // the flight arrives as a vee, an echelon stepped back toward the open side, or
+    // line abreast; wingmen keep station on the leader (Enemy.fly) and scatter if it dies
+    const shape = randInt(0, 3);
+    const open = lead.y < H / 2 ? 1 : -1;
+    const slots = shape === 2 ? [[36, open * 40], [72, open * 80]]
+      : shape === 3 ? [[0, 56], [0, -56]]
+        : [[48, 44], [48, -44]];
+    lead.wingmen = 2; // a flight leader holds its course: no second pass, no pairing up
+    for (const [dx, dy] of slots) {
       const wing = mk();
       wing.y = lead.y;
       wing.vx = lead.vx;
       wing.canDash = lead.canDash;
       wing.nextDashAt = lead.nextDashAt;
-      this.introEnemy(wing, { x: bx + 48, dy: s * 44 });
+      wing.leader = lead;
+      wing.slot = { dx, dy };
+      this.introEnemy(wing, { x: bx + dx, dy });
     }
   }
 
@@ -668,6 +680,7 @@ export class GameState extends BaseWorld {
   }
 
   killPlayer(p, hx, hy) {
+    if (hx != null) p.hitAt = { x: hx, y: hy, power: 1 };
     if (this.app.debugGod) return;
     if (this.time < (p.invulnUntil || 0)) return;
     if (p.shield && this.ionStorm?.phase !== 'active') {
@@ -1230,6 +1243,7 @@ export class GameState extends BaseWorld {
         for (const b of group) {
           if (b.dead || !overlap(enemy, b, enemy.isBoss ? 0.78 : this.pitView ? 1.3 : 0.9)) continue; // from the cockpit hostiles are drawn larger up close: the guns agree
           b.dead = true;
+          enemy.hitAt = { x: b.x, y: b.y, power: isRocket ? 1 : 0.5 }; // (the 3D view scorches the hull there)
           this.spawnSparks(b.x, b.y, isRocket ? 16 : 8);
           if (enemy.isBoss && enemy.deathSeq) { b.dead = true; continue; } // going down — hull soaks shots
           if (enemy.isBoss && enemy.shieldUntil > this.time) {
@@ -2075,7 +2089,7 @@ export class GameState extends BaseWorld {
     g.fillStyle = rgba(C.ink, 0.55); g.fillRect(bx - 5, by - 5, bw + 10, 17);
     g.fillStyle = rgba(HUD_RED, 0.9); g.fillRect(bx - 5, by - 5, 2, 17); g.fillRect(bx + bw + 3, by - 5, 2, 17);
     ui.hudBar(g, bx, by, bw, 7, v, { color: col, back: 0.16, ghost: this._bossGhost });
-    ui.hudLabel(g, boss.shieldUntil > this.time ? 'SHIELDED' : boss.mega ? 'MEGA BOSS' : 'BOSS', bx - 4, by - 15, { size: 9.5, weight: 700, track: 0.3, color: rgba(col === C.white ? HUD_RED : col) });
+    ui.hudLabel(g, boss.shieldUntil > this.time ? 'SHIELDED' : this.app.view3d?.bossName?.(boss) || (boss.mega ? 'MEGA BOSS' : 'BOSS'), bx - 4, by - 15, { size: 9.5, weight: 700, track: 0.3, color: rgba(col === C.white ? HUD_RED : col) });
     ui.hudLabel(g, `${Math.ceil(v * 100)}%`, bx + bw + 4, by - 15, { size: 10, weight: 700, track: 0.08, align: 'right', color: rgba(C.hi) });
   }
 

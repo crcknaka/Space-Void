@@ -32,7 +32,7 @@
 //   const fleet = new Enemies3D(THREE, { quality: 1 });
 //   const g = fleet.build('sniper', { elite: false });
 //   g.userData.{nozzles,muzzles,glow,setThrust,setFlash,setDim,setDamage,setWarp,setOpacity,setCharge,update,dispose}
-//   g.userData.{wounds,woundCount,breakOff,partsLeft,setAim,setRoll,setFire,setDeath,settle}
+//   g.userData.{wounds,woundCount,breakOff,partsLeft,setAim,setRoll,setFire,setDeath,settle,hit}
 
 import {
   tri, quad, flip, mirrorZ, move, rotX, rotY, rotZ, loft, fuselage, wing, wAt, lathe, latheY, ringRect, box, plate, Livery, bakeAO, GLSL_FACES,
@@ -56,6 +56,7 @@ const SYM = (f) => { f(1); f(-1); };
 const CH = { STATIC: 0, ENGINE: 1, EYE: 2, STROBE: 3, ACCENT: 4, COCKPIT: 5, CHARGE: 6, GOLD: 7, BIO: 8, ENGINE2: 9 }; // ENGINE2: port-side burners, the ones that die first
 const NP = 20;      // part matrices per hull (0 = the body)
 const NW = 5;       // wounds per hull
+const NK = 4;       // live hit marks per hull
 const GUT = { RIB: 2, CORE: 3, CABLE: 4 }; // aTrim values past 1: internals, never cut away by damage
 const UV_X0 = 0.54, UV_XW = 1.08; // must match ships3d's Livery / Kit
 
@@ -1384,7 +1385,8 @@ varying vec3 vE3Pos; varying float vE3Trim; varying vec3 vE3N; varying float vE3
 const HULL_FRAG_HEAD = `
 uniform vec4 uE3A;   // flash, damage, dim, warp
 uniform vec4 uE3B;   // time, fade, elite, seed
-uniform vec4 uE3C;   // plates lost, fire, internals exposed, _
+uniform vec4 uE3C;   // plates lost, fire, internals exposed, tear heat (debris)
+uniform vec4 uE3K[${NK}];   // hit mark: x, z (model plan), radius, age in seconds
 uniform vec3 uE3Warp;
 uniform vec4 uE3W[${NW}];   // wound centre (model space), scorch radius
 uniform float uE3Hr[${NW}]; // radius of the hole burnt through it
@@ -1411,7 +1413,7 @@ float e3up = 1.0, e3dn = 0.0, e3sd = 0.0;
 // Damage, in the order it reads: soot blotches and scorched dents round each wound; then the wound burns a
 // ragged hole (internals and the inside of the skin show through it); then whole plates drop out of the hull.
 const HULL_FRAG_COLOR = `
-float e3soot = 0.0; float e3hot = 0.0; float e3spark = 0.0; float e3edge = 0.0; float e3dent = 0.0;
+float e3soot = 0.0; float e3hot = 0.0; float e3spark = 0.0; float e3edge = 0.0; float e3dent = 0.0; float e3white = 0.0; float e3flash = 0.0;
 float e3gut = step(1.5, vE3Trim);
 float e3gold = (1.0 - e3gut) * step(0.5, vE3Trim) * uE3B.z;
 float e3fine = 1.0;
@@ -1454,7 +1456,7 @@ diffuseColor.rgb *= s3faces(vE3Pos, e3sd, e3dn);
         e3soot = max(e3soot, 1.0 - smoothstep(r * 1.0, r * 2.9, ds));
         float core = 1.0 - smoothstep(r * 0.45, r, d);
         float rim = hr > 0.0005 ? 1.0 - smoothstep(hr, hr + 0.008, d) : 0.0;
-        e3hot += core * (0.012 + crack * crack * 0.8) * (1.0 - step(0.0005, hr) * 0.5) + rim * (0.1 + 0.55 * smoothstep(0.1, 0.6, crack + nf));
+        e3hot += core * (0.012 + crack * crack * 0.8) * (1.0 - step(0.0005, hr) * 0.5) + rim * (0.1 + 0.55 * smoothstep(0.1, 0.6, crack + nf)) + core * uE3C.w * (0.25 + 0.5 * crack);
         e3dent += 1.0 - smoothstep(r * 0.3, r * 1.6, d);
       }
     }
@@ -1470,6 +1472,23 @@ diffuseColor.rgb *= s3faces(vE3Pos, e3sd, e3dn);
     float e3lum = dot(diffuseColor.rgb, vec3(0.3, 0.5, 0.2));
     diffuseColor.rgb = mix(diffuseColor.rgb, vec3(e3lum) * 0.55, 0.55 * smoothstep(0.25, 1.0, dmg) * (0.4 + 0.6 * n));
     diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.012, 0.011, 0.01), e3soot * 0.92);
+  }
+  // hit marks: where a shot landed. A flash, a white-hot rim that cools in a couple of seconds, a black pit for good.
+  if (e3gut < 0.5 && gl_FrontFacing) for (int i = 0; i < ${NK}; i++) {
+    float r = uE3K[i].z;
+    if (r > 0.0005) {
+      float age = uE3K[i].w;
+      float d = length(vE3Pos.xz - uE3K[i].xy) + (e3n(vE3Pos.xz * 46.0 + float(i) * 7.3 + uE3B.w) - 0.5) * r * 0.8;
+      float pit = 1.0 - smoothstep(r * 0.45, r * 1.2, d);
+      float ring = smoothstep(r * 0.62, r * 0.88, d) * (1.0 - smoothstep(r * 0.88, r * 1.16, d));
+      float cool = exp(-age * 1.7);
+      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.01, 0.009, 0.008), pit * 0.95);
+      e3soot = max(e3soot, pit);
+      e3hot += (ring * 0.3 + pit * 0.05) * cool;
+      e3white += ring * exp(-age * 5.0) * 0.6;
+      e3flash += (1.0 - smoothstep(r * 0.3, r * 2.0, d)) * max(0.0, 1.0 - age / 0.13);
+      e3dent += pit;
+    }
   }
   float e3fl = 0.5 + 0.5 * sin(uE3B.x * 0.013 + vE3Pos.x * 31.0 + uE3B.w) * sin(uE3B.x * 0.0071 + vE3Pos.z * 23.0);
   if (e3gut > 0.5) {
@@ -1526,7 +1545,7 @@ function patchHull(mat, U) {
       .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\n' + HULL_FRAG_NORMAL)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n#ifdef USE_ROUGHNESSMAP\nvec4 e3orm = texture2D(roughnessMap, vRoughnessMapUv, 3.0);\nif (vE3Sw < 0.5) roughnessFactor = mix(e3orm.g * roughness, roughnessFactor, e3up);\n#endif\nroughnessFactor = mix(mix(mix(roughnessFactor, 0.3, 0.6 * uE3B.z * (1.0 - e3gut)), mix(0.62, 0.3, e3fine), e3gold), 0.95, e3soot);')
       .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\n#ifdef USE_ROUGHNESSMAP\nif (vE3Sw < 0.5) metalnessFactor = mix(e3orm.b * metalness, metalnessFactor, e3up);\n#endif\nmetalnessFactor = mix(metalnessFactor, 1.0, e3gold) * (1.0 - 0.8 * e3soot);')
-      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += vec3(5.0, 1.1, 0.14) * e3hot + vec3(1.6, 2.8, 5.0) * e3spark;')
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += vec3(5.0, 1.1, 0.14) * e3hot + vec3(1.6, 2.8, 5.0) * e3spark + vec3(3.2, 2.7, 2.0) * e3white + vec3(1.3, 1.05, 0.75) * min(e3flash, 1.0);')
       .replace('#include <opaque_fragment>', HULL_FRAG_OUT + '\n#include <opaque_fragment>');
   };
   mat.customProgramCacheKey = () => 'e3d-hull3';
@@ -1586,6 +1605,7 @@ void main() {
 
 const W_AT = [0.04, 0.18, 0.33, 0.48, 0.62]; // damage at which each wound starts to scorch; it burns through 0.17 later
 const smooth = (x) => { x = x < 0 ? 0 : x > 1 ? 1 : x; return x * x * (3 - 2 * x); };
+const SPARK_LV = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], SPARK_E = [0, 0, 0, 1];
 const IDENT = new Float32Array(NP * 16);
 for (let i = 0; i < NP; i++) IDENT[i * 16] = IDENT[i * 16 + 5] = IDENT[i * 16 + 10] = IDENT[i * 16 + 15] = 1;
 
@@ -1769,6 +1789,25 @@ export class Enemies3D {
     return d;
   }
 
+  // shared spark burst: thin streaks radiating from the origin, unit reach
+  _sparks() {
+    if (this.sparkGeo) return this.sparkGeo;
+    const T = this.T, pos = [], col = [], ch = [];
+    let r = 5; const R = () => ((r = (r * 16807) % 2147483647) / 2147483647);
+    for (let i = 0; i < 14; i++) {
+      const u = R() * 2 - 1, a = R() * TAU, q = Math.sqrt(1 - u * u), dx = Math.cos(a) * q, dy = u, dz = Math.sin(a) * q, l0 = 0.35 + 0.4 * R(), l1 = l0 + 0.18 + 0.2 * R(), w = 0.012;
+      const px = -dz * w, pz = dx * w, k = 0.6 + 0.8 * R();
+      pos.push(dx * l0 + px, dy * l0, dz * l0 + pz, dx * l0 - px, dy * l0, dz * l0 - pz, dx * l1, dy * l1, dz * l1);
+      for (let v = 0; v < 3; v++) { col.push(4.5 * k, 2.4 * k, 0.5 * k); ch.push(CH.STATIC, 0); }
+    }
+    const geo = new T.BufferGeometry();
+    geo.setAttribute('position', new T.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('aCol', new T.Float32BufferAttribute(col, 3));
+    geo.setAttribute('aCh', new T.Float32BufferAttribute(ch, 2));
+    geo.setAttribute('aPart', new T.Float32BufferAttribute(new Float32Array(pos.length / 3), 1));
+    return (this.sparkGeo = geo);
+  }
+
   _textures(id) {
     if (!this.textures) return null;
     let t = this.tex.get(id);
@@ -1816,10 +1855,10 @@ export class Enemies3D {
     const Fv = new T.Vector4(1, 0, 0, seed);        // fade, flash, warp, seed
     const warpCol = { value: new T.Vector3(wc[0] * wm, wc[1] * wm, wc[2] * wm) };
     if (opts.elite) warpCol.value.set(1.7, 1.15, 0.35);
-    const pose = new Pose(g.parts), WU = new Float32Array(NW * 4), HR = new Float32Array(NW);
+    const pose = new Pose(g.parts), WU = new Float32Array(NW * 4), HR = new Float32Array(NW), KU = new Float32Array(NK * 4), born = new Float64Array(NK);
     for (let i = 0; i < NW; i++) { WU[i * 4] = g.wounds[i][0]; WU[i * 4 + 1] = g.wounds[i][1]; WU[i * 4 + 2] = g.wounds[i][2]; }
     const uP = { value: pose.m };
-    const U = { uE3A: { value: A }, uE3B: { value: B }, uE3C: { value: C }, uE3Warp: warpCol, uE3W: { value: WU }, uE3Hr: { value: HR }, uE3P: uP };
+    const U = { uE3A: { value: A }, uE3B: { value: B }, uE3C: { value: C }, uE3Warp: warpCol, uE3W: { value: WU }, uE3Hr: { value: HR }, uE3K: { value: KU }, uE3P: uP };
     const hull = this._hullMat(tex, U);
     const emis = new T.ShaderMaterial({
       uniforms: { uLv: { value: lv }, uE3E: { value: E }, uE3F: { value: Fv }, uE3Warp: warpCol, uE3P: uP },
@@ -1833,6 +1872,7 @@ export class Enemies3D {
     group.name = 'enemy:' + id;
     const mh = new T.Mesh(g.hull, hull), me = new T.Mesh(g.emis, emis);
     me.renderOrder = 2;
+    mh.castShadow = mh.receiveShadow = true; // only the hull: the emissive pass is light, not matter
     group.add(mh, me);
 
     // st: what the game asked for. S: what the rig sees (slewed, so a quantised charge or a snapped aim still moves like machinery)
@@ -1894,6 +1934,14 @@ export class Enemies3D {
     ud.setAim = (yaw, snap) => { st.aim = clamp(+yaw || 0, -aimMax, aimMax); if (snap) S.aim = st.aim; };
     ud.setRoll = (r) => { S.roll = clamp(+r || 0, -1, 1); };
     ud.setFire = () => { S.recoil = 1; };
+    // A shot landed at (x, z) in the hull's plan (model units; y is ignored — the mark goes on whatever skin is there).
+    // power 0..1 sizes it. The last NK marks are kept; the oldest gives up its slot.
+    let hitN = 0;
+    ud.hit = (x, y, z, power) => {
+      const i = (hitN++ % NK) * 4;
+      KU[i] = +x || 0; KU[i + 1] = +z || 0; KU[i + 2] = 0.036 + 0.034 * clamp(power == null ? 0.5 : +power, 0, 1); KU[i + 3] = 0;
+      born[i >> 2] = S.t;
+    };
     ud.setOpacity = (a) => {
       a = clamp(a == null ? 1 : +a, 0, 1);
       if (a === st.opacity) return;
@@ -1910,22 +1958,40 @@ export class Enemies3D {
         if (pose.hide[i]) continue;
         pose.hide[i] = 1; st.broken++; ud.partsLeft--;
         refresh(); ud.update(0);
-        const d = this._debris(id, i);
-        const dU = {
-          uE3A: { value: new T.Vector4(0, Math.max(0.55, st.damage), 1, 0) }, uE3B: { value: new T.Vector4(B.x, 1, B.z, seed + n * 7.3) },
-          uE3C: { value: new T.Vector4(0.06, 0.3, 1, 0) }, uE3Warp: warpCol, uE3W: { value: new Float32Array(NW * 4) }, uE3Hr: { value: new Float32Array(NW) }, uE3P: { value: IDENT },
-        };
+        const d = this._debris(id, i), tear = g.stumps.find((q) => q.part === i), dW = new Float32Array(NW * 4);
+        if (tear) { dW[0] = tear.x - d.center[0]; dW[1] = tear.y - d.center[1]; dW[2] = tear.z - d.center[2]; dW[3] = Math.min(0.09, d.radius * 0.6); }
+        const dA = new T.Vector4(0, Math.max(0.55, st.damage), 1, 0), dB = new T.Vector4(B.x, 1, B.z, seed + n * 7.3), dC = new T.Vector4(0.06, 0.3, 1, 1);
+        const dU = { uE3A: { value: dA }, uE3B: { value: dB }, uE3C: { value: dC }, uE3Warp: warpCol, uE3W: { value: dW }, uE3Hr: { value: new Float32Array(NW) }, uE3K: { value: new Float32Array(NK * 4) }, uE3P: { value: IDENT } };
         const dm = this._hullMat(tex, dU);
         this.live.add(dm);
         const part = new T.Mesh(d.geo, dm);
+        part.castShadow = part.receiveShadow = true;
         part.name = 'debris:' + id + ':' + g.parts[i].name;
         part.position.set(d.center[0], d.center[1], d.center[2]);
+        // a burst of sparks off the torn edge for the first half second (the emissive program, one extra draw while it lasts)
+        const sF = new T.Vector4(1, 0, 0, seed), sm = new T.ShaderMaterial({
+          uniforms: { uLv: { value: SPARK_LV }, uE3E: { value: SPARK_E }, uE3F: { value: sF }, uE3Warp: warpCol, uE3P: { value: IDENT } },
+          vertexShader: EMIS_VERT, fragmentShader: EMIS_FRAG, blending: T.AdditiveBlending, transparent: true, depthWrite: false, side: T.DoubleSide,
+        });
+        this.live.add(sm);
+        const sparks = new T.Mesh(this._sparks(), sm);
+        sparks.renderOrder = 2; sparks.frustumCulled = false;
+        sparks.position.set(dW[0], dW[1], dW[2]); sparks.rotation.set(seed, seed * 1.7, 0); sparks.scale.setScalar(0.02);
+        part.add(sparks);
         const pu = part.userData;
+        let age = 0;
         pu.part = g.parts[i].name; pu.radius = d.radius; pu.glow = ud.glow;
-        pu.setDim = (k) => { dU.uE3A.value.z = clamp(+k || 0, 0, 2); };
-        pu.setOpacity = (a) => { a = clamp(a == null ? 1 : +a, 0, 1); dm.opacity = dU.uE3B.value.y = a; if (dm.transparent !== a < 1) { dm.transparent = a < 1; dm.needsUpdate = true; } };
-        pu.update = (dtMs, timeMs) => { dU.uE3B.value.x = (timeMs == null ? dU.uE3B.value.x + (dtMs || 0) : timeMs + st.ph) % 1e6; };
-        pu.dispose = () => { dm.dispose(); this.live.delete(dm); };
+        pu.setDim = (k) => { dA.z = clamp(+k || 0, 0, 2); };
+        pu.setOpacity = (a) => { a = clamp(a == null ? 1 : +a, 0, 1); dm.opacity = dB.y = a; if (dm.transparent !== a < 1) { dm.transparent = a < 1; dm.needsUpdate = true; } };
+        // call every frame: the torn edge cools over ~2 s and the sparks fly for the first 0.5 s
+        pu.update = (dtMs, timeMs) => {
+          age += (dtMs || 0) * 0.001;
+          dB.x = (timeMs == null ? dB.x + (dtMs || 0) : timeMs + st.ph) % 1e6;
+          dC.w = Math.exp(-age * 1.6);
+          const u = age / 0.5;
+          if (u < 1) { sparks.visible = true; sparks.scale.setScalar(0.03 + 0.42 * (1 - (1 - u) * (1 - u))); sF.x = (1 - u) * (1 - u) * 1.6; } else sparks.visible = false;
+        };
+        pu.dispose = () => { dm.dispose(); sm.dispose(); this.live.delete(dm); this.live.delete(sm); };
         return part;
       }
       return null;
@@ -1967,6 +2033,7 @@ export class Enemies3D {
       lv[CH.CHARGE] = L;
       lv[CH.GOLD] = st.elite ? (0.85 + 0.15 * Math.sin(t * 0.004 + 1.0)) * L : 0;
 
+      for (let i = 0; i < NK; i++) if (KU[i * 4 + 2] > 0) KU[i * 4 + 3] = clamp((t - born[i]) * 0.001, 0, 60);
       /* ---- machinery ---- */
       S.t = t; S.dt = dt;
       if (aimRate) S.aim += clamp(st.aim - S.aim, -aimRate * k, aimRate * k);
@@ -2007,6 +2074,7 @@ export class Enemies3D {
   dispose() {
     for (const m of this.live) m.dispose();
     this.live.clear();
+    if (this.sparkGeo) { this.sparkGeo.dispose(); this.sparkGeo = null; }
     for (const g of this.geo.values()) { g.hull.dispose(); g.emis.dispose(); for (const d of g.debris.values()) d.geo.dispose(); }
     for (const t of this.tex.values()) { t.map.dispose(); t.orm.dispose(); t.normal.dispose(); }
     this.geo.clear(); this.tex.clear(); this.defs.clear();

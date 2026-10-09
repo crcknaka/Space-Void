@@ -1,0 +1,183 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>enemy flight harness</title>
+<style>
+  html, body { margin: 0; background: #05070c; color: #cfd8e3; font: 12px/1.35 monospace; }
+  pre { padding: 10px; margin: 0; white-space: pre; }
+  iframe { position: absolute; left: -9999px; width: 1280px; height: 720px; border: 0; }
+</style>
+</head>
+<body>
+<canvas id="trace" style="display:none"></canvas>
+<pre id="svlog">running…</pre>
+<script>
+  // Enemy flight dev harness: steps the real game headlessly (no drawing) with a simple bot
+  // pilot and prints, per enemy type, how long ships stay on the field, how they leave it and
+  // how smooth their motion is. Deterministic: both RNGs are seeded.
+  //   ?levels=1,4,8  ?steps=7200 (2 min at 60 Hz)  ?seed=7  ?mode=single|coop|daily  ?bot=seek|idle|sweep  ?slow (half speed)  ?fxseed=N (reseed Math.random only)
+  //   ?trace  draws every flight path of the last level run (shot.sh the page to look at them)
+  //   tools/svlog.sh "http://localhost:8791/dev/flight.html?log" 20000
+  const q = new URLSearchParams(location.search);
+  const LEVELS = (q.get('levels') || '1,4,8').split(',').map(Number);
+  const STEPS = Number(q.get('steps')) || 7200;
+  const SEED = Number(q.get('seed')) || 7;
+  const MODE = q.get('mode') || 'single';
+  const BOT = q.get('bot') || 'seek'; // seek | idle | sweep
+  const out = document.getElementById('svlog');
+  const lines = [];
+  const say = (s) => { lines.push(s); out.textContent = lines.join('\n'); };
+
+  function mulberry(seed) {
+    let s = seed >>> 0;
+    return () => {
+      s |= 0; s = (s + 0x6D2B79F5) | 0;
+      let t = Math.imul(s ^ (s >>> 15), 1 | s);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  function loadGame() {
+    return new Promise((res, rej) => {
+      const f = document.createElement('iframe');
+      f.src = `../index.html?mode=single&god&log&view=classic`;
+      document.body.appendChild(f);
+      const t0 = Date.now();
+      const poll = () => {
+        const cw = f.contentWindow;
+        if (cw && cw.__app && cw.__app.state && cw.__app.state.enemies) return res(cw);
+        if (Date.now() - t0 > 30000) return rej(new Error('game did not boot'));
+        setTimeout(poll, 50);
+      };
+      poll();
+    });
+  }
+
+  const pad = (s, n) => String(s).padStart(n);
+  const f1 = (v) => (Number.isFinite(v) ? v.toFixed(1) : '-');
+  const f2 = (v) => (Number.isFinite(v) ? v.toFixed(2) : '-');
+
+  async function run() {
+    const cw = await loadGame();
+    cw.requestAnimationFrame = () => 0; // stop the live loop: the harness owns the clock
+    const C = await cw.eval(`import('${new URL('../js/const.js', location.href).href}')`);
+    const G = await cw.eval(`import('${new URL('../js/game.js', location.href).href}')`);
+    const app = cw.__app;
+    say(`flight harness  mode=${MODE} bot=${BOT} steps=${STEPS} seed=${SEED} field=${C.W}x${C.H}${q.has('slow') ? ' slow-mo' : ''}`);
+    for (const L of LEVELS) {
+      C.setRngSeed(SEED * 1000 + L);
+      cw.Math.random = mulberry((Number(q.get('fxseed')) || SEED) * 77 + L); // draw-only randomness: must not change the outcome
+      const st = new G.GameState(app, MODE === 'coop', MODE === 'daily' ? { daily: true } : undefined);
+      app.setState(st);
+      if (MODE !== 'daily') C.setRngSeed(SEED * 1000 + L); // (the daily run seeds itself)
+      st.level = L;
+      st.enemyInterval = Math.max(500, 2000 - 200 * (L - 1));
+      st.asteroidInterval = Math.max(2000, 5000 - 500 * (L - 1));
+      st.nextBossScore = Infinity;
+      let hits = 0;
+      const kp = st.killPlayer.bind(st);
+      st.killPlayer = (...a) => { hits++; return kp(...a); };
+      const seenB = new WeakSet(), seenR = new WeakSet(), seenM = new WeakSet();
+      let bullets = 0, rockets = 0, mines = 0, spawned = 0, errs = 0, nanCount = 0;
+      const track = new Map(); // enemy → record
+      const why = []; // ?why: the first few velocity jumps, with the ship's state
+      const types = {};
+      const T = (t) => (types[t] ||= { n: 0, life: 0, lifeN: 0, left: 0, died: 0, broke: 0, alive: 0, maxVy: 0, maxA: 0, maxAy: 0, sumA: 0, nA: 0, big: 0, minX: 0, minXN: 0, loops: 0, swoops: 0, wings: 0, jinks: 0 });
+      const finish = (e, r) => {
+        if (r.done) return;
+        r.done = true;
+        const t = T(r.type);
+        t.life += (r.endT ?? st.time) - r.t0; t.lifeN++;
+        t.minX += r.minX; t.minXN++;
+        if (r.dyingSeen) t.died++;
+        else if (e.x + e.w / 2 < 1) t.left++;
+        else if (e.x > C.W) t.broke++;
+        else t.died++;
+      };
+      for (let i = 0; i < STEPS; i++) {
+        // bot pilot: slide toward the lane of the nearest hostile ahead (guns auto-fire)
+        for (const p of st.players()) {
+          let tgt = null, md = Infinity;
+          for (const e of st.enemies) {
+            if (e.dead || e.dying || e.isBoss || e.x < p.x + 20) continue;
+            const d = e.x - p.x + Math.abs(e.y - p.y) * 0.5;
+            if (d < md) { md = d; tgt = e; }
+          }
+          if (BOT === 'idle') continue; // sits in its lane: most ships fly their whole route
+          if (BOT === 'sweep') { p.y = C.H / 2 + Math.sin(st.time / 2600 + p.slot) * (C.H / 2 - 70); continue; } // patrols up and down, ignoring targets
+          if (tgt) p.y += Math.max(-4.5, Math.min(4.5, tgt.y - p.y));
+        }
+        st.level = L;
+        if (q.has('slow')) st.speedMul = 0.5;
+        const sm0 = st.speedMul;
+        try { st.update(16.67); } catch (err) { if (errs++ < 3) say(`ERR L${L} step ${i}: ${err.message} ${(err.stack || '').split('\n')[1] || ''}`); }
+        const sm = sm0 * st.k; // what the ships were stepped with
+        for (const b of st.enemyBullets) if (!seenB.has(b)) { seenB.add(b); bullets++; }
+        for (const b of st.enemyRockets) if (!seenR.has(b)) { seenR.add(b); rockets++; }
+        for (const b of st.mines) if (!seenM.has(b)) { seenM.add(b); mines++; }
+        for (const e of st.enemies) {
+          if (e.isBoss) continue;
+          let r = track.get(e);
+          if (!r) {
+            const drone = e.type === 'basic' && e.w < 40;
+            r = { type: drone ? 'drone' : e.type, t0: st.time, x: e.x, y: e.y, vx: null, vy: null, minX: e.x };
+            track.set(e, r); spawned++; T(r.type).n++;
+            continue;
+          }
+          if (r.done) continue;
+          if (e.dying) { if (!r.dyingSeen) { r.dyingSeen = true; r.endT = st.time; } continue; }
+          if (!Number.isFinite(e.x) || !Number.isFinite(e.y)) nanCount++;
+          const vx = (e.x - r.x) / sm, vy = (e.y - r.y) / sm;
+          const t = T(r.type);
+          if (r.vx != null && !e.dead) {
+            const a = Math.hypot(vx - r.vx, vy - r.vy), ay = Math.abs(vy - r.vy);
+            if (a > t.maxA) t.maxA = a;
+            if (ay > t.maxAy) t.maxAy = ay;
+            if (a > 1.2) { t.big++; if (q.has('why') && why.length < 40) why.push(`  L${L} ${r.type} a=${a.toFixed(2)} ai=${e.ai} wing=${!!e.leader} age=${(e.age || 0).toFixed(0)} boost=${e.boosting} v=(${r.vx.toFixed(2)},${r.vy.toFixed(2)})>(${vx.toFixed(2)},${vy.toFixed(2)}) x=${e.x.toFixed(0)} y=${e.y.toFixed(0)} warp=${e.warpUntil > st.time} sm=${sm0}`); }
+            t.sumA += a; t.nA++;
+          }
+          if (Math.abs(vy) > t.maxVy) t.maxVy = Math.abs(vy);
+          r.vx = vx; r.vy = vy; r.x = e.x; r.y = e.y;
+          if (q.has('trace')) (r.path ||= []).push(e.x, e.y);
+          if (e.x < r.minX) r.minX = e.x;
+          if (e.ai === 'loop' && !r.loop) { r.loop = true; t.loops++; }
+          if (e.swoop && !r.swoop) { r.swoop = true; t.swoops++; }
+          if (e.leader && !r.wing) { r.wing = true; t.wings++; }
+          if (e.jinkUntil && e.jinkUntil !== r.jink) { r.jink = e.jinkUntil; t.jinks++; }
+        }
+        for (const [e, r] of track) if (e.dead && !r.done) finish(e, r);
+      }
+      for (const [, r] of track) if (!r.done) T(r.type).alive++;
+      for (const w of why) say(w);
+      if (q.has('trace')) {
+        const cv = document.getElementById('trace'), g = cv.getContext('2d');
+        const sc = 1280 / C.W;
+        cv.width = 1280; cv.height = Math.round(C.H * sc); cv.style.display = 'block';
+        g.fillStyle = '#05070c'; g.fillRect(0, 0, cv.width, cv.height);
+        const COL = { basic: '#9fb4c8', drone: '#667788', weaver: '#3fe0c0', hunter: '#ff5050', tank: '#c080ff', sniper: '#7088ff', carrier: '#ffaa40', shieldbearer: '#60e0ff', strafer: '#ff5080', brood: '#a0dc40' };
+        g.lineWidth = 1; g.globalAlpha = 0.75;
+        for (const [, r] of track) {
+          if (!r.path) continue;
+          g.strokeStyle = COL[r.type] || '#fff';
+          g.beginPath();
+          for (let j = 0; j < r.path.length; j += 2) g[j ? 'lineTo' : 'moveTo'](r.path[j] * sc, r.path[j + 1] * sc);
+          g.stroke();
+        }
+      }
+      say('');
+      say(`LEVEL ${L}  spawned=${spawned}  enemyBullets=${bullets} rockets=${rockets} mines=${mines}  playerHits=${hits}  score=${st.score}  errors=${errs} nan=${nanCount}`);
+      say(`${pad('type', 13)}${pad('n', 5)}${pad('life s', 8)}${pad('left', 6)}${pad('died', 6)}${pad('broke', 6)}${pad('alive', 6)}${pad('max|vy|', 9)}${pad('maxAcc', 8)}${pad('maxAccY', 8)}${pad('meanAcc', 8)}${pad('jumps>1.2', 10)}${pad('minX', 7)}${pad('loops', 6)}${pad('swoop', 6)}${pad('wing', 5)}${pad('jink', 5)}`);
+      for (const k of Object.keys(types).sort()) {
+        const t = types[k];
+        say(`${pad(k, 13)}${pad(t.n, 5)}${pad(f1(t.life / t.lifeN / 1000), 8)}${pad(t.left, 6)}${pad(t.died, 6)}${pad(t.broke, 6)}${pad(t.alive, 6)}${pad(f2(t.maxVy), 9)}${pad(f2(t.maxA), 8)}${pad(f2(t.maxAy), 8)}${pad(f2(t.sumA / t.nA), 8)}${pad(t.big, 10)}${pad(f1(t.minX / t.minXN), 7)}${pad(t.loops, 6)}${pad(t.swoops, 6)}${pad(t.wings, 5)}${pad(t.jinks, 5)}`);
+      }
+    }
+    say('');
+    say('DONE');
+  }
+  run().catch((e) => say(`ERR harness: ${e.message}`));
+</script>
+</body>
+</html>

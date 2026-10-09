@@ -1268,6 +1268,7 @@ void main(){
 //  * solids resolve their own occlusion in a far-end sliver of the depth buffer (gl_FragDepth
 //    0.9995 … 0.99982: behind any gameplay nearer than ~10 000 units, in front of the far hulls).
 
+const FLOOR_WRAP = [13248, 163840, 40960, 28800, 22400], FLOOR_FAR = [6500, 9000, 1, 17000, 19000];   // per floor mode: a period of all its noise lookups; fade distance
 const BOW_END = 1340;   // where the catapult shuttle stops on the carrier's bow (object space)
 const SET_SPAN = 12000, SET_X0 = -3000, SET_K = 2.0;
 
@@ -1398,9 +1399,9 @@ void main(){
       float spk=step(.9,hash2(floor(vec2(vO.x/7.,vO.z/3.))+floor(uTime*40.)*7.))*behind*step(sx,-10.)*(1.-smoothstep(30.,70.,cz))*step(26.,cz);
       em+=vec3(1.4,.75,.25)*(spk*fire*2.5);
     } else if(part<4.5){             // mouth: a pressure curtain — faint hexagons, bright when something crosses it
-      vec2 hp=vec2(vO.z,vO.y)/46.; hp.x+=.5*floor(hp.y);
-      vec2 hf=abs(fract(hp)-.5);
-      float cellE=smoothstep(.38,.5,max(hf.x,hf.y));
+      const vec2 HS=vec2(1.,1.7320508);
+      vec2 hp=vec2(vO.z,vO.y)/58., ha=mod(hp,HS)-HS*.5, hb=mod(hp-HS*.5,HS)-HS*.5, hg=abs(dot(ha,ha)<dot(hb,hb)?ha:hb);
+      float cellE=smoothstep(.43,.5,max(hg.x,dot(hg,HS*.5)));
       float hx=n3(vec3(vO.z/90.,vO.y/90.,uTime*.6));
       em=vec3(.1,.34,.8)*((.03+.16*hx*hx)*(1.+9.*uBay.w)+cellE*(.012+.1*hx*hx));
       a*=.12+.3*uBay.w;
@@ -1486,8 +1487,8 @@ void main(){
   vec3 toC=normalize(c-cameraPosition);
   vec3 r=normalize(cross(vec3(0.,1.,0.),toC)+vec3(0.,0.,1e-3)), u=cross(toC,r);
   vL=vec3(dot(uSunDir,r),dot(uSunDir,u),-dot(uSunDir,toC));
-  if(mode<.5){
-    float ang=seed*6.283, cs=cos(ang), sn=sin(ang);
+  if(mode<.5||mode>2.5){        // puff; a cumulus tower (3) stays upright
+    float ang=mode>2.5?(seed-.5)*.5:seed*6.283, cs=cos(ang), sn=sin(ang);
     vec3 r2=r*cs+u*sn; u=(u*cs-r*sn)*aA.w*aB.w; r=r2*aA.w;
     vL.xy=vec2(vL.x*cs+vL.y*sn,vL.y*cs-vL.x*sn);
   } else if(mode<1.5){
@@ -1524,26 +1525,27 @@ void main(){
   float r2=dot(vUv,vUv);
   float vis=vOp*(1.-.5*uEclipse)*(1.-smoothstep(-30.,30.,vW.y)*max(uSG.z,hard));
   vec3 col=vec3(0.); float a=0.;
-  if(mode<.5){
+  if(mode<.5||mode>2.5){
+    float cum=step(2.5,mode);
     if(r2>1.) discard;
     float base=1.-r2;
     vec3 q=vec3(vUv*1.25,seed*13.)+vec3(seed*31.,seed*17.,uTime*.012);
     vec4 w=n4(q*.8+3.);
     q.xy+=(w.gb-.5)*.9;                                        // billow: the disc must not show
     float f=n3(q)*.55+n3(q*2.3+4.)*.29+n3(q*5.3+9.)*.16;
-    float dens=smoothstep(.16,.5,base*(.1+1.5*f)*(.45+w.r));
+    float dens=cum>.5?smoothstep(0.,.22,base*1.35-(1.-f)*1.15-(1.-w.r)*.35):smoothstep(.16,.5,base*(.1+1.5*f)*(.45+w.r));   // cumulus: a hard, billowed edge
     float lit=.5+.5*dot(normalize(vec3(vUv*.9+(w.gb-.5)*.8,sqrt(max(1.-r2,0.))+.25)),vL);
     lit*=mix(1.,.3+.7*lit,dens);                               // thick parts shade themselves
     float sc=pow(max(dot(rd,uSunDir),0.),6.);
     vec3 cc=mix(uCA,uCB,smoothstep(.3,.7,w.a));
-    vec3 c=cc*((.1+1.5*lit*lit+.4*(1.-dens))*(.55+.9*f)*uSP.z)+mix(cc,uSunCol,.4)*(sc*(1.-dens*.7)*.35);
+    vec3 c=cc*((.1+.1*cum+1.5*lit*lit+.4*(1.-dens)*(1.-cum))*(.55+.9*f)*uSP.z)+mix(cc,uSunCol,.4)*(sc*(1.-dens*.7)*.35);
     float tt=uTime*.55+seed*17., cell=floor(tt), ft=tt-cell;
     float h=fract(sin(cell*12.9898+seed*78.233)*43758.5453);
     float fl=step(1.-uSP.x,h)*exp(-ft*6.)*(.55+.45*sin(ft*70.));
     vec2 lc=(vec2(fract(h*7.3),fract(h*3.1))-.5)*.9;
-    c+=vec3(.42,.6,1.15)*(fl*exp(-dot(vUv-lc,vUv-lc)*4.)*(.3+1.4*f)*uSP.y);
+    c+=vec3(.42,.6,1.15)*(fl*exp(-dot(vUv-lc,vUv-lc)*(4.+8.*cum))*(.3+1.4*f)*uSP.y*(1.-.5*cum));
     a=dens*vis*smoothstep(240.,1300.,dC)*(1.-.94*fm)*(1.-.85*uSG.z);
-    col=c*a; a*=uSP.w;
+    col=c*a; a*=mix(uSP.w,1.,cum);
   } else if(mode<1.5){
     float al=clamp(vUv.y*.5+.5,0.,1.);
     float sx=n3(vec3(vUv.x*3.+seed*9.,seed*5.,uTime*.02+al*.7));
@@ -1607,13 +1609,24 @@ ${G_NOISE}${G_MASK}
 varying vec3 vW;
 uniform vec4 uFP;               // scroll, mode, opacity, far fade
 uniform vec4 uFQ;               // ring centre x, z, seed, -
-uniform vec3 uFC,uFC2,uSunDir,uSunCol;
+uniform vec3 uFC,uFC2,uFL,uSunDir,uSunCol;
 uniform float uTime,uEclipse;
+// lunar relief: rolling ground plus two sizes of crater (bowl, raised rim), all periodic with the noise texture
+float moonH(vec2 p,float sd){
+  float h=n3(vec3(p,sd))*.5+n3(vec3(p*2.,sd+3.))*.3+n3(vec3(p*4.,sd+5.))*.2;
+  for(int i=0;i<3;i++){
+    float sc=i==0?1.:i==1?3.:7.; vec2 g=p*sc, c=floor(g);
+    vec4 r=texture(uNoise,vec3(c+.5,5.5+float(i)*7.)*.03125);
+    float rad=.06+r.z*r.z*.12, d=length(g-c-.3-r.xy*.4)/rad;     // the whole crater, rim included, stays inside its cell
+    h+=((smoothstep(0.,1.,d)-1.)*.5*step(d,1.)+exp(-(d-1.)*(d-1.)*22.)*.2*(1.-smoothstep(1.2,1.6,d)))*rad*step(.5,r.w)*2.6/sc;
+  }
+  return h;
+}
 void main(){
   vec3 rd=vW-uCam; float dist=length(rd); vec3 v=rd/dist;
   float fm=fieldMask(uCam,v);
   float graze=smoothstep(.003,.05,abs(v.y));
-  float fade=exp(-dist/uFP.w)*smoothstep(60.,300.,dist)*(1.-smoothstep(13000.,18000.,dist))*graze*uFP.z;
+  float fade=(uFP.y>2.5?1.:exp(-dist/uFP.w))*smoothstep(60.,300.,dist)*(1.-smoothstep(uFP.y>2.5?uFP.w*.7:13000.,uFP.y>2.5?uFP.w:18000.,dist))*graze*uFP.z;
   vec3 col; float a;
   if(uFP.y<.5){
     float rho=length(vW.xz-uFQ.xy), sd=uFQ.z;
@@ -1629,7 +1642,7 @@ void main(){
     col=mix(uFC,uFC2,b2)*(dens*grain*ph)+uSunCol*(pow(g2,9.)*l2*dens*.3*ph);
     a=dens*(.35+.5*grain)*fade;
     col*=fade*(1.-(.68+.2*uFQ.w)*fm)*(1.-.5*uEclipse); a*=.7*(1.-.5*fm);
-  } else {
+  } else if(uFP.y<1.5){
     vec2 p=vW.xz+vec2(uFP.x,0.);
     float t=uTime*.03;
     vec4 w=n4(vec3(p/2560.,t));
@@ -1641,6 +1654,67 @@ void main(){
     hot*=.5+.65*w.r;
     col=mix(hot,uFC,.25*(1.-cell))*fade*(1.-(.87+.07*uFQ.w)*fm);
     a=fade*.93;
+    } else if(uFP.y<2.5){
+    // low orbit: a world under the lane. The quad is only a window — the planet is a ray-traced sphere whose top touches
+    // it, so the limb curves, the atmosphere is seen edge-on above it, and the terminator lies where uFL puts it
+    const float RP=24000.;
+    vec3 pc=vec3(uCam.x,vW.y-RP,0.), oc=uCam-pc;
+    float bq=dot(oc,v), hq=bq*bq-(dot(oc,oc)-RP*RP);
+    vec3 atm=mix(uFC2,vec3(.25,.5,1.),.6);
+    float sunA=pow(max(dot(v,uSunDir),0.),12.), k=uFP.z*(1.-.4*uEclipse);
+    if(hq<0.||bq>0.){
+      float miss=sqrt(max(dot(oc,oc)-bq*bq,0.))-RP;
+      float g=exp(-max(miss,0.)/170.)*step(bq,0.);
+      col=(atm*(.3+.5*max(dot(normalize(uCam+v*(-bq)-pc),uFL)+.15,0.))+uSunCol*(sunA*1.6))*(g*k*(1.-.8*fm));
+      a=g*.4*k;
+    } else {
+      vec3 P=uCam+v*(-bq-sqrt(hq)), N=(P-pc)/RP;
+      vec2 p=(P.xz+vec2(uFP.x,0.))/1280.; float sd=uFQ.z;
+      vec4 w=n4(vec3(p,sd));
+      float land=n3(vec3(p*2.+(w.gb-.5)*1.2,sd+3.))*.58+n3(vec3(p*4.,sd+7.))*.28+n3(vec3(p*8.,sd+11.))*.14;
+      float isL=smoothstep(.5,.535,land);
+      vec3 alb=mix(uFC*(.7+.6*w.r),mix(uFC2,vec3(.32,.27,.2),smoothstep(.56,.74,land))*(.7+.6*n3(vec3(p*16.,sd))),isL);
+      vec2 cp=p*2.+vec2(uTime*.003,uTime*.001);
+      float cl=smoothstep(.48,.72,n3(vec3(cp+(w.ar-.5)*1.6,sd+20.))*.5+n3(vec3(cp*4.+(w.gb-.5)*2.,sd+23.))*.28+n3(vec3(cp*8.,sd+25.))*.14+n3(vec3(cp*16.,sd+27.))*.08);
+      float ndl=dot(N,uFL), day=smoothstep(-.05,.16,ndl);
+      float fres=pow(1.-max(dot(N,-v),0.),3.);
+      vec3 lit=mix(alb,vec3(.75,.78,.8),cl*.85)*(uSunCol*.55+.45)*(day*(.3+2.2*max(ndl,0.)));
+      lit+=uSunCol*(pow(max(dot(reflect(v,N),uFL),0.),30.)*(1.-isL)*(1.-cl)*.35*day);
+      vec3 night;
+      if(uFQ.y>.5){ float rdg=1.-abs(2.*n3(vec3(p*8.+(w.gb-.5),sd+31.))-1.); night=vec3(1.2,.3,.05)*(pow(rdg,9.)*smoothstep(.3,.6,land)*.9); }
+      else night=vec3(1.,.72,.38)*(pow(n3(vec3(p*32.,sd+41.)),5.)*smoothstep(.5,.7,n3(vec3(p*8.,sd+43.)))*isL*(1.-cl)*2.2);
+      col=lit+night*(1.-day*(uFQ.y>.5?.6:1.))+atm*(fres*(.2+.8*day))+uSunCol*(sunA*fres*1.5);
+      col*=k*(1.-(.62+.26*uFQ.w)*fm); a=uFP.z;
+    }
+  } else if(uFP.y<3.5){
+    // cloud tops of a gas giant: a rolling deck, lit low from the sun's side, banded, flickering from inside
+    vec2 p=(vW.xz+vec2(uFP.x,0.))/900.; float sd=uFQ.z;
+    vec4 w=n4(vec3(p,sd));
+    vec2 q=p*2.+(w.gb-.5)*1.3;
+    float hA=n3(vec3(q,uTime*.02))*.55+n3(vec3(q*2.,3.+uTime*.03))*.3, h=hA+n3(vec3(q*4.,7.))*.15;
+    vec2 qs=q+normalize(uSunDir.xz+vec2(1e-3,0.))*.16;
+    float relief=clamp((hA-n3(vec3(qs,uTime*.02))*.55-n3(vec3(qs*2.,3.+uTime*.03))*.3)*4.5,-1.,1.);
+    float band=n3(vec3(vW.z/2600.+w.r*.5,sd,5.5));
+    vec3 base=mix(uFC,uFC2,smoothstep(.3,.7,band))*(.3+.3*smoothstep(.2,.55,h)+.5*h);
+    col=base*(1.+.9*relief)+uSunCol*(max(relief,0.)*h*.2);
+    vec2 lp=p*.5, lc=fract(lp)-.5; float lt=floor(uTime*1.3), lf=uTime*1.3-lt;
+    float lh=fract(sin(dot(floor(lp)+lt*.37,vec2(12.9898,78.233)))*43758.5453);
+    col+=vec3(.5,.66,1.2)*(step(.9,lh)*exp(-lf*5.)*(.6+.4*sin(lf*60.))*exp(-dot(lc,lc)*13.)*(.3+h)*1.1);
+    float hzF=1.-exp(-dist/11000.);
+    col=mix(col,mix(uFC,uFC2,.5)*.55+uSunCol*(.05*pow(max(dot(v,uSunDir),0.),4.)),hzF);
+    col*=fade*(1.-(.72+.17*uFQ.w)*fm)*(1.-.5*uEclipse); a=fade;
+  } else {
+    // a moon close below: craters and ridges under a low sun — every slope that faces away is in shadow
+    vec2 p=(vW.xz+vec2(uFP.x,0.))/700.; float sd=uFQ.z;
+    float e=.025, h0=moonH(p,sd);
+    vec2 g=vec2(moonH(p+vec2(e,0.),sd)-h0,moonH(p+vec2(0.,e),sd)-h0)/e;
+    vec2 l=normalize(uSunDir.xz+vec2(1e-3,0.));
+    float lod=1.-smoothstep(.12,.7,fwidth(p.x)+fwidth(p.y));   // far away the relief would only shimmer
+    float sh=mix(.5,clamp(.5-dot(g,l)*1.7,.03,1.5),lod*(1.-.65*fm*uFQ.w));   // top / tilt: under the field the relief flattens out
+    float alb=(.55+.45*n3(vec3(p*8.,sd+9.)))*(1.-.3*smoothstep(.45,.6,n3(vec3(p,sd+13.))))*(.85+.3*n3(vec3(p*32.,2.)));
+    col=uFC*(alb*sh)*(uSunCol*.6+.4);
+    col=mix(col,uFC*.25,1.-exp(-dist/15000.));
+    col*=fade*(1.-(.7+.24*uFQ.w)*fm)*(1.-.5*uEclipse); a=fade;
   }
   gl_FragColor=vec4(col,a);
   ${G_END}
@@ -1681,14 +1755,14 @@ const THEME_BIAS = {
 // set pieces per sector theme: the first entry is the theme's signature (levels 1–8), the next
 // ones take over each time the theme comes round again; two names share the track
 const SET_THEMES = {
-  nebula: [['nebula'], ['nebula', 'wreck'], ['ring', 'nebula'], ['ice']],
-  void: [['wreck'], ['belt'], ['yard'], ['wreck', 'belt']],
-  ember: [['solar'], ['belt'], ['solar', 'wreck']],
-  ion: [['yard'], ['nebula'], ['ice', 'nebula'], ['yard', 'nebula']],
-  verdant: [['ring'], ['yard'], ['belt'], ['ring', 'yard']],
-  crimson: [['wreck', 'nebula'], ['solar'], ['belt'], ['wreck']],
-  amber: [['belt'], ['ring'], ['yard'], ['belt', 'wreck']],
-  frost: [['ice'], ['ring'], ['ice', 'nebula'], ['ring', 'ice']],
+  nebula: [['nebula'], ['lowOrbit'], ['nebula', 'wreck'], ['atmosphere'], ['ring', 'nebula'], ['ice']],
+  void: [['wreck'], ['moonSurface'], ['belt'], ['lowOrbit'], ['yard'], ['wreck', 'belt']],
+  ember: [['solar'], ['lowOrbit'], ['belt'], ['moonSurface'], ['solar', 'wreck']],
+  ion: [['yard'], ['atmosphere'], ['nebula'], ['lowOrbit'], ['ice', 'nebula'], ['yard', 'nebula']],
+  verdant: [['lowOrbit'], ['ring'], ['yard'], ['atmosphere'], ['belt'], ['ring', 'yard']],
+  crimson: [['atmosphere'], ['wreck', 'nebula'], ['solar'], ['moonSurface'], ['belt'], ['wreck']],
+  amber: [['moonSurface'], ['belt'], ['atmosphere'], ['ring'], ['yard'], ['belt', 'wreck']],
+  frost: [['ice'], ['moonSurface'], ['lowOrbit'], ['ring'], ['ice', 'nebula'], ['ring', 'ice']],
 };
 const DEFAULT_THEME = { name: 'nebula', hue: 268, hueJit: 40, sat: 46, smudge: 6, smudgeA: 1.5, stars: 700, starBright: 1.0 };
 
@@ -2354,7 +2428,15 @@ export class Env3D {
       k(6, HM); B(sgn * 0.665, sgn * 1.0, 0.1, 0.116, -0.01, 0.01); B(sgn * 0.62, sgn * 0.67, 0.0, 0.116, -0.01, 0.01);
       k(4, H1); B(sgn * 0.72, sgn * 0.985, 0.117, 0.121, 0.022, 0.2); B(sgn * 0.72, sgn * 0.985, 0.117, 0.121, -0.2, -0.022);
     }
-    const NS = this.NS = 24;
+    /* ---- 7: fighter — a dart: fuselage, cranked delta, twin fins, one engine (escorts and dogfights) ---- */
+    M = 7;
+    k(0, H1); B(-0.4, 0.5, -0.05, 0.04, -0.07, 0.07, 0.25, 0.2);
+    k(0, HM); S(-0.42, 0.05, -0.02, 0.0, 0.06, 0.4, 0.3, 0.12, 0, -0.2);
+    k(0, RED); S(-0.36, -0.24, 0.001, 0.008, 0.12, 0.3, 1, 0.6, 0, -0.05);
+    k(0, H2); S(-0.44, -0.24, 0.03, 0.17, 0.075, 0.085, 0.3, 1, 0.03, 0.06);
+    k(1, H1); B(0.08, 0.3, 0.04, 0.075, -0.035, 0.035, 0.5, 0.5);
+    engine(-0.4, -0.005, 0, 0.06, 0.3);
+    const NS = this.NS = 30;
     const mkKit = (posA, norA, mdlA, colA, n) => {
       const g = new THREE.InstancedBufferGeometry();
       g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(posA), 3));
@@ -2370,7 +2452,7 @@ export class Env3D {
     };
     this.shipU = {
       uNoise: U.uNoise, uCam: U.uCam, uField: U.uField, uEclipse: U.uEclipse, uSunCol: U.uSunCol, uTime: U.uTime,
-      uKey: { value: new THREE.Vector3(0, 1, 0) }, uAmb2: { value: new THREE.Color(0.05, 0.06, 0.085) },
+      uKey: { value: new THREE.Vector3(0, 1, 0) }, uAmb2: { value: new THREE.Color(0.085, 0.1, 0.14) },
       uDR: { value: new THREE.Vector2(100, 20000) }, uOcc: { value: new THREE.Vector4(0, 0, 0, 0) },
     };
     const depth = this.opts.shipDepth;
@@ -3058,23 +3140,24 @@ export class Env3D {
       },
     });
     /* --- fleet engagement / skirmish --- */
-    const SN = 12, sp = new Float32Array(SN * 3), sv = new Float32Array(SN * 3), sa = new Float32Array(SN * 6); // sa: alive, fire timer, scale, model, turn, seed
-    const SHN = 10, sh = new Float32Array(SHN * 4); // from, to, t, on
+    const SN = 20, sp = new Float32Array(SN * 3), sv = new Float32Array(SN * 3), sa = new Float32Array(SN * 6); // sa: alive, fire timer, scale, model, turn, seed
+    const SHN = 16, sh = new Float32Array(SHN * 4); // from, to, t, on
     const BN = 6, bm = new Float32Array(BN * 5);    // x, y, z, t, size
     const fleet = { n: 0, skirm: false, free: true };
     const fleetStart = (skirm) => {
       fleet.free = this._place(C, 5200, 8000);
       A.copy(C).sub(cam).normalize();
       B.set(-A.z, 0, A.x).normalize();                // across the line of sight
-      fleet.skirm = skirm; fleet.n = skirm ? 5 : 11;
+      fleet.skirm = skirm; fleet.big = skirm ? 5 : 11; fleet.n = fleet.big + (skirm ? 6 : 8);   // capital ships and frigates, then their fighter screens
       for (let i = 0; i < fleet.n; i++) {
-        const side = i & 1, s = side ? 1 : -1, cap = !skirm && i === 0, k = i * 3, q = i * 6;
+        const side = i & 1, s = side ? 1 : -1, cap = !skirm && i === 0, k = i * 3, q = i * 6, ftr = i >= fleet.big;
         const off = (skirm ? 380 : 850) + (R() - 0.5) * 500;
         sp[k] = C.x + B.x * s * off + A.x * (R() - 0.5) * 900; sp[k + 1] = C.y + (R() - 0.5) * 380; sp[k + 2] = C.z + B.z * s * off + A.z * (R() - 0.5) * 900;
-        const v = cap ? 22 : skirm ? 120 + R() * 60 : 45 + R() * 40;
+        const v = ftr ? 210 + R() * 120 : cap ? 22 : skirm ? 120 + R() * 60 : 45 + R() * 40;
         sv[k] = -B.x * s * v + A.x * (R() - 0.5) * 20; sv[k + 1] = (R() - 0.5) * 8; sv[k + 2] = -B.z * s * v + A.z * (R() - 0.5) * 20;
         sa[q] = 1; sa[q + 1] = 0.6 + R() * 2; sa[q + 2] = cap ? 640 : !skirm && i === 1 ? 380 : skirm ? 120 + R() * 60 : 160 + R() * 100; sa[q + 3] = cap ? 2 : side ? 6 : 1;   // blue frigates + their flagship against bronze raiders
         sa[q + 4] = skirm ? (R() - 0.5) * 0.7 : 0; sa[q + 5] = R() * 9;
+        if (ftr) { sa[q + 2] = 55 + R() * 30; sa[q + 3] = 7; sa[q + 4] = 0; }
       }
       sh.fill(0); for (let i = 0; i < BN; i++) bm[i * 5 + 3] = -1;
       return true;
@@ -3083,18 +3166,27 @@ export class Env3D {
       const f = envl(e.t, e.dur, 1.5, 2.5), n = fleet.n, live = e.t < e.dur - 2.5;
       for (let i = 0; i < n; i++) {
         const k = i * 3, q = i * 6;
-        if (sa[q + 4]) { const a = sa[q + 4] * dt, cs = Math.cos(a), sn = Math.sin(a), vx = sv[k], vz = sv[k + 2]; sv[k] = vx * cs - vz * sn; sv[k + 2] = vx * sn + vz * cs; }
+        const ftr = sa[q + 3] === 7, turn = ftr ? Math.sin(e.t * (0.5 + (sa[q + 5] % 1) * 0.5) + sa[q + 5]) * 0.75 : sa[q + 4];   // fighters weave
+        if (turn) { const a = turn * dt, cs = Math.cos(a), sn = Math.sin(a), vx = sv[k], vz = sv[k + 2]; sv[k] = vx * cs - vz * sn; sv[k + 2] = vx * sn + vz * cs; }
         sp[k] += sv[k] * dt; sp[k + 1] += sv[k + 1] * dt; sp[k + 2] += sv[k + 2] * dt;
         if (sa[q] <= 0) continue;
         const h = yaw(sv[k], sv[k + 2]), s = sa[q + 2];
-        this._inst(sa[q + 3], sp[k], sp[k + 1], sp[k + 2], 0, Math.sin(h), 0, Math.cos(h), s, s, s, f * sa[q], sa[q + 5], 1, i & 1);
+        // banking into the turn: yaw, then roll about the ship's own axis
+        const rl = -turn * (ftr ? 0.55 : 0.4), sy = Math.sin(h), cy = Math.cos(h), sx = Math.sin(rl), cx = Math.cos(rl);
+        this._inst(sa[q + 3], sp[k], sp[k + 1], sp[k + 2], cy * sx, sy * cx, -sy * sx, cy * cx, s, s, s, f * sa[q], sa[q + 5], 1, i & 1);
+        if (!ftr) {   // running lights: a strobe on the spine, red / green at the beam ends
+          const vl2 = 1 / (Math.hypot(sv[k], sv[k + 2]) || 1), fx = sv[k] * vl2, fz = sv[k + 2] * vl2, g2 = f * sa[q], st = (e.t * 0.8 + sa[q + 5]) % 1 < 0.07 ? g2 : 0;
+          this._blip(sp[k] + fx * s * 0.1, sp[k + 1] + s * 0.09, sp[k + 2] + fz * s * 0.1, 0, 0, 0, 2.6 * st, 2.6 * st, 3 * st, s * 0.035, 0, 0);
+          this._blip(sp[k] - fz * s * 0.2, sp[k + 1], sp[k + 2] + fx * s * 0.2, 0, 0, 0, 1.6 * g2, 0.2 * g2, 0.15 * g2, s * 0.022, 0, 0);
+          this._blip(sp[k] + fz * s * 0.2, sp[k + 1], sp[k + 2] - fx * s * 0.2, 0, 0, 0, 0.2 * g2, 1.5 * g2, 0.4 * g2, s * 0.022, 0, 0);
+        }
         { const vl = s * 0.56 / (Math.hypot(sv[k], sv[k + 2]) || 1), g = f * sa[q] * (0.8 + 0.2 * Math.sin(e.t * 9 + i));   // engine glow
           if (i & 1) this._blip(sp[k] - sv[k] * vl, sp[k + 1], sp[k + 2] - sv[k + 2] * vl, 0, 0, 0, 2.6 * g, 0.9 * g, 0.25 * g, s * 0.14, 4, 0);
           else this._blip(sp[k] - sv[k] * vl, sp[k + 1], sp[k + 2] - sv[k + 2] * vl, 0, 0, 0, 0.5 * g, 1.2 * g, 2.8 * g, s * 0.14, 4, 0); }
         if (!live) continue;
         sa[q + 1] -= dt;
         if (sa[q + 1] <= 0) {
-          sa[q + 1] = (fleet.skirm ? 0.35 : 0.6) + R() * 1.5;
+          sa[q + 1] = (ftr ? 0.25 : fleet.skirm ? 0.35 : 0.6) + R() * 1.5;
           let tg = -1;
           for (let tr = 0; tr < 6 && tg < 0; tr++) { const j = (R() * n) | 0; if ((j & 1) !== (i & 1) && sa[j * 6] > 0) tg = j; }
           if (tg >= 0) for (let s2 = 0; s2 < SHN; s2++) if (!sh[s2 * 4 + 3]) { sh[s2 * 4] = i; sh[s2 * 4 + 1] = tg; sh[s2 * 4 + 2] = 0; sh[s2 * 4 + 3] = 1; break; }
@@ -3108,6 +3200,10 @@ export class Env3D {
         let dx = sp[a] - sp[b], dy = sp[a + 1] - sp[b + 1], dz = sp[a + 2] - sp[b + 2]; const l = 190 / (Math.hypot(dx, dy, dz) || 1);
         const side = sh[o] & 1;
         this._blip(x, y, z, dx * l, dy * l, dz * l, (side ? 2.6 : 0.5) * f, (side ? 0.5 : 2.6) * f, (side ? 2.8 : 1.0) * f, 9, 1, 0);
+        for (let b2 = 1; b2 < 3; b2++) {   // a burst, not a single bolt
+          const u2 = u - b2 * 0.16; if (u2 <= 0) break;
+          this._blip(sp[a] + (sp[b] - sp[a]) * u2, sp[a + 1] + (sp[b + 1] - sp[a + 1]) * u2, sp[a + 2] + (sp[b + 2] - sp[a + 2]) * u2, dx * l * 0.7, dy * l * 0.7, dz * l * 0.7, (side ? 2.0 : 0.4) * f, (side ? 0.4 : 2.0) * f, (side ? 2.2 : 0.8) * f, 7, 1, 0);
+        }
         if (u >= 1) {
           sh[o + 3] = 0;
           const tq = sh[o + 1] * 6, big = sa[tq + 3] === 2;
@@ -3952,7 +4048,7 @@ export class Env3D {
     // ---- floor ----
     const fU = {
       uNoise: U.uNoise, uCam: U.uCam, uField: U.uField, uTime: U.uTime, uEclipse: U.uEclipse, uSunDir: U.uSunDir, uSunCol: U.uSunCol,
-      uFP: { value: V4(0, 0, 0, 6500) }, uFQ: { value: V4(0, 30000, 1, 0) }, uFC: { value: new THREE.Color() }, uFC2: { value: new THREE.Color() },
+      uFP: { value: V4(0, 0, 0, 6500) }, uFQ: { value: V4(0, 30000, 1, 0) }, uFC: { value: new THREE.Color() }, uFC2: { value: new THREE.Color() }, uFL: { value: new THREE.Vector3(0, 1, 0) },
     };
     const floor = this._mesh(this._geo(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2)), this._mat({ uniforms: fU, vs: WORLD_VS, fs: FLOOR_FS, side: THREE.DoubleSide, premult: true }), RO.floor);
     floor.scale.set(36000, 1, 36000);
@@ -3963,7 +4059,7 @@ export class Env3D {
       dens: 1, top: 0, lg: 1, init: false, floorOn: false, floorMode: 0, floorY: -205, moteK: null, hazeD: 5200, lava: 0, ltn: 0.14,
       forced: this.opts.sets || null,
     };
-    this.setNames = ['wreck', 'yard', 'belt', 'ice', 'nebula', 'ring', 'solar'];
+    this.setNames = ['wreck', 'yard', 'belt', 'ice', 'nebula', 'ring', 'solar', 'lowOrbit', 'atmosphere', 'moonSurface'];
 
     // ---- layout recipes. Lanes: 0 over the field, 1 under it, 2 / 3 beside it (r = bounding radius) ----
     const pt = { y: 0, z: 0 };
@@ -3993,9 +4089,47 @@ export class Env3D {
       dust: { a: [0.5, 0.55, 0.66], b: [0.55, 0.55, 0.6], bright: 0.32, dens: 0.45, flick: 0.2 },
       ember: { a: [1.0, 0.33, 0.06], b: [1.0, 0.58, 0.2], bright: 0.5, dens: 1, flick: 0.8 },
       glitter: { a: [0.6, 0.8, 1.0], b: [0.85, 0.9, 1.0], bright: 0.5, dens: 0.9, flick: 0.85 },
+      wisp: { a: [0.7, 0.74, 0.82], b: [0.8, 0.72, 0.66], bright: 0.34, dens: 1, flick: 0.15, len: 3 },
     };
     const tumble = (Rn, k) => (Rn() - 0.5) * k;
     this._lay = {
+      // low orbit: a world fills the view under the lane (FLOOR_FS mode 2); a few dead satellites drift at this height
+      lowOrbit: (Rn, hh, amt) => {
+        S.floorOn = true; S.floorMode = 2; S.floorY = -1500;
+        fU.uFQ.value.set(Rn() < 0.5 ? 1 : -1, S.lava > 0 ? 1 : 0, Rn() * 23, 0);
+        for (let i = 0, n = (7 * amt) | 0; i < n; i++) { const q = 30 + Rn() * 70; lane(Rn, hh, any(Rn), q * Math.max(hullB.rad, hullC.rad)); put(i % 2 ? hullB : hullC, Rn() * SET_SPAN, pt.y, pt.z, q, tumble(Rn, 0.2), 0, Rn(), Rn()); }
+        S.moteK = S.moteK || MOTES.dust;
+      },
+      // skimming a gas giant: the cloud deck rolls by below, anvil towers stand beside the lane (never over it), wisps tear past
+      atmosphere: (Rn, hh, amt) => {
+        S.floorOn = true; S.floorMode = 3; S.floorY = -430;
+        fU.uFQ.value.set(0, 0, Rn() * 23, 0);
+        for (let i = 0, n = Math.round(7 * amt); i < n; i++) {
+          const q = 420 + Rn() * 260, sg = i % 2 ? 1 : -1, x = (i * SET_SPAN) / n + Rn() * 700, z = sg * (hh + 200 + q * 1.4 + Rn() * 1100), sd = Rn();
+          const rk = i < 2 ? 0 : Rn();
+          sprite(x, S.floorY + q * 0.5, z, q, sd, rk, 3, 0.9);
+          sprite(x + 60, S.floorY + q * 1.4, z + sg * 40, q * 0.8, (sd + 0.31) % 1, rk, 3, 1.05);
+          sprite(x - 120, S.floorY + q * 2.2, z + sg * 120, q * 1.3, (sd + 0.57) % 1, rk, 3, 0.42);   // the anvil
+        }
+        for (let i = 0, n = (5 * amt) | 0; i < n; i++) sprite(Rn() * SET_SPAN, 500 + Rn() * 500, (Rn() * 2 - 1) * (hh + 1500), 150 + Rn() * 200, Rn(), Rn(), 1, 8 + Rn() * 5);
+        S.moteK = MOTES.wisp; S.ltn = 0.32; S.hazeD = 4200;
+      },
+      // a low pass over a moon: the cratered ground under the lane, massifs and canyon walls beside it, a lit outpost going by underneath
+      moonSurface: (Rn, hh, amt) => {
+        S.floorOn = true; S.floorMode = 4; S.floorY = -300;
+        fU.uFQ.value.set(0, 0, Rn() * 23, 0);
+        const nw = Math.round(13 * amt);
+        for (let i = 0; i < nw; i++) {
+          const q = 260 + Rn() * 300, r = q * 1.56;
+          put(rockHi, (i * SET_SPAN) / nw + Rn() * 500, S.floorY + q * (Rn() * 0.3 - 0.1), (i % 2 ? 1 : -1) * (hh + 200 + r + Rn() * 700), q, 0, 1, Rn(), i < 4 ? 0 : Rn(), 1 + Rn() * 0.2, 0.75 + Rn() * 0.45, 1 + Rn() * 0.2);
+        }
+        for (let i = 0, n = (rockLo.cap * 0.5 * amt) | 0; i < n; i++) { const q = 8 + Rn() * Rn() * 32; put(rockLo, Rn() * SET_SPAN, S.floorY + q * 0.4, (Rn() * 2 - 1) * (hh + 1500), q, 0, 1, Rn(), Rn()); }
+        const bx = 3000 + Rn() * 5000, bz = (Rn() - 0.5) * hh;                                   // the outpost: girders, modules, strip lights
+        for (let k = 0; k < 3; k++) { put(truss, bx + k * 700, S.floorY + 62, bz - 150, 1, -999, 0, Rn(), 0, 1.15, 1, 1); put(truss, bx + k * 700, S.floorY + 62, bz + 150, 1, -999, 0, Rn(), 0, 1.15, 1, 1); }
+        put(truss, bx + 350, S.floorY + 62, bz, 1, -999, 0, Rn(), 0, 0.5, 1, 5); put(truss, bx + 1050, S.floorY + 62, bz, 1, -999, 0, Rn(), 0, 0.5, 1, 5);
+        for (let k = 0; k < 3; k++) put(hullC, bx + 200 + k * 500, S.floorY + 48, bz + (k % 2 ? 320 : -320), 38, -999, 0, Rn(), 0);
+        S.moteK = S.moteK || MOTES.dust;
+      },
       // a battlefield long after the battle: capital hull sections alongside, beneath and overhead, plating, machinery
       wreck: (Rn, hh, amt) => {
         const side = Rn() < 0.5 ? 1 : -1;
@@ -4172,7 +4306,8 @@ export class Env3D {
         smooth(clamp01((lq - 0.085) / 0.05)) * (1 - smooth(clamp01((run - 2300) / 500))), Math.exp(-((run - 1650) / 380) * ((run - 1650) / 380)));
       u.uOff.value.set(0, 0, this._lz);
       const flat = mode === 'top' ? 1 : mode === 'tilt' ? 0.6 : 0;   // looked at from above the deck is one big lit surface: hold it down, and let it sink away as the prow leaves
-      u.uGain.value = (1 - 0.6 * flat) * (1 - 0.75 * flat * smooth(clamp01((lq - 0.3) / 0.35)));
+      u.uGain.value = (1 - 0.6 * flat) * (1 - 0.3 * flat * smooth(clamp01((lq - 0.3) / 0.35)));
+      u.uVW.value.z = 0.62 - 0.37 * flat;   // from above the bow stays a plated, lit hull at low contrast, not a black cut-out
       u.uSG.value.set(op * (0.3 + 0.7 * dip), 2, S.top, mask);   // top view: the roof half of the tube is never drawn
       car.op = u.uSG.value.x;
       car.mesh.visible = op > 0.004;
@@ -4194,7 +4329,7 @@ export class Env3D {
     const adv = dt * speed * (1 + (Math.min(warpMul, 8) - 1) * 0.9) * SCROLL * SET_K;
     S.sf += adv; if (S.sf >= SET_SPAN) { S.sf -= SET_SPAN; S.lap = (S.lap + 1) % 4096; }
     S.ms += adv; if (S.ms > 1048576) S.ms -= 1048576;
-    const fw = S.floorMode ? 163840 : 13248;   // a period of every noise lookup in FLOOR_FS
+    const fw = FLOOR_WRAP[S.floorMode];
     S.fs += adv; if (S.fs >= fw) S.fs %= fw;
     S.ws += flow * 2.5; if (S.ws > 1048576) S.ws -= 1048576;
     const sU = this.setU, on = gain > 0.004;
@@ -4216,7 +4351,8 @@ export class Env3D {
     if (sp.mesh.visible) {
       this._sortSprites();
       sp.u.uSoft.value = this._wView;
-      sp.u.uCA.value.copy(P.nebA).multiplyScalar(2.8); sp.u.uCB.value.copy(P.nebB).multiplyScalar(2.8);
+      if (S.floorOn && S.floorMode === 3) { sp.u.uCA.value.copy(S.fU.uFC.value).multiplyScalar(1.4); sp.u.uCB.value.copy(S.fU.uFC2.value).multiplyScalar(1.7); }   // towers are made of the deck they rise from
+      else { sp.u.uCA.value.copy(P.nebA).multiplyScalar(2.8); sp.u.uCB.value.copy(P.nebB).multiplyScalar(2.8); }
       sp.u.uSP.value.set(S.ltn + 0.3 * this._ion, 1, 1, 0.8);
       sp.u.uShaft.value.copy(this.sunSkyDirection).multiplyScalar(-0.75); sp.u.uShaft.value.y -= 0.7; sp.u.uShaft.value.normalize();
     }
@@ -4225,12 +4361,21 @@ export class Env3D {
     if (S.floor.visible) {
       const fU = S.fU;
       S.floor.position.set(cam.x + 4000, S.floorY, cam.z * 0.5);
-      fU.uFP.value.set(S.fs, S.floorMode, gain, S.floorMode ? 9000 : 6500); fU.uFQ.value.w = mode === 'top' ? 1 : mode === 'tilt' ? 0.6 : 0;
-      if (S.floorMode) { fU.uFC.value.copy(P.fog).multiplyScalar(2); }
-      else {
-        fU.uFC.value.setRGB(0.2, 0.185, 0.16).lerp(this._c.copy(P.rail).multiplyScalar(0.3), 0.3);
-        fU.uFC2.value.setRGB(0.34, 0.33, 0.32).lerp(this._c.copy(P.rail).multiplyScalar(0.45), 0.25);
-      }
+      const fm = S.floorMode, rail = P.rail;
+      fU.uFP.value.set(S.fs, fm, gain, FLOOR_FAR[fm]); fU.uFQ.value.w = mode === 'top' ? 1 : mode === 'tilt' ? 0.6 : 0;
+      if (fm === 1) fU.uFC.value.copy(P.fog).multiplyScalar(2);
+      else if (fm === 0) {
+        fU.uFC.value.setRGB(0.2, 0.185, 0.16).lerp(this._c.copy(rail).multiplyScalar(0.3), 0.3);
+        fU.uFC2.value.setRGB(0.34, 0.33, 0.32).lerp(this._c.copy(rail).multiplyScalar(0.45), 0.25);
+      } else if (fm === 2) {   // seas, land, and where the day side is: the sun's azimuth swung to one side, barely above the ground
+        fU.uFC.value.setRGB(0.03, 0.075, 0.15).lerp(this._c.copy(rail).multiplyScalar(0.18), 0.35);
+        fU.uFC2.value.setRGB(0.15, 0.19, 0.1).lerp(this._c.copy(P.nebB).multiplyScalar(1.6), 0.3);
+        const sd = this.sunSkyDirection, sg = fU.uFQ.value.x;
+        fU.uFL.value.set(sd.x * 0.55 - sd.z * sg * 0.75, 0.13, sd.z * 0.55 + sd.x * sg * 0.75).normalize();
+      } else if (fm === 3) {
+        fU.uFC.value.setRGB(0.42, 0.35, 0.27).lerp(this._c.copy(P.nebA).multiplyScalar(3.2), 0.55);
+        fU.uFC2.value.setRGB(0.5, 0.44, 0.38).lerp(this._c.copy(P.nebB).multiplyScalar(3.2), 0.45);
+      } else fU.uFC.value.setRGB(0.33, 0.32, 0.31).lerp(this._c.copy(rail).multiplyScalar(0.5), 0.12);
     }
 
     const k = S.moteK, mo = S.mote;
@@ -4238,7 +4383,7 @@ export class Env3D {
     if (mo.mesh.visible) {
       const mu = mo.u;
       mu.uAnchor.value.set(cam.x + fwd.x * 1100, 0, cam.z + fwd.z * 1100);
-      mu.uMP.value.set(S.ms, (mode === 'cockpit' ? 46 : fwdView ? 30 : 16) * speed, k.bright * gain * (1 - 0.3 * ecl), k.dens * S.dens);
+      mu.uMP.value.set(S.ms, (mode === 'cockpit' ? 46 : fwdView ? 30 : 16) * speed * (k.len || 1), k.bright * gain * (1 - 0.3 * ecl), k.dens * S.dens);
       mu.uMQ.value.set(130, 0.93, S.top, k.flick);
     }
 

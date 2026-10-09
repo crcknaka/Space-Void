@@ -33,6 +33,7 @@
         cockpit = nose-on from slightly above, the hull a third of the frame; tail = the same from behind
   knobs: &flash=0..1 &dim=0.4..1 &damage=0..1 &warp=0..1 &charge=0..1 &thrust=0..2 &opacity=0..1 &elite=1
          &aim=rad (turret / battery / rail traverse)  &roll=-1..1  &fire=0..1 (recoil pulse, 1 = the instant of the shot)
+         &hits=1 (three hit marks, 1.5 s / 0.4 s / 0.03 s old)  &shadow=1 (sun shadow map)  &page=sec (age of broken-off parts)
          &death=0..1 (death fall)  &broken=N (parts broken off)  &parts=1 (show the broken-off pieces beside the hull)
   &dist=1 (camera distance multiplier)  &q=0.5 (low quality)  &t=ms (freeze animation time)  &bg=rrggbb
   ?sheet=1            contact sheet: every type, top + front 3/4 (+ &rows=top,front,tilt,rear  &ids=a,b)
@@ -58,6 +59,7 @@ const P = {
   ship: Q.get('ship') || 'basic', view: Q.get('view') || 'beauty', thrust: num('thrust', 1),
   damage: num('damage', 0), flash: num('flash', 0), opacity: num('opacity', 1), dim: num('dim', 1), warp: num('warp', 0), charge: num('charge', 0),
   elite: !!num('elite', 0), dist: num('dist', 1), q: num('q', 1), t: Q.has('t') ? num('t', 0) : null,
+  hits: num('hits', 0), page: num('page', 0.1),
   aim: num('aim', 0), roll: num('roll', 0), fire: num('fire', 0), death: num('death', 0), broken: num('broken', 0), parts: !!num('parts', 0),
 };
 // recommended in-game length (world units) per type — see the module report
@@ -89,6 +91,11 @@ const cam = new THREE.PerspectiveCamera(FOV, 16 / 9, 5, 30000);
   pmrem.dispose();
   const sun = new THREE.DirectionalLight(0xfff0dc, 2.7);
   sun.position.set(-0.45, 1, 0.55);
+  if (Q.get('shadow')) {
+    gl.shadowMap.enabled = true; gl.shadowMap.type = THREE.PCFSoftShadowMap;
+    sun.position.multiplyScalar(400); sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -0.0006; sun.shadow.normalBias = 0.6;
+    const c = sun.shadow.camera; c.left = c.bottom = -120; c.right = c.top = 120; c.near = 10; c.far = 1200; c.updateProjectionMatrix();
+  }
   scene.add(sun, new THREE.HemisphereLight(0x8fb8ff, 0x1a1420, 0.9));
 }
 { // star field
@@ -145,7 +152,12 @@ function stage(list) {
       u.settle();
       const fire = s.fire ?? P.fire;
       if (fire > 0) { u.setFire(); u.update(-110 * Math.log(Math.max(1e-3, fire)), simT - 16); } // decay the pulse to the asked level
-      for (const d of u._debris || []) d.userData.update(16, simT);
+      for (const d of u._debris || []) { if (!d._aged) { d._aged = 1; d.userData.update(P.page * 1000, simT); } else d.userData.update(0, simT); }
+      if ((s.hits ?? P.hits) && !u._hits) {
+        u._hits = 1;
+        const H = [[0.12, 0.06, 1500, 0.6], [-0.16, -0.09, 400, 1], [-0.02, 0.1, num('fresh', 200), 0.8]];
+        for (const [x, z, age, pw] of H) { u.update(0, simT - age); u.hit(x, 0, z, pw); }
+      }
     }
     u.update(16, simT);
     root.add(g);
@@ -233,7 +245,7 @@ function drawMech() {
   const S = [
     ['rest', {}], ['aim +0.6', { aim: 0.6 }], ['aim -2 (clamped to the mount)', { aim: -2 }], ['charge 0.5', { charge: 0.5 }], ['charge 1', { charge: 1 }],
     ['roll +1', { ctl: 1 }], ['roll -1', { ctl: -1 }], ['thrust 0', { thrust: 0 }], ['thrust 2', { thrust: 2 }], ['fire (recoil)', { fire: 1 }],
-    ['broken 1', { broken: 1, damage: 0.4 }], ['broken 2', { broken: 2, damage: 0.6 }], ['broken 3 + parts', { broken: 3, damage: 0.8, parts: true }], ['death 0.4', { death: 0.4, damage: 1, thrust: 0, dim: 0.45 }], ['death 0.95', { death: 0.95, damage: 1, thrust: 0, dim: 0.45 }],
+    ['broken 1', { broken: 1, damage: 0.4 }], ['broken 2', { broken: 2, damage: 0.6 }], ['broken 3 + parts', { broken: 3, damage: 0.8, parts: true }], ['hits', { hits: 1 }], ['death 0.4', { death: 0.4, damage: 1, thrust: 0, dim: 0.45 }], ['death 0.95', { death: 0.95, damage: 1, thrust: 0, dim: 0.45 }],
   ];
   const cols = 5, rowsN = Math.ceil(S.length / cols), tw = Math.floor(VW / cols), th = Math.floor(VH / rowsN);
   S.forEach(([name, st], i) => {

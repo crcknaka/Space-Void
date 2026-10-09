@@ -32,7 +32,8 @@
   each card shows old | new at 1x and at &zoom (default 4), over the hit box (dashed) and
   with the engine points drawFlames() uses (cyan rings).
 
-  ?set=ships|enemies|extra|bank|all   which sprites (default all)   &only=<name>[,<name>]
+  ?set=ships|enemies|extra|misc|bank|boss|all   which sprites (default all; misc = rockets + asteroids;
+                                       boss: &level=N, old live render vs baked hull + turret frames)   &only=<name>[,<name>]
   &zoom=4      enlargement of the second pair          &marks=0   hide hit box + nozzle rings
   &K=2 &KH=4   force the bake densities                &q=0.5     model quality
   &sync=1      bake without yielding (as ?bakefirst)   &fail=gl|mid|slow   simulate a failure
@@ -46,6 +47,41 @@ const num = (k, d) => (Q.has(k) && isFinite(+Q.get(k)) ? +Q.get(k) : d);
 const ZOOM = num('zoom', 4), MARKS = Q.get('marks') !== '0', SET = Q.get('set') || 'all';
 const ONLY = Q.get('only') ? Q.get('only').split(',') : null;
 
+if (SET === 'boss') {
+  // old live render (bossgen meshes) vs the baked hull + turret frames, at three turret yaws
+  const { bakeBoss } = await import('../js/bake3d.js?v=' + Date.now());
+  const { genBoss, BOSS_VIEW } = await import('../js/bossgen.js');
+  const { renderMesh, fitTransform, projectPoint } = await import('../js/mesh3d.js');
+  const st = document.getElementById('stats'), grid = document.getElementById('grid');
+  const level = num('level', 1), Z = num('zoom', 1.6), dpr = window.devicePixelRatio || 1;
+  let bb = null;
+  try { bb = await bakeBoss(level, { sync: Q.has('sync'), K: num('K', 0) }); } catch (e) { st.textContent = `BOSS BAKE FAILED: ${e.message}`; throw e; }
+  st.textContent = `BOSS ${level}: box ${bb.size.toFixed(0)} · hull ${bb.hull.width}×${bb.hull.height} at (${bb.hullX},${bb.hullY}) ${bb.hullW}×${bb.hullH} · density ${bb.density.toFixed(2)} · ${bb.turrets.length} turrets × ${bb.turrets[0]?.frames.length} frames of ${bb.turrets[0]?.frames[0].width}px · work ${bb.ms.toFixed(0)} ms, longest slice ${bb.maxSlice.toFixed(0)} ms`;
+  const gen = genBoss(level), size = bb.size, fit = fitTransform(gen.core, size, size, BOSS_VIEW, 0.9);
+  for (const yaw of [Math.PI, Math.PI * 0.8, Math.PI * 1.45]) {
+    const pad = 50, W = (size + pad * 2) * 2 * Z, H = (size + pad * 2) * Z;
+    const c = document.createElement('canvas');
+    c.width = W * dpr; c.height = H * dpr; c.style.width = `${W}px`; c.style.height = `${H}px`;
+    const g = c.getContext('2d');
+    g.scale(dpr * Z, dpr * Z);
+    g.fillStyle = Q.get('bg') === 'light' ? '#8fa3b8' : '#02030a'; g.fillRect(0, 0, W, H);
+    const box = (bx, by) => { if (!MARKS) return; g.strokeStyle = 'rgba(255,255,255,0.25)'; g.setLineDash([3, 3]); g.strokeRect(bx, by, size, size); g.setLineDash([]); };
+    let bx = pad, by = pad;
+    box(bx, by);
+    renderMesh(g, gen.core, { ...BOSS_VIEW, scale: fit.scale, x: bx + fit.x, y: by + fit.y });
+    for (const tr of gen.turrets) { const p = projectPoint(BOSS_VIEW, fit, tr.pivot); renderMesh(g, tr.mesh, { rx: BOSS_VIEW.rx, ry: yaw, scale: fit.scale, x: bx + p.x, y: by + p.y }); }
+    bx = size + pad * 3;
+    box(bx, by);
+    g.drawImage(bb.hull, bx + bb.hullX, by + bb.hullY, bb.hullW, bb.hullH);
+    for (const t of bb.turrets) g.drawImage(t.frame(yaw), bx + t.pivotX - t.w / 2, by + t.pivotY - t.h / 2, t.w, t.h);
+    if (MARKS) { g.strokeStyle = 'rgba(80,230,255,0.9)'; for (const n of bb.flame.nozzles) { g.beginPath(); g.arc(bx + n.x, by + n.y, n.r, 0, 7); g.stroke(); } }
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `<b>boss ${level}</b>  turret yaw ${(yaw / Math.PI).toFixed(2)}π · old live meshes | baked`;
+    card.appendChild(c); grid.appendChild(card);
+  }
+  await new Promise(() => {}); // the boss view replaces the sprite sets
+}
 const oldImgs = generateSprites({});
 const newImgs = generateSprites({});
 const stats = document.getElementById('stats');
@@ -74,6 +110,10 @@ if (SET === 'all' || SET === 'enemies') for (const id of ENEMIES) rows.push([`en
 if (SET === 'all' || SET === 'extra') {
   for (const id of ENEMIES) rows.push([`enemy_${id}_elite`, oldImgs[`enemy_${id}`], newImgs[`enemy_${id}_elite`]]);
   rows.push(['enemy_drone', oldImgs.enemy_basic, newImgs.enemy_drone]);
+}
+if (SET === 'all' || SET === 'misc') {
+  rows.push(['rocket', oldImgs.rocket, newImgs.rocket], ['enemy_rocket', oldImgs.enemy_rocket, newImgs.enemy_rocket]);
+  oldImgs.asteroids.forEach((o, i) => rows.push([`asteroid ${i}${o.volcanic ? ' (volcanic)' : ''}`, o, newImgs.asteroids[i]]));
 }
 if (SET === 'bank') {
   for (const id of ONLY || ['vanguard']) {

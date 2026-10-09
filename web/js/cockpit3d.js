@@ -496,7 +496,7 @@ const rivetT = (r = 0.0022) => lathe([[0, r], [r * 0.45, r * 0.8], [r * 0.6, 0.0
 // The index finger (on the trigger) and the thumb come back as separate soups
 // with their knuckle pivots so they can move; mirror and rotate as needed.
 function handModel(r = 0.019) {
-  const glove = [], plate = [], seam = [], index = [];
+  const glove = [], plate = [], seam = [], index = [], fingers = [], fpads = [];
   const zc = r + 0.017;
   // back of the hand → wrist
   glove.push(...loft([
@@ -509,7 +509,7 @@ function handModel(r = 0.019) {
   let idxPiv = null;
   for (let f = 0; f < 4; f++) {
     const isIdx = f === 3, y = -0.0315 + f * 0.0213, hw = 0.0096, len = f === 0 ? 0.88 : isIdx ? 0.62 : f === 2 ? 1 : 0.96;
-    const rings = [], n = 14, p0 = 66 * DEG, p1 = lerp(66, -150, len) * DEG, out = isIdx ? index : glove;
+    const rings = [], n = 14, p0 = 66 * DEG, p1 = lerp(66, -150, len) * DEG, out = isIdx ? index : fingers;
     for (let i = 0; i <= n; i++) {
       const t = i / n, ph = lerp(p0, p1, t);
       // swell at the knuckles, pinch at the creases between phalanges
@@ -528,10 +528,10 @@ function handModel(r = 0.019) {
       const ph = lerp(58, 22, i / 4) * DEG, ro = r + 0.0205 + Math.sin((i / 4) * Math.PI) * 0.0012, ri = ro - 0.003, cx = Math.cos(ph), sz = Math.sin(ph), h2 = hw * 0.72;
       pad.push([[ri * cx, y - h2, ri * sz], [ri * cx, y + h2, ri * sz], [ro * cx, y + h2 * 0.8, ro * sz], [ro * cx, y - h2 * 0.8, ro * sz]]);
     }
-    (isIdx ? index : plate).push(...loft(pad));
+    (isIdx ? index : fpads).push(...loft(pad));
     const ka = 66 * DEG, kr = r + 0.019;
-    (isIdx ? index : glove).push(...tube([[kr * Math.cos(ka) - 0.004, y, kr * Math.sin(ka) + 0.002], [kr * Math.cos(ka) + 0.001, y, kr * Math.sin(ka) + 0.006], [kr * Math.cos(ka) + 0.006, y, kr * Math.sin(ka) + 0.004]], [0.006, 0.0082, 0.006], 7));
-    if (isIdx) idxPiv = [(r + 0.011) * Math.cos(p0), y, (r + 0.011) * Math.sin(p0)];
+    (isIdx ? index : fingers).push(...tube([[kr * Math.cos(ka) - 0.004, y, kr * Math.sin(ka) + 0.002], [kr * Math.cos(ka) + 0.001, y, kr * Math.sin(ka) + 0.006], [kr * Math.cos(ka) + 0.006, y, kr * Math.sin(ka) + 0.004]], [0.006, 0.0082, 0.006], 7));
+    if (isIdx) idxPiv = [(r + 0.011) * Math.cos(p0), 0, (r + 0.011) * Math.sin(p0)];
   }
   // thumb: two joints, lying along the top of the grip
   const thPiv = [-0.05, 0.03, r + 0.014];
@@ -541,7 +541,7 @@ function handModel(r = 0.019) {
   plate.push(...box(-0.076, -0.063, -0.034, 0.032, r + 0.0015, r + 0.037, 0.003));
   plate.push(...box(-0.074, -0.065, -0.012, 0.008, r + 0.0365, r + 0.0395, 0.0012));
   for (const y of [-0.0205, 0.0008, 0.022]) seam.push(...tube([[-0.062, y * 0.8, r + 0.0352], [-0.052, y * 0.9, r + 0.0356]], 0.0011, 4), ...tube([[0.007, y, r + 0.0325], [0.016, y, r + 0.029]], 0.0011, 4));
-  return { glove, plate, seam, index, thumb, idxPiv, thPiv, wrist: [-0.088, -0.001, zc] };
+  return { glove, plate, seam, index, fingers, fpads, thumb, idxPiv, thPiv, wrist: [-0.088, -0.001, zc] };
 }
 // forearm from the wrist along unit direction `a`: gauntlet, locking ring, suit sleeve
 function forearm(wrist, a, len, up = [0, 1, 0]) {
@@ -929,6 +929,17 @@ function buildInterior(b, H) {
         b.add(tube([G.pt(0.04, 0.066, 0), G.pt(0.041, 0.086, 0)], [0.009 * k, 0.0075 * k], 8), M_RED, { crease: 60 });
       }
     }
+    {      // a tag on a lanyard looped round the port pillar: sways with every manoeuvre
+      const az = -A * DEG, e = Math.min(sillAt(C, az) + 0.62, topAt(C, az) - 0.1), p0 = canPt(C, az, e, 0.994), N0 = canNrm(C, p0), pp = vadd(p0, N0, -H.can.depth - 0.012);
+      out.dangle = pp;
+      b.part('dangle', pp);
+      b.add(tube([pp, vadd(pp, [0, -0.035, 0.002]), vadd(pp, [0, -0.07, 0])], 0.0012, 5), M(0x8a2a22, 0.8));
+      b.add(box(pp[0] - 0.001, pp[0] + 0.001, pp[1] - 0.1, pp[1] - 0.07, pp[2] - 0.009, pp[2] + 0.009, 0.0007), M(0x8f1d18, 0.6), { crease: 50 });
+      b.add(box(pp[0] - 0.0013, pp[0] + 0.0013, pp[1] - 0.095, pp[1] - 0.087, pp[2] - 0.0065, pp[2] + 0.0065), M_WHITE);
+      b.add(tube([vadd(pp, [0, -0.07, -0.003]), vadd(pp, [0, -0.07, 0.003])], 0.002, 6), M_STEEL);
+      b.part('st');
+      b.add(tube([vadd(pp, [0.004, 0.003, 0]), vadd(pp, [-0.004, 0.003, 0])], 0.004, 6), M_STEEL);
+    }
     if (D.mirror) for (const s of [1, -1]) {
       const az = 57 * DEG * s, p = canPt(C, az, topAt(C, az) - 0.085, 0.95), F = onFrame(p, vsub([-0.05, -0.1, 0], p), [0, 1, 0]);
       b.add(F.place(box(-0.012, 0, -0.017, 0.017, -0.036, 0.036, 0.005)), P.frame, { crease: 50 });
@@ -982,27 +993,29 @@ function buildInterior(b, H) {
 
   /* ---- controls and hands ---- */
   const addArm = (name, G, elbow, opt = {}) => {
-    const hm = handModel(0.0195), soups = [hm.glove, hm.plate, hm.seam, hm.index, hm.thumb];
-    let pts = [...hm.wrist, ...hm.idxPiv, ...hm.thPiv];      // points carried through the same transforms
+    const hm = handModel(0.0195), soups = [hm.glove, hm.plate, hm.seam, hm.index, hm.fingers, hm.fpads, hm.thumb];
+    // points carried through the same transforms: wrist, knuckle pivot (+ its axis), thumb pivot (+ its axis)
+    let pts = [...hm.wrist, ...hm.idxPiv, ...vadd(hm.idxPiv, [0, 1, 0]), ...hm.thPiv, ...vadd(hm.thPiv, [1, 0, 0])];
     const apply = (fn) => { soups.forEach(fn); pts = fn(pts.slice()); };
-    if (opt.left) { soups.forEach(mirrorZ); for (let i = 2; i < 9; i += 3) pts[i] = -pts[i]; }
+    if (opt.left) { soups.forEach(mirrorZ); for (let i = 2; i < pts.length; i += 3) pts[i] = -pts[i]; }
     if (opt.onTop) apply((t) => rotX(t, opt.left ? -Math.PI / 2 : Math.PI / 2));
     const d = vsub(elbow, G);
     if (opt.onTop) apply((t) => rotZ(t, Math.atan2(-d[1], -d[0]) * 0.75));
     else apply((t) => rotY(t, -Math.atan2(d[2], -d[0]) * 0.8));
-    const wrist = pts.slice(0, 3), idxPiv = pts.slice(3, 6), thPiv = pts.slice(6, 9);
+    const wrist = pts.slice(0, 3), kPiv = pts.slice(3, 6), kAx = vsub(pts.slice(6, 9), kPiv), thPiv = pts.slice(9, 12), tAx = vsub(pts.slice(12, 15), thPiv);
     const a = vnorm(vsub(d, wrist));
     const fa = forearm(wrist, a, Math.hypot(d[0], d[1], d[2]) + 0.06, opt.onTop ? [0, 0, opt.left ? -1 : 1] : [0, 1, 0]);
-    const SEAM = M(0x6d7078, 0.6), anim = !!opt.anim, digits = [];
+    const SEAM = M(0x6d7078, 0.6), sg = opt.left ? -1 : 1, digits = [];
     b.part(name, [0, 0, 0]);
     b.add(hm.glove, P.glove, { crease: 62 }); b.add(hm.plate, P.plate, { crease: 40 }); b.add(hm.seam, SEAM);
     b.add(fa.cuff, P.glove, { crease: 62 }); b.add(fa.strap, M_BLACK); b.add(fa.sleeve, P.suit, { crease: 62 });
     b.add(fa.collar, M_STEEL, { crease: 40 }); b.add(fa.band, P.accent); b.add(fa.lugs, M_GUN);
-    if (anim) {
-      b.part(name + 'I', idxPiv); b.add(hm.index, P.glove, { crease: 62 });
-      b.part(name + 'T', thPiv); b.add(hm.thumb, P.glove, { crease: 62 });
-      digits.push({ part: name + 'I', piv: idxPiv, axis: [0, 1, 0], kind: 'trigger' }, { part: name + 'T', piv: thPiv, axis: [1, 0, 0], kind: 'thumb' });
-    } else { b.add(hm.index, P.glove, { crease: 62 }); b.add(hm.thumb, P.glove, { crease: 62 }); }
+    // fingers hinge at the knuckles so the hand can open; on a stick hand the index works the trigger on its own
+    b.part(name + 'F', kPiv); b.add(hm.fingers, P.glove, { crease: 62 }); b.add(hm.fpads, P.plate, { crease: 40 });
+    if (opt.anim) { b.part(name + 'I', kPiv); b.add(hm.index, P.glove, { crease: 62 }); digits.push({ part: name + 'I', piv: kPiv, axis: kAx, kind: 'trigger', sg }); }
+    else b.add(hm.index, P.glove, { crease: 62 });
+    b.part(name + 'T', thPiv); b.add(hm.thumb, P.glove, { crease: 62 });
+    digits.push({ part: name + 'F', piv: kPiv, axis: kAx, kind: 'fingers', sg }, { part: name + 'T', piv: thPiv, axis: tAx, kind: opt.anim ? 'thumb' : 'thumbIdle', sg });
     b.part('st');
     return { part: name, elbow, digits };
   };
@@ -1081,10 +1094,14 @@ function buildInterior(b, H) {
     b.screen('H', [hx + tilt, y0, -hw], [hx + tilt, y0, hw], [hx - tilt * 0.2, y1, hw], [hx - tilt * 0.2, y1, -hw], R_HUD, SID.HUD);
     const g = []; quad(g, [hx + tilt, y0, -hw], [hx + tilt, y0, hw], [hx - tilt * 0.2, y1, hw], [hx - tilt * 0.2, y1, -hw]);
     b.glowTris(g, [0.004, 0.009, 0.008], CH.HUDGLASS);
+    out.hudPiv = [hx, -0.19, 0];
+    b.part('hud', out.hudPiv);
     if (D.hud === 'frame') {
       for (const s of [1, -1]) b.add(tube([[hx + tilt + 0.004, -0.2, s * (hw + 0.004)], [hx + tilt, y0, s * (hw + 0.004)], [hx - tilt * 0.2, y1, s * (hw + 0.004)]], 0.0028, 5), P.trim);
       b.add(tube([[hx - tilt * 0.2, y1, -hw - 0.004], [hx - tilt * 0.2, y1, hw + 0.004]], 0.0022, 5), P.trim);
+      b.part('st');
     } else {
+      b.part('st');
       for (const s of [1, -1]) b.add(box(hx + 0.02, hx + 0.05, -0.2, -0.178, s * hw - 0.008, s * hw + 0.008, 0.003), P.trim);
     }
     b.add(box(0.87, 0.99, -0.228, -0.196, -0.05, 0.05, 0.006), M(0x0c0d10, 0.9), { crease: 50 });
@@ -1398,6 +1415,44 @@ function paintHud(c, s, th, t, v) {
   c.restore();
 }
 
+// what is left of a display after the blast: unlit glass, a web of cracks, on a dial the needle stuck where it died
+function paintDeadGlass(c, rects, black, style, R) {
+  if (black) { c.fillStyle = '#000'; c.fillRect(black.x, black.y, black.w, black.h); }
+  for (const r of rects) {
+    c.save(); c.beginPath(); c.rect(r.x, r.y, r.w, r.h); c.clip();
+    const g = c.createLinearGradient(r.x, r.y, r.x + r.w, r.y + r.h);
+    g.addColorStop(0, '#1a1f26'); g.addColorStop(0.45, '#080a0d'); g.addColorStop(0.55, '#10141a'); g.addColorStop(1, '#050608');
+    c.fillStyle = g; c.fillRect(r.x, r.y, r.w, r.h);
+    const dial = r.w <= 100 && r.h <= 100, cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+    if (dial) {
+      c.strokeStyle = '#3b424b'; c.lineWidth = 6;
+      if (style === 'tape') { c.strokeRect(r.x + 34, r.y + 8, 28, 62); c.fillStyle = '#59616b'; c.fillRect(r.x + 34, r.y + 8 + 62 * R(), 28, 4); }
+      else {
+        c.beginPath(); c.arc(cx, cy + 2, 33, Math.PI * 0.75, Math.PI * 2.25); c.stroke();
+        const a = Math.PI * (0.75 + 1.5 * R());
+        c.strokeStyle = '#9aa1a9'; c.lineWidth = 4.5; c.beginPath(); c.moveTo(cx, cy + 2); c.lineTo(cx + Math.cos(a) * 29, cy + 2 + Math.sin(a) * 29); c.stroke();
+        c.fillStyle = '#9aa1a9'; c.beginPath(); c.arc(cx, cy + 2, 5, 0, TAU); c.fill();
+      }
+    } else if (r.w > 200) {      // ghost of the last picture burnt into the phosphor
+      c.strokeStyle = 'rgba(120,140,150,0.16)'; c.lineWidth = 2;
+      for (let i = 1; i <= 3; i++) { c.beginPath(); c.arc(cx, r.y + r.h * 0.85, i * r.h * 0.22, Math.PI, TAU); c.stroke(); }
+    }
+    // impact star and long cracks to the edges
+    const ix = r.x + r.w * (0.25 + R() * 0.5), iy = r.y + r.h * (0.25 + R() * 0.5), n = dial ? 5 : 7, k = Math.max(r.w, r.h);
+    c.lineCap = 'round';
+    for (let i = 0; i < n; i++) {
+      let an = (i / n) * TAU + R() * 0.7, x = ix, y = iy;
+      c.strokeStyle = `rgba(210,222,232,${0.55 + R() * 0.35})`; c.lineWidth = dial ? 1.6 : 2.4; c.beginPath(); c.moveTo(x, y);
+      for (let j = 0; j < 4; j++) { an += (R() - 0.5) * 0.5; x += Math.cos(an) * k * 0.2; y += Math.sin(an) * k * 0.2; c.lineTo(x, y); }
+      c.stroke();
+    }
+    c.strokeStyle = 'rgba(210,222,232,0.5)'; c.lineWidth = dial ? 1.2 : 1.8;
+    c.beginPath(); for (let i = 0; i <= 8; i++) { const an = (i / 8) * TAU + 0.3, rr = k * (0.1 + R() * 0.04); if (i) c.lineTo(ix + Math.cos(an) * rr, iy + Math.sin(an) * rr); else c.moveTo(ix + Math.cos(an) * rr, iy + Math.sin(an) * rr); } c.stroke();
+    c.fillStyle = 'rgba(230,238,245,0.8)'; c.beginPath(); c.arc(ix, iy, dial ? 2.5 : 4, 0, TAU); c.fill();
+    c.restore();
+  }
+}
+
 function paintStatus(c, s, th, t, lamps) {
   const text = (str, x, y, px, col, align = 'left') => { c.fillStyle = col; c.font = `bold ${px}px ${FONT}`; c.textAlign = align; c.textBaseline = 'middle'; c.fillText(str, x, y); };
   const main = css(th.main), hi = css(th.hi), dim = rgba(th.dim, 0.9);
@@ -1465,11 +1520,14 @@ uniform vec3 uCkC, uCkR, uSunL;
 uniform vec4 uCkWin;
 uniform float uCkAz;
 uniform vec2 uCkStrut[6];
+uniform vec3 uFly;
 float ckLit = 1.0;
 float ckShadow() {
+  // something big passing close: its shadow sweeps across the cabin from one side
+  float fl = 1.0 - uFly.z * (1.0 - smoothstep(uFly.y * 0.55, uFly.y, abs(vCk.z - uFly.x)));
   vec3 q = (vCk - uCkC) / uCkR;
   float qq = dot(q, q);
-  if (qq >= 1.0) return 1.0;
+  if (qq >= 1.0) return fl;
   vec3 d = uSunL / uCkR;
   float a = dot(d, d), b = dot(q, d), c = qq - 1.0;
   float t = (-b + sqrt(max(0.0, b * b - a * c))) / a;
@@ -1483,15 +1541,30 @@ float ckShadow() {
     vec2 s = uCkStrut[i];
     if (s.y > 0.0) lit *= smoothstep(s.y, s.y + 0.007, abs(abs(A) - s.x) * ce);
   }
-  ckLit = lit;
-  return mix(0.02, 1.0, lit);
+  ckLit = lit * fl;
+  return mix(0.02, 1.0, lit) * fl;
+}`;
+
+// The dashboard buckling in the final explosion: everything standing on the
+// panel (meshes that live in cockpit space) sags and crumples with it.
+const BUCKLE = `
+uniform vec2 uBuckle;
+vec3 ckBuckle(vec3 p) {
+  float w = smoothstep(0.5, 0.57, p.x) * smoothstep(0.84, 0.74, p.x) * step(p.y, -0.16) * step(-0.62, p.y) * uBuckle.x;
+  if (w > 0.0) {
+    float u = clamp((p.z * uBuckle.y + 0.5), 0.0, 1.1);
+    p.y -= w * (0.085 * u * u + 0.012 * sin(p.z * 21.0 + 1.0));
+    p.x += w * (0.03 * u - 0.012 * sin(p.z * 15.0));
+  }
+  return p;
 }`;
 
 const GLOW_VERT = `
 attribute vec3 gcol; attribute float ch;
 uniform float uCh[10];
 varying vec3 vC;
-void main() { vC = gcol * uCh[int(ch + 0.5)]; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+${BUCKLE}
+void main() { vC = gcol * uCh[int(ch + 0.5)]; gl_Position = projectionMatrix * modelViewMatrix * vec4(ckBuckle(position), 1.0); }`;
 const GLOW_FRAG = `
 varying vec3 vC;
 void main() { gl_FragColor = vec4(vC, 1.0); }`;
@@ -1500,7 +1573,8 @@ const SCR_VERT = `
 attribute vec2 luv; attribute float sid;
 uniform float uScr[12];
 varying vec2 vUv, vL; varying float vB, vG;
-void main() { vUv = uv; vL = luv; vG = sid < 0.5 ? 0.3 : 1.0; vB = uScr[int(sid + 0.5)]; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+${BUCKLE}
+void main() { vUv = uv; vL = luv; vG = sid < 0.5 ? 0.3 : 1.0; vB = uScr[int(sid + 0.5)]; gl_Position = projectionMatrix * modelViewMatrix * vec4(ckBuckle(position), 1.0); }`;
 const SCR_FRAG = `
 uniform sampler2D map;
 uniform float uTime, uGlitch, uGain, uWashAmt, uBase;
@@ -1526,8 +1600,9 @@ void main() {
 
 const GLASS_VERT = `
 attribute vec3 cen, rnd, bary;
+attribute float edge;
 uniform float uShat;
-varying vec3 vD, vN, vB; varying float vFade;
+varying vec3 vD, vN, vB; varying float vFade, vE;
 mat3 rotAxis(vec3 a, float ang) {
   float s = sin(ang), c = cos(ang), o = 1.0 - c;
   return mat3(o * a.x * a.x + c, o * a.x * a.y + a.z * s, o * a.z * a.x - a.y * s,
@@ -1536,24 +1611,25 @@ mat3 rotAxis(vec3 a, float ang) {
 }
 void main() {
   vec3 p = position, n = normal;
-  vD = position; vB = bary; vFade = 1.0;
+  vD = position; vB = bary; vFade = 1.0; vE = edge;
   if (uShat > 0.0) {
-    float t = max(0.0, uShat - rnd.x * 0.1);
-    mat3 R = rotAxis(normalize(rnd * 2.0 - 1.0 + 0.001), t * (3.0 + rnd.y * 9.0));
-    p = cen + R * (p - cen) * (1.0 - 0.35 * min(t * 1.2, 1.0));
-    vec3 v = normalize(cen - vec3(-0.1, -0.3, 0.0)) * (0.9 + rnd.z * 2.6);
-    p += v * t + vec3(7.0 + rnd.y * 6.0, 0.6, 0.0) * t * t;
+    float t = max(0.0, uShat - rnd.x * 0.07);
+    mat3 R = rotAxis(normalize(rnd * 2.0 - 1.0 + 0.001), t * (2.0 + rnd.y * 7.0));
+    p = cen + R * (p - cen);
+    // blown outward by the cabin air, then left behind as the wreck tumbles on
+    vec3 v = normalize(cen - vec3(-0.1, -0.3, 0.0)) * (2.2 + rnd.z * 4.5);
+    p += v * t + vec3(3.0 + rnd.y * 5.0, 0.8, 0.0) * t * t;
     n = R * n;
-    vFade = 1.0 - smoothstep(0.55, 1.35, t);
+    vFade = 1.0 - smoothstep(1.0, 1.6, t);
   }
   vN = n;
   gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
 }`;
 const GLASS_FRAG = `
-uniform sampler2D uCrack, uDirt;
+uniform sampler2D uCrack, uDirt, uInst;
 uniform vec3 uSunL, uSunC, uExtC, uExtD, uAmb, uGlow;
-uniform float uWarp, uTime, uShat, uFire;
-varying vec3 vD, vN, vB; varying float vFade;
+uniform float uWarp, uTime, uShat, uFire, uCab, uMuz, uFrost, uSoot;
+varying vec3 vD, vN, vB; varying float vFade, vE;
 float h1(float n) { return fract(sin(n * 127.1) * 43758.5453); }
 void main() {
   vec3 D = normalize(vD), N = normalize(vN);
@@ -1565,20 +1641,45 @@ void main() {
   vec2 ang = vec2(atan(D.z, D.x), asin(clamp(D.y, -1.0, 1.0)));
   vec4 dt = texture2D(uDirt, ang * vec2(2.6, 2.6));
   float sd = max(dot(D, uSunL), 0.0);
-  float glare = pow(sd, 60.0) * 1.2 + pow(sd, 9.0) * 0.1;
-  col += uSunC * (dt.r * glare * 0.4 + dt.g * (glare * 0.22 + 0.002) + pow(sd, 3.0) * 0.01);
+  // scratches only catch the light in a tight halo round the sun's glare (about 12 degrees); elsewhere the glass is clean
+  float halo = smoothstep(0.974, 0.9985, sd);
+  vec4 mt = texture2D(uDirt, ang * 7.0);
+  col += uSunC * (halo * (mt.r * 0.11 + mt.g * 0.03 + dt.g * 0.02) + halo * halo * 0.02 + sd * sd * sd * 0.004);
   // outside flashes light the dirt on the side they come from
   float ed = max(dot(D, uExtD), 0.0);
   vec3 extC = uExtC * (0.12 + 0.88 * ed * ed * ed);
-  col += extC * (dt.g * 0.5 + dt.r * 0.3 + 0.01);
+  col += extC * (0.012 + dt.g * 0.04);      // a soft veil only: flashes must not light up scratches all over the canopy
   // fractures
   vec2 cuv = vec2(ang.x / 3.4907 + 0.5, (ang.y + 0.45) / 1.45);
+  // the cabin mirrored in the canopy: a blurred ghost of the scope above the coaming, the visor
+  // and the gloves as faint shapes; all of it drowns when the outside is bright
+  float dim = uCab / (1.0 + 7.0 * sd * sd * sd + 5.0 * (extC.r + extC.g));
+  vec2 rv = vec2(ang.x / 0.62 + 0.5, (ang.y + 0.2) / 0.3);
+  float rm = smoothstep(0.0, 0.18, rv.x) * smoothstep(1.0, 0.82, rv.x) * smoothstep(0.0, 0.25, rv.y) * smoothstep(1.0, 0.5, rv.y);
+  col += texture2D(uInst, vec2(rv.x * 0.6667, 1.0 - clamp(rv.y, 0.0, 1.0) * 0.8125), 3.5).rgb * (rm * dim * 0.085);
+  float he = length(vec2(ang.x / 0.21, (ang.y - 0.33) / 0.15)), hq = (he - 1.0) * 5.0;
+  float hands = exp(-dot(vec2((abs(ang.x) - 0.36) / 0.09, (ang.y + 0.13) / 0.06), vec2((abs(ang.x) - 0.36) / 0.09, (ang.y + 0.13) / 0.06)));
+  col += (uGlow * 0.6 + uAmb * 0.25 + vec3(0.012)) * dim * (exp(-hq * hq * 0.35) * 0.014 + smoothstep(1.0, 0.3, he) * 0.012 + hands * 0.024);
+  // gun flashes run up the inside of the glass; outside flashes kindle a streak toward their side
+  float mq = (ang.y + 0.17 - 0.32 * (1.0 - uMuz)) * 11.0;
+  col += vec3(1.0, 0.68, 0.32) * uMuz * exp(-mq * mq) * exp(-ang.x * ang.x * 3.0) * (0.03 + mt.r * 0.08 + dt.g * 0.05);
+  col += extC * pow(ed, 40.0) * (0.15 + 0.5 * mt.r);
   // the inner ply cracks along the same lines a few millimetres deeper: a fainter, offset twin
   vec4 ck = texture2D(uCrack, cuv), ck2 = texture2D(uCrack, cuv + vec2(0.0016, -0.0024) * (0.6 + ndv));
   float inner = ck2.r * (1.0 - ck.r);
   vec3 ckc = uAmb * 0.5 + uSunC * (0.1 + 0.95 * sd * sd * sd) * (0.75 + 0.6 * dt.r) + extC * 2.0 + uGlow * 0.25;
   col += ckc * (ck.r * 0.48 + inner * 0.14 + ck.g * 0.11);
   float a = 0.03 + fr * 0.1 + dt.g * 0.025 + ck.g * 0.13 + ck.r * 0.3 + inner * 0.14;
+  // frost left by a jump: grows in from the frame, melts back to it
+  if (uFrost > 0.0) {
+    float fn = dt.g * 0.7 + mt.r * 0.5 + mt.g * 0.4;
+    float fa = smoothstep(uFrost * 0.42, uFrost * 0.08, vE * (0.6 + fn * 0.9)) * min(1.0, uFrost * 3.0) * (0.35 + 0.65 * fn);
+    col += (uAmb * 0.5 + uSunC * (0.04 + 0.3 * sd * sd) + uGlow * 0.1) * fa * 0.42;
+    a += fa * 0.1;
+  }
+  // soot settling on the lower glass while the cabin burns
+  float so = uSoot * smoothstep(0.12, -0.28, ang.y) * (0.25 + 0.9 * dt.g + 0.5 * mt.g);
+  col *= 1.0 - so * 0.4; a += so * 0.3;
   // hyperspace streaks sliding over the canopy
   if (uWarp > 0.0) {
     float rad = length(D.yz), an = atan(D.z, D.y) * 22.0;
@@ -1589,9 +1690,10 @@ void main() {
     col += vec3(0.1, 0.2, 0.5) * uWarp * fr * 0.1;
   }
   if (uShat > 0.0) {
-    float edge = 1.0 - smoothstep(0.0, 0.07, min(vB.x, min(vB.y, vB.z)));
-    col = (col + (uAmb + uSunC * 0.35) * (edge * 0.7 + 0.06)) * vFade;
-    a = (a + 0.1 + edge * 0.5) * vFade;
+    // splinters show their edges; the large plates read as tumbling panes catching the light
+    float edge = vB.x > 1.5 ? 0.16 + 0.3 * fr + 0.5 * pow(abs(dot(N, normalize(uSunL + vec3(0.0, 0.4, 0.0)))), 12.0) : 1.0 - smoothstep(0.0, 0.07, min(vB.x, min(vB.y, vB.z)));
+    col = (col + (uAmb + uSunC * 0.35 + uFire * vec3(2.4, 0.9, 0.25)) * (edge * 0.7 + 0.07)) * vFade;
+    a = (a + 0.12 + edge * 0.5) * vFade;
   }
   gl_FragColor = vec4(col, clamp(a, 0.0, 0.95));
 }`;
@@ -1651,7 +1753,7 @@ const OVL_VERT = `
 varying vec2 vUv;
 void main() { vUv = position.xy * 0.5 + 0.5; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
 const OVL_FRAG = `
-uniform float uHaze, uVig, uRed, uFire, uWarp, uTime, uAspect;
+uniform float uHaze, uVig, uRed, uFire, uWarp, uTime, uAspect, uFlashSide, uBlack;
 uniform vec3 uFlash, uHazeCol;
 varying vec2 vUv;
 float h2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -1665,10 +1767,11 @@ void main() {
   float vig = smoothstep(0.55, 1.5, l);
   float a = haze + uVig * vig;
   col += vec3(0.9, 0.03, 0.02) * uRed * (0.01 + vig * 0.5);
-  col += uFlash * (0.3 + 0.7 * vig);
+  col += uFlash * (0.3 + 0.7 * vig) * clamp(1.0 + uFlashSide * p.x * 0.55, 0.3, 1.7);
   col += vec3(1.0, 0.3, 0.05) * uFire * smoothstep(0.1, -1.0, p.y) * (0.4 + 0.6 * n);
   col += vec3(0.1, 0.3, 1.0) * uWarp * vig * 0.22;
-  gl_FragColor = vec4(col, clamp(a, 0.0, 0.9));
+  col *= 1.0 - uBlack;
+  gl_FragColor = vec4(col, clamp(max(a, uBlack), 0.0, 1.0));
 }`;
 
 /* ========================================================================== */
@@ -1715,31 +1818,32 @@ export class Cockpit3D {
       uSunC: { value: new T.Vector3(1, 1, 1) }, uExtC: { value: v3() }, uExtD: { value: new T.Vector3(0.6, 0.2, 0.77) }, uAmb: { value: v3() }, uGlow: { value: v3() },
       uWarp: { value: 0 }, uShat: { value: 0 }, uFire: { value: 0 },
       uOn: { value: 0 }, uRip: { value: [0, 1, 2].map(() => new T.Vector4(1, 0, 0, -1)) }, uCol: { value: new T.Vector3(0.25, 0.6, 1.5) },
-      uHaze: { value: 0 }, uVig: { value: 0 }, uRed: { value: 0 }, uFlash: { value: v3() }, uHazeCol: { value: new T.Vector3(0.1, 0.1, 0.11) }, uAspect: { value: 1.78 },
+      uHaze: { value: 0 }, uVig: { value: 0 }, uRed: { value: 0 }, uCab: { value: 1 }, uMuz: { value: 0 }, uFrost: { value: 0 }, uSoot: { value: 0 }, uFly: { value: v3() }, uFlash: { value: v3() }, uFlashSide: { value: 0 }, uBlack: { value: 0 }, uBuckle: { value: new T.Vector2(0, 1) }, uBkOn: { value: 1 }, uBkOff: { value: 0 }, uHazeCol: { value: new T.Vector3(0.1, 0.1, 0.11) }, uAspect: { value: 1.78 },
     };
 
     this._textures();
     this._materials();
     this._env();
-    this._fxInit(this.q >= 1 ? 170 : 90);
+    this._fxInit(this.q >= 1 ? 280 : 140);
     this._extras();
 
     // animation state
     this.A = {
       pos: new Float32Array(5), vel: new Float32Array(5), tgt: new Float32Array(5),
       stickX: 0, stickY: 0, thr: 0, boost: 0, steerLag: 0, thrLag: 0,
-      fireStamp: null, rocketStamp: null, trig: 0, thumb: 0, recoil: 0, muzL: 0, muzR: 0, gunSide: 1,
+      fireStamp: null, rocketStamp: null, trig: 0, thumb: 0, open: 0, dCr: 0, dFlags: 0, dSide: 1, deadPaint: false, frost: 0, warpArm: false, soot: 0, flyDone: false, dang: 0, dangV: 0, dang2: 0, dang2V: 0, lookY: 0, lookP: 0, recoil: 0, muzL: 0, muzR: 0, gunSide: 1,
       hitGlitch: 0, haze: 0, emerg: 0, power: 1, deadT: -1, sparkIn: 3, flash: 0, extPrev: 0, shieldOn: 0, tickIn: 0,
       lastA: -1e9, lastB: -1e9, dirtyA: true, dirtyB: true, sig: new Float64Array(4), lamps: [false, false, false, false, false, false], gv: new Float32Array(4), hud: { spd: 0, thr: 0, bank: 0 },
     };
     this.flashCol = new T.Vector3(); this.ovFlash = new T.Vector3();
     this.rand = rng(4242);
     this.cracks = 0; this.crackAt = new Float32Array(36);
+    this.lastSide = 0.6; this.lastFront = 0.6;
     this.ships = new Map();
     this.cur = null; this.curId = null;
     this.basePitch = 0; this._lf = -1; this._la = -1;
     this.t = 0;
-    this._v = v3(); this._v2 = v3(); this._q = new T.Quaternion(); this._q2 = new T.Quaternion(); this._ident = new T.Quaternion();
+    this._v = v3(); this._v2 = v3(); this._v3 = v3(); this._q = new T.Quaternion(); this._q2 = new T.Quaternion(); this._ident = new T.Quaternion();
     this._sunDef = new T.Vector3(0.45, 0.62, 0.5).normalize(); this._sunColDef = new T.Color(1.0, 0.94, 0.84); this._ambDef = new T.Color(0.2, 0.25, 0.34);
     this._cTheme = new T.Vector3(); this._cRed = new T.Vector3(1, 0.05, 0.03);
   }
@@ -1771,9 +1875,10 @@ export class Cockpit3D {
     const T = this.T, U = this.U;
     const patch = (m) => {
       m.onBeforeCompile = (sh) => {
-        Object.assign(sh.uniforms, U.ck);
+        Object.assign(sh.uniforms, U.ck, { uFly: U.uFly, uBuckle: U.uBuckle, uBk: m.userData.bk ? U.uBkOn : U.uBkOff });
         sh.vertexShader = sh.vertexShader
-          .replace('#include <common>', '#include <common>\nattribute vec2 mr;\nvarying vec2 vMr;\nvarying vec3 vCk;\nuniform mat4 uRootInv;')
+          .replace('#include <common>', '#include <common>\nattribute vec2 mr;\nvarying vec2 vMr;\nvarying vec3 vCk;\nuniform mat4 uRootInv;\nuniform float uBk;' + BUCKLE)
+          .replace('#include <begin_vertex>', '#include <begin_vertex>\nif (uBk > 0.5) transformed = ckBuckle(transformed);')
           .replace('#include <project_vertex>', '#include <project_vertex>\nvMr = mr;\nvCk = (uRootInv * modelMatrix * vec4(transformed, 1.0)).xyz;');
         sh.fragmentShader = sh.fragmentShader
           .replace('#include <common>', '#include <common>\n' + CK_FRAG)
@@ -1789,22 +1894,24 @@ export class Cockpit3D {
       m.customProgramCacheKey = () => 'cockpit-ck';
       return m;
     };
-    this.mStruct = patch(new T.MeshStandardMaterial({ vertexColors: true, map: this.tDetail, roughness: 1, metalness: 1 }));
-    this.mDecal = patch(new T.MeshStandardMaterial({ map: this.tDecal, color: 0x9a9a9a, roughness: 1, metalness: 1, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
-    this.mGlow = new T.ShaderMaterial({ uniforms: { uCh: U.uCh }, vertexShader: GLOW_VERT, fragmentShader: GLOW_FRAG, blending: T.AdditiveBlending, depthWrite: false, transparent: true, side: T.DoubleSide });
-    const scrU = (map, gain, base) => ({ map: { value: map }, uScr: U.uScr, uTime: U.uTime, uGlitch: U.uGlitch, uWash: U.uWash, uWashAmt: U.uWashAmt, uGain: { value: gain }, uBase: { value: base } });
+    this.mStruct = patch(new T.MeshStandardMaterial({ vertexColors: true, map: this.tDetail, roughness: 1, metalness: 1, userData: { bk: 1 } }));
+    // same program, for the parts that move in their own frame (controls, arms, debris)
+    this.mPart = patch(new T.MeshStandardMaterial({ vertexColors: true, map: this.tDetail, roughness: 1, metalness: 1 }));
+    this.mDecal = patch(new T.MeshStandardMaterial({ map: this.tDecal, color: 0x9a9a9a, roughness: 1, metalness: 1, userData: { bk: 1 }, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
+    this.mGlow = new T.ShaderMaterial({ uniforms: { uCh: U.uCh, uBuckle: U.uBuckle }, vertexShader: GLOW_VERT, fragmentShader: GLOW_FRAG, blending: T.AdditiveBlending, depthWrite: false, transparent: true, side: T.DoubleSide });
+    const scrU = (map, gain, base) => ({ uBuckle: U.uBuckle, map: { value: map }, uScr: U.uScr, uTime: U.uTime, uGlitch: U.uGlitch, uWash: U.uWash, uWashAmt: U.uWashAmt, uGain: { value: gain }, uBase: { value: base } });
     this.mScrA = new T.ShaderMaterial({ uniforms: scrU(this.tA, 1.25, 1), vertexShader: SCR_VERT, fragmentShader: SCR_FRAG });
     this.mScrB = new T.ShaderMaterial({ uniforms: scrU(this.tB, 1.25, 1), vertexShader: SCR_VERT, fragmentShader: SCR_FRAG });
     this.mHud = new T.ShaderMaterial({ uniforms: scrU(this.tA, 0.34, 0), vertexShader: SCR_VERT, fragmentShader: SCR_FRAG, blending: T.AdditiveBlending, depthWrite: false, transparent: true, side: T.DoubleSide });
     const premult = { blending: T.CustomBlending, blendSrc: T.OneFactor, blendDst: T.OneMinusSrcAlphaFactor, blendSrcAlpha: T.OneFactor, blendDstAlpha: T.OneMinusSrcAlphaFactor, transparent: true, depthWrite: false };
     this.mGlass = new T.ShaderMaterial({
-      uniforms: { uCrack: { value: this.tCrack }, uDirt: { value: this.tDirt }, uSunL: U.ck.uSunL, uSunC: U.uSunC, uExtC: U.uExtC, uExtD: U.uExtD, uAmb: U.uAmb, uGlow: U.uGlow, uWarp: U.uWarp, uTime: U.uTime, uShat: U.uShat, uFire: U.uFire },
+      uniforms: { uCrack: { value: this.tCrack }, uDirt: { value: this.tDirt }, uInst: { value: this.tA }, uCab: U.uCab, uMuz: U.uMuz, uFrost: U.uFrost, uSoot: U.uSoot, uSunL: U.ck.uSunL, uSunC: U.uSunC, uExtC: U.uExtC, uExtD: U.uExtD, uAmb: U.uAmb, uGlow: U.uGlow, uWarp: U.uWarp, uTime: U.uTime, uShat: U.uShat, uFire: U.uFire },
       vertexShader: GLASS_VERT, fragmentShader: GLASS_FRAG, side: T.DoubleSide, ...premult,
     });
     this.mShield = new T.ShaderMaterial({ uniforms: { uOn: U.uOn, uTime: U.uTime, uRip: U.uRip, uCol: U.uCol }, vertexShader: SHIELD_VERT, fragmentShader: SHIELD_FRAG, blending: T.AdditiveBlending, depthWrite: false, transparent: true, side: T.BackSide });
     this.mFx = new T.ShaderMaterial({ uniforms: {}, vertexShader: FX_VERT, fragmentShader: FX_FRAG, ...premult });
     this.mOvl = new T.ShaderMaterial({
-      uniforms: { uHaze: U.uHaze, uVig: U.uVig, uRed: U.uRed, uFire: U.uFire, uWarp: U.uWarp, uTime: U.uTime, uAspect: U.uAspect, uFlash: U.uFlash, uHazeCol: U.uHazeCol },
+      uniforms: { uHaze: U.uHaze, uVig: U.uVig, uRed: U.uRed, uFire: U.uFire, uWarp: U.uWarp, uTime: U.uTime, uAspect: U.uAspect, uFlash: U.uFlash, uHazeCol: U.uHazeCol, uFlashSide: U.uFlashSide, uBlack: U.uBlack },
       vertexShader: OVL_VERT, fragmentShader: OVL_FRAG, depthTest: false, ...premult,
     });
   }
@@ -1839,6 +1946,23 @@ export class Cockpit3D {
     this.ovl = new T.Mesh(og, this.mOvl);
     this.ovl.frustumCulled = false; this.ovl.renderOrder = 9;
     this.scene.add(this.ovl);
+    // loose things for the final explosion: panels, bezels, knobs, papers, a strap, two cable ends
+    const mk = (tris, m, kind) => {
+      const b = new Build(this.q);
+      for (let i = 0; i < tris.length; i++) b.add(tris[i], m[i] || m[0], { crease: 50 });
+      const mesh = new T.Mesh(this._geo(b.buf('st')), this.mPart);
+      mesh.frustumCulled = false; mesh.visible = false; this.root.add(mesh);
+      this.debris.push({ mesh, kind, vel: new T.Vector3(), axis: new T.Vector3(1, 0, 0), spin: 0, at: 0, home: new T.Vector3() });
+    };
+    this.debris = [];
+    const PL = M(0x2c3038, 0.55), DK = M(0x15171b, 0.6), PAPER = M(0xcfcab8, 0.9), n = this.q >= 1 ? 1 : 0;
+    for (let i = 0; i < 2 + n; i++) mk([box(-0.002, 0.002, -0.03 - i * 0.008, 0.03 + i * 0.008, -0.05, 0.05, 0.0012), move(rivetT(0.003), 0.002, 0.02, 0.04), move(rivetT(0.003), 0.002, -0.02, -0.04)], [PL, M_SCREW, M_SCREW], 'plate');
+    for (let i = 0; i < 1 + n; i++) mk([bezel(-0.035, 0.035, -0.042, 0.042, 0.008, 0.007, 0.004)], [DK], 'plate');
+    for (let i = 0; i < 1 + n; i++) mk([knobT(0.012, 0.016, 10), box(0.016, 0.0165, -0.001, 0.001, 0, 0.011)], [DK, M_WHITE], 'bit');
+    for (let i = 0; i < 1 + n; i++) mk([tube([[-0.07, 0, 0], [0, 0.006, 0], [0.07, -0.004, 0.01]], 0.0045, 6)], [M_STEEL], 'bit');
+    for (let i = 0; i < 2 + n; i++) mk([box(-0.0004, 0.0004, -0.07, 0.07, -0.05, 0.05), box(0.0004, 0.0006, 0.03, 0.05, -0.04, 0.02), box(0.0004, 0.0006, -0.02, 0.01, -0.04, 0.04)], [PAPER, DK, M(0x8a8676, 0.9)], 'paper');
+    mk([box(-0.001, 0.001, -0.011, 0.011, -0.13, 0.13), box(-0.003, 0.003, -0.014, 0.014, -0.02, 0.012, 0.002)], [M(0x3a3320, 0.9), M_STEEL], 'paper');
+    for (let i = 0; i < 2; i++) mk([tube([[0, 0, 0], [0.004, -0.06, 0.006], [-0.006, -0.13, 0.002], [0.008, -0.2, -0.008], [0.002, -0.26, 0.004]], [0.0055, 0.005, 0.005, 0.0045, 0.006], 6), tube([[0.002, -0.26, 0.004], [0.003, -0.285, 0.005]], 0.0025, 5)], [M_RUBBER, M(0xb87333, 0.3, 1)], 'cable');
   }
 
   _fxInit(N) {
@@ -1904,7 +2028,7 @@ export class Cockpit3D {
     g.setAttribute('mr', new T.Float32BufferAttribute(b.mr, 2));
     return g;
   }
-  _glassGeo(C) {
+  _glassGeo(C, struts) {
     const T = this.T, hi = this.q >= 1, nA = hi ? 46 : 26, nE = hi ? 15 : 9, R = rng(5);
     const P = [];
     for (let i = 0; i <= nA; i++) {
@@ -1915,18 +2039,32 @@ export class Cockpit3D {
         P[i].push(canPt(C, az, e));
       }
     }
-    const pos = [], nrm = [], cen = [], rnd = [], bary = [];
-    const put = (a, b, c) => {
-      const cx = (a[0] + b[0] + c[0]) / 3, cy = (a[1] + b[1] + c[1]) / 3, cz = (a[2] + b[2] + c[2]) / 3, r0 = R(), r1 = R(), r2 = R();
-      [a, b, c].forEach((p, k) => { const n = canNrm(C, p); pos.push(p[0], p[1], p[2]); nrm.push(n[0], n[1], n[2]); cen.push(cx, cy, cz); rnd.push(r0, r1, r2); bary.push(k === 0 ? 1 : 0, k === 1 ? 1 : 0, k === 2 ? 1 : 0); });
+    const pos = [], nrm = [], cen = [], rnd = [], bary = [], edge = [];
+    // how far a point of the glass is from the nearest piece of frame (0 at the frame … 1 mid-pane)
+    const frameDist = (p) => {
+      const [az, e] = canHit(C, C.c, vsub(p, C.c));
+      let dmin = Math.min(e - sillAt(C, az), C.az - Math.abs(az));
+      if (topAt(C, az) < 1.5) dmin = Math.min(dmin, topAt(C, az) - e);
+      for (const [A] of struts) dmin = Math.min(dmin, Math.abs(Math.abs(az) - A * DEG) * Math.cos(e));
+      return sat(dmin / 0.3);
+    };
+    // most of the canopy leaves in large plates (blocks of cells sharing one motion), the rest as splinters
+    const blocks = new Map();
+    const put = (a, b, c, bi, bj) => {
+      let cx = (a[0] + b[0] + c[0]) / 3, cy = (a[1] + b[1] + c[1]) / 3, cz = (a[2] + b[2] + c[2]) / 3, r0 = R(), r1 = R(), r2 = R();
+      const key = bi + ',' + bj;
+      let blk = blocks.get(key);
+      if (!blk) { const pc = P[Math.min(nA, bi * 3 + 1)][Math.min(nE, bj * 3 + 1)]; blk = { big: R() < 0.72, c: pc, r: [R(), R(), R()] }; blocks.set(key, blk); }
+      if (blk.big) { cx = blk.c[0]; cy = blk.c[1]; cz = blk.c[2]; r0 = blk.r[0]; r1 = blk.r[1]; r2 = blk.r[2]; }
+      [a, b, c].forEach((p, k) => { const n = canNrm(C, p); pos.push(p[0], p[1], p[2]); nrm.push(n[0], n[1], n[2]); cen.push(cx, cy, cz); rnd.push(r0, r1, r2); edge.push(frameDist(p)); if (blk.big) bary.push(2, 2, 2); else bary.push(k === 0 ? 1 : 0, k === 1 ? 1 : 0, k === 2 ? 1 : 0); });
     };
     for (let i = 0; i < nA; i++) for (let j = 0; j < nE; j++) {
-      const a = P[i][j], b = P[i + 1][j], c = P[i + 1][j + 1], d = P[i][j + 1];
-      if ((i + j) % 2) { put(a, b, c); put(a, c, d); } else { put(a, b, d); put(b, c, d); }
+      const a = P[i][j], b = P[i + 1][j], c = P[i + 1][j + 1], d = P[i][j + 1], bi = (i / 3) | 0, bj = (j / 3) | 0;
+      if ((i + j) % 2) { put(a, b, c, bi, bj); put(a, c, d, bi, bj); } else { put(a, b, d, bi, bj); put(b, c, d, bi, bj); }
     }
     const g = new T.BufferGeometry();
     g.setAttribute('position', new T.Float32BufferAttribute(pos, 3)); g.setAttribute('normal', new T.Float32BufferAttribute(nrm, 3));
-    g.setAttribute('cen', new T.Float32BufferAttribute(cen, 3)); g.setAttribute('rnd', new T.Float32BufferAttribute(rnd, 3)); g.setAttribute('bary', new T.Float32BufferAttribute(bary, 3));
+    g.setAttribute('cen', new T.Float32BufferAttribute(cen, 3)); g.setAttribute('rnd', new T.Float32BufferAttribute(rnd, 3)); g.setAttribute('bary', new T.Float32BufferAttribute(bary, 3)); g.setAttribute('edge', new T.Float32BufferAttribute(edge, 1));
     return g;
   }
 
@@ -1940,14 +2078,21 @@ export class Cockpit3D {
     const group = new T.Group(), meshes = {};
     let tris = 0;
     const add = (geo, mat, order = 0) => { const m = new T.Mesh(geo, mat); m.frustumCulled = false; m.renderOrder = order; group.add(m); tris += (geo.index ? geo.index.count : geo.attributes.position.count) / 3; return m; };
-    for (const [name, buf] of b.parts) meshes[name] = add(this._geo(buf), this.mStruct);
+    for (const [name, buf] of b.parts) meshes[name] = add(this._geo(buf), name === 'st' ? this.mStruct : this.mPart);
     add(this._geo(b.decal, true), this.mDecal);
     const gg = new T.BufferGeometry();
     gg.setAttribute('position', new T.Float32BufferAttribute(b.glow.pos, 3)); gg.setAttribute('gcol', new T.Float32BufferAttribute(b.glow.col, 3)); gg.setAttribute('ch', new T.Float32BufferAttribute(b.glow.ch, 1));
     add(gg, this.mGlow, 3);
     const sg = (s) => { const g = new T.BufferGeometry(); g.setAttribute('position', new T.Float32BufferAttribute(s.pos, 3)); g.setAttribute('uv', new T.Float32BufferAttribute(s.uv, 2)); g.setAttribute('luv', new T.Float32BufferAttribute(s.luv, 2)); g.setAttribute('sid', new T.Float32BufferAttribute(s.sid, 1)); return g; };
-    add(sg(b.scr.A), this.mScrA); add(sg(b.scr.B), this.mScrB); add(sg(b.scr.H), this.mHud, 4);
-    const glass = add(this._glassGeo(C), this.mGlass, 2);
+    add(sg(b.scr.A), this.mScrA); add(sg(b.scr.B), this.mScrB);
+    // the combiner (glass and frame) hangs in its own group so it can be torn off
+    const hud = new T.Group(), hp = out.hudPiv, hg = sg(b.scr.H);
+    hg.translate(-hp[0], -hp[1], -hp[2]);
+    const hscr = add(hg, this.mHud, 4);
+    group.remove(hscr); hud.add(hscr);
+    if (meshes.hud) { group.remove(meshes.hud); hud.add(meshes.hud); }
+    hud.position.fromArray(hp); group.add(hud);
+    const glass = add(this._glassGeo(C, H0.can.struts), this.mGlass, 2);
     const V = (a) => new T.Vector3(a[0], a[1], a[2]);
     const digits = [];
     const controls = out.controls.map((c) => {
@@ -1958,12 +2103,13 @@ export class Cockpit3D {
         grips: c.grips.map((g) => {
           const arm = meshes[g.part];
           arm.position.fromArray(g.G);
-          for (const dg of g.digits || []) { const m = meshes[dg.part]; group.remove(m); arm.add(m); m.position.fromArray(dg.piv); digits.push({ obj: m, axis: V(dg.axis), kind: dg.kind }); }
-          return { obj: arm, at: V(g.at), elbow: V(g.elbow), rest: V(vnorm(vsub(g.elbow, g.G))) };
+          for (const dg of g.digits || []) { const m = meshes[dg.part]; group.remove(m); arm.add(m); m.position.fromArray(dg.piv); digits.push({ obj: m, axis: V(vnorm(dg.axis)), kind: dg.kind, sg: dg.sg }); }
+          return { obj: arm, at: V(g.at), elbow: V(g.elbow), rest: V(vnorm(vsub(g.elbow, g.G))), sgn: g.G[2] < -0.02 ? -1 : 1, from: new T.Vector3() };
         }),
       };
     });
-    return { key, group, glass, controls, digits, guns: meshes.guns, C, H, ui: H0.ui, emitPts: out.emitPts.concat(out.emitTop ? [out.emitTop] : []), muzzles: out.muzzles, tris: Math.round(tris), draws: group.children.length + digits.length + 3 };
+    if (meshes.dangle) meshes.dangle.position.fromArray(out.dangle);
+    return { key, group, glass, controls, digits, hud, hudPiv: V(hp), dangle: meshes.dangle || null, guns: meshes.guns, C, H, ui: H0.ui, emitPts: out.emitPts.concat(out.emitTop ? [out.emitTop] : []), muzzles: out.muzzles, tris: Math.round(tris), draws: group.children.length + digits.length + hud.children.length + 2 };
   }
 
   // build (cached) the interior for a hull and show it; cheap if unchanged
@@ -2010,24 +2156,51 @@ export class Cockpit3D {
   update(dtMs, tMs, s) {
     s = s || EMPTY;
     if (!this.cur) this.setShip('vanguard');
-    const dt = clamp(dtMs || 0, 0, 50) / 1000, t = (tMs || 0) / 1000, A = this.A, U = this.U, ship = this.cur, R = this.rand;
+    let dt = clamp(dtMs || 0, 0, 50) / 1000;
+    const t = (tMs || 0) / 1000, A = this.A, U = this.U, ship = this.cur, R = this.rand;
     this.t = t;
     this._layout();
     const steer = clamp(s.steer ?? 0, -1, 1), thr = clamp(s.throttle ?? 0, -1, 1), bank = s.bank ?? 0, boost = s.boost ? 1 : 0, warp = sat(s.warp ?? 0);
     const ion = sat(s.ion ?? 0), hp = s.hp ?? 3, hpMax = Math.max(1, s.hpMax ?? 3), dead = !!s.dead;
     const d = dead ? 1 : hpMax > 1 ? sat(1 - (hp - 1) / (hpMax - 1)) : hp <= 1 ? 1 : 0, crit = hp <= 1;
+    // the death sequence runs on its own clock: the game slows the sim down around it
+    if (dead && dt > 0) dt = Math.max(dt, 1 / 60);
+    if (dead) {
+      if (A.deadT < 0) { A.deadT = 0; this._deathStart(); }
+      A.deadT = s.deadMs !== undefined ? Math.max(A.deadT, s.deadMs / 1000) : A.deadT + dt;
+    } else if (A.deadT >= 0) this._deathClear();
+    const td = A.deadT, sd = A.dSide;
     const ex = (k) => 1 - Math.exp(-dt * k);
 
     /* controls */
     A.stickX += (steer - A.stickX) * ex(14); A.stickY += (thr - A.stickY) * ex(14);
     A.thr += ((boost ? 1 : thr * 0.7) - A.thr) * ex(9); A.boost += (boost - A.boost) * ex(5);
     A.steerLag += (steer - A.steerLag) * ex(3); A.thrLag += (thr - A.thrLag) * ex(2.5);
+    if (dead) A.thr += (-1 - A.thr) * ex(22);      // the throttle slams back
+    A.open = dead ? smooth(0.03, 0.22, td) : 0;
     for (const c of ship.controls) {
       const o = c.obj;
-      if (c.type === 'stick') o.rotation.set(A.stickX * 0.24, 0, -A.stickY * 0.15);
-      else if (c.type === 'throttle') o.position.set(c.piv.x + A.thr * 0.045, c.piv.y, c.piv.z);
-      else { o.quaternion.setFromAxisAngle(c.axis, -A.stickX * 0.6); o.position.copy(c.piv).addScaledVector(c.axis, -A.stickY * 0.022); }
+      if (c.type === 'stick') {
+        if (dead) { const k = smooth(0, 0.25, td), w = Math.sin(td * 17) * Math.exp(-td * 3.5) * 0.2; o.rotation.set(lerp(A.stickX * 0.24, -sd * 0.45, k) + w, 0, lerp(-A.stickY * 0.15, 0.3, k) + w * 0.6); }      // flops free
+        else o.rotation.set(A.stickX * 0.24, 0, -A.stickY * 0.15);
+      } else if (c.type === 'throttle') o.position.set(c.piv.x + A.thr * 0.045, c.piv.y, c.piv.z);
+      else { o.quaternion.setFromAxisAngle(c.axis, dead ? sd * 0.7 * smooth(0, 0.3, td) : -A.stickX * 0.6); o.position.copy(c.piv).addScaledVector(c.axis, dead ? -0.03 * smooth(0, 0.2, td) : -A.stickY * 0.022); }
       for (const g of c.grips) {
+        if (dead) {
+          // thrown off the controls: flung up in front of the visor, then limp, drifting toward the breach
+          const k1 = smooth(0.02, 0.24, td), k2 = smooth(0.6, 1.1, td), u = smooth(0.7, 2.2, td), z = g.sgn, bl = z * sd > 0 ? 1 : 0.55;
+          const p = this._v.set(0.37, -0.09 + 0.04 * bl, z * 0.13 - sd * 0.05 * bl);
+          p.lerpVectors(g.from, p, k1);
+          this._v2.set(0.45 + 0.07 * u, -0.04 + 0.09 * u + 0.012 * Math.sin(td * 2.3 + z), z * (0.21 + 0.03 * Math.sin(td * 1.7 + z * 2)));
+          p.lerp(this._v2, k2);
+          g.obj.position.copy(p);
+          const e = this._v2.copy(g.elbow);
+          this._v3.set(0.1, -0.4, z * 0.3); e.lerp(this._v3, k1);
+          this._v3.set(0.15 + 0.05 * u, -0.34 + 0.05 * u, z * 0.36); e.lerp(this._v3, k2);
+          e.sub(p).normalize();
+          g.obj.quaternion.setFromUnitVectors(g.rest, e);
+          continue;
+        }
         const p = this._v.copy(g.at).applyQuaternion(o.quaternion).add(o.position);
         g.obj.position.copy(p);
         this._v2.copy(g.elbow).sub(p).normalize();
@@ -2054,22 +2227,26 @@ export class Cockpit3D {
     if (ship.guns) ship.guns.position.x = -A.recoil * 0.075;
     // the trigger finger squeezes with every shot, the thumb reaches for the rocket button
     A.trig *= Math.exp(-dt * 16); A.thumb *= Math.exp(-dt * 3.5);
-    for (const dg of ship.digits) dg.obj.quaternion.setFromAxisAngle(dg.axis, dg.kind === 'trigger' ? 0.1 + Math.min(1, A.trig * 1.6) * 0.3 + (s.firing ? 0.06 : 0) : -Math.min(1, A.thumb * 1.8) * 0.5);
+    for (const dg of ship.digits) {
+      const k = dg.kind, o = A.open;
+      const a = k === 'trigger' ? 0.1 + Math.min(1, A.trig * 1.6) * 0.3 + (s.firing ? 0.06 : 0) - o * 1.6 : k === 'fingers' ? -o * 1.5 : (k === 'thumb' ? -Math.min(1, A.thumb * 1.8) * 0.5 : 0) + o * 0.85;
+      dg.obj.quaternion.setFromAxisAngle(dg.axis, a * dg.sg);
+    }
     const laser = sat(s.laser ?? 0), lz = laser * (0.3 + 0.12 * wob(t, 61, 0));
     this.lMuz.intensity = Math.max(A.muzL, A.muzR) * 2.2 + laser * 1.2;
     this.lMuz.color.setRGB(1 - laser * 0.6, 0.75, 0.4 + laser * 0.6);
 
     /* damage state */
     A.hitGlitch *= Math.exp(-dt * 3.2);
-    A.haze += ((crit && !dead ? 0.06 : 0) - A.haze) * ex(dead ? 4 : 0.9);
+    if (!dead) A.haze += ((crit ? 0.06 : 0) - A.haze) * ex(0.9);
     A.emerg += ((crit ? 1 : 0) - A.emerg) * ex(3);      // red lighting belongs to the last life only
     if (dead) {
-      if (A.deadT < 0) { A.deadT = 0; this._decompress(); }
-      A.deadT += dt;
-      A.power = A.deadT < 0.45 ? (hash1(Math.floor(t * 30)) < 0.5 ? 0.85 : 0.08) : 0;
-    } else { A.deadT = -1; A.power = 1; }
-    U.uShat.value = Math.max(0, A.deadT);
-    ship.glass.visible = A.deadT < 1.7;
+      A.power = td < 0.2 ? (hash1(Math.floor(t * 30)) < 0.5 ? 0.9 : 0.1) : 0;
+      if (dt > 0) this._death(dt, t, td);
+    } else A.power = 1;
+    U.uShat.value = Math.max(0, td - 0.55);
+    ship.glass.visible = td < 2.3;
+    A.haze += ((dead ? (td < 0.55 ? 0.3 * smooth(0.1, 0.45, td) : td < 0.72 ? 0.26 : 0.02) : A.haze) - A.haze) * ex(10);
     // arcing from a damaged panel now and then
     if (d > 0.3 && !dead && dt > 0) {
       A.sparkIn -= dt;
@@ -2088,23 +2265,51 @@ export class Cockpit3D {
       this._spawn(1, p[0] - 0.02, p[1], p[2], -0.04 - R() * 0.05, 0.1 + R() * 0.08, (R() - 0.5) * 0.08, 2.5 + R(), 0.035 + R() * 0.03, 1, 1, 1);
     }
 
+    /* fly-bys, head look, frost, soot */
+    const fb = s.flyby || null, fbS = fb ? sat(fb.size ?? 0.5) : 0, fbE = fb ? Math.sin(Math.PI * sat(fb.t ?? 0)) : 0, fbSide = fb ? clamp(fb.side ?? 0, -1, 1) : 0;
+    if (fb) {
+      const over = fb.above || Math.abs(fbSide) < 0.1;
+      U.uFly.value.set(over ? 0 : fbSide * (1.5 - 3 * sat(fb.t ?? 0)), over ? 2 : 0.4 + 0.5 * fbS, (0.5 + 0.42 * fbS) * Math.min(1, fbE * 2.5));
+      if ((fb.t ?? 0) >= 0.42 && !A.flyDone) {      // the wake hits as it passes
+        A.flyDone = true;
+        A.vel[2] -= fbSide * 0.4 * fbS; A.vel[1] += (fb.above ? -0.3 : 0.15) * fbS; A.vel[3] += (fbSide || 0.4) * 0.6 * fbS; A.dangV += (fbSide || 1) * 5 * fbS;
+        if (fbS > 0.7) A.hitGlitch = Math.max(A.hitGlitch, 0.85);
+      }
+      if ((fb.t ?? 0) < 0.2) A.flyDone = false;
+    } else { U.uFly.value.z = 0; A.flyDone = false; }
+    const lk = s.look;
+    A.lookY += ((lk ? lk.yaw || 0 : 0) - A.lookY) * ex(12); A.lookP += ((lk ? lk.pitch || 0 : 0) - A.lookP) * ex(12);
+    if (warp > 0.5) A.warpArm = true;
+    else if (A.warpArm && warp < 0.04) { A.warpArm = false; A.frost = 1; }
+    A.frost = Math.max(0, A.frost - dt / 4.2);
+    U.uFrost.value = dead ? 0 : A.frost < 0.85 ? A.frost / 0.85 : (1 - A.frost) / 0.15;      // creeps in fast, melts over four seconds
+    A.soot += ((crit && !dead ? 1 : 0) - A.soot) * ex(crit ? 0.35 : 1.5);
+    U.uSoot.value = A.soot;
+    // the pendant: a damped pendulum driven by the cabin's own lurches
+    A.dangV += (-38 * A.dang - 1.3 * A.dangV - A.vel[2] * 260 - steer * 2.2 + (A.steerLag) * 2.2) * dt; A.dang = clamp(A.dang + A.dangV * dt, -1.2, 1.2);
+    A.dang2V += (-38 * A.dang2 - 1.3 * A.dang2V - A.vel[0] * 260 + A.boost * 6) * dt; A.dang2 = clamp(A.dang2 + A.dang2V * dt, -1, 1);
+    if (ship.dangle) ship.dangle.rotation.set(A.dang + (dead ? smooth(0.55, 0.9, td) * 0.4 : 0), 0, A.dang2 - (dead ? smooth(0.55, 0.9, td) * 1.3 : 0));
+
     /* head inertia, vibration, jolts */
     A.tgt[0] = (thr - A.thrLag) * 0.014 + A.boost * 0.022;
     A.tgt[2] = (steer - A.steerLag) * 0.024;
     A.tgt[3] = -steer * 0.022 - bank * 0.08;
     A.tgt[4] = (thr - A.thrLag) * 0.006 - A.boost * 0.007;
     for (let i = 0; i < 5; i++) { A.vel[i] += (-95 * (A.pos[i] - A.tgt[i]) - 13 * A.vel[i]) * dt; A.pos[i] += A.vel[i] * dt; }
-    const amp = 0.00035 + A.boost * 0.0013 + warp * 0.0028 + sat(s.shake ?? 0) * 0.007 + (dead && A.deadT < 1 ? 0.004 : 0);
-    this.root.position.set(A.pos[0] + amp * 0.5 * wob(t, 43, 3.3), A.pos[1] + amp * wob(t, 47, 0), A.pos[2] + amp * wob(t, 53, 2.1));
-    this.root.rotation.set(A.pos[3] + amp * 1.4 * wob(t, 41, 5.2), 0, this.basePitch + A.pos[4] + amp * 0.8 * wob(t, 37, 1.1));
+    const amp = 0.00035 + A.boost * 0.0013 + warp * 0.0028 + sat(s.shake ?? 0) * 0.007 + fbS * fbE * 0.0045 + (dead ? (td < 0.7 ? 0.007 : 0.0015) : 0);
+    // the wreck starts to tumble: the cockpit rolls against the horizon outside
+    const tum = dead ? Math.pow(sat((td - 0.4) / 1.8), 1.5) : 0;
+    // turning the head moves the eyes a few centimetres: the cabin slides the other way
+    this.root.position.set(A.pos[0] + amp * 0.5 * wob(t, 43, 3.3) + Math.abs(A.lookY) * 0.03, A.pos[1] + amp * wob(t, 47, 0) - A.lookP * 0.1, A.pos[2] + amp * wob(t, 53, 2.1) - A.lookY * 0.13);
+    this.root.rotation.set(A.pos[3] + amp * 1.4 * wob(t, 41, 5.2) + tum * sd * 0.5, tum * sd * 0.1, this.basePitch + A.pos[4] + amp * 0.8 * wob(t, 37, 1.1) - tum * 0.13);
     this.root.updateMatrix();
     U.ck.uRootInv.value.copy(this.root.matrix).invert();
 
     /* lighting */
     const sunDir = s.sunDir || this._sunDef, sunC = s.sunColor || this._sunColDef, amb = s.ambient || this._ambDef, pw = A.power;
-    this.sun.position.copy(sunDir); this.sun.color.copy(sunC); this.sun.intensity = 7.5;
+    this.sun.position.copy(sunDir); this.sun.color.copy(sunC); this.sun.intensity = 7.5 * (dead ? 1 - 0.5 * smooth(0.6, 1.4, td) : 1);
     U.ck.uSunL.value.copy(sunDir).transformDirection(U.ck.uRootInv.value);
-    this.hemi.color.copy(amb); this.hemi.groundColor.copy(amb).multiplyScalar(0.35); this.hemi.intensity = 2.0;
+    this.hemi.color.copy(amb); this.hemi.groundColor.copy(amb).multiplyScalar(0.35); this.hemi.intensity = 2.0 * (dead ? 1 - 0.75 * smooth(0.5, 1.3, td) : 1) * (1 - 0.6 * fbS * fbE);
     const pulse = 0.55 + 0.45 * Math.sin(t * 5.5), em = A.emerg, th = this._cTheme, wsh = warp * 0.7;
     this.lCabin.color.setRGB(lerp(lerp(th.x, 0.3, wsh), 1, em), lerp(lerp(th.y, 0.6, wsh), 0.04, em), lerp(lerp(th.z, 1.4, wsh), 0.03, em));
     this.lCabin.intensity = (dead ? Math.max(pw, em * 0.35 * Math.max(0, 1 - A.deadT)) : 1) * (0.5 + em * 0.3 * pulse + warp * 0.4);
@@ -2119,17 +2324,18 @@ export class Cockpit3D {
       for (let i = 0; i < (this.q >= 1 ? 7 : 3); i++) this._spawn(4, 1.25, -0.1 + R() * 0.5, sd * 0.35 + (R() - 0.5) * 0.6, -(7 + R() * 6), 0.5 + R() * 2, (R() - 0.5) * 3 - sd, 0.16 + R() * 0.14, 0.003 + R() * 0.003, 3 + ext.r * 3, 2 + ext.g * 2, 1 + ext.b);
     }
     A.extPrev = ei;
-    const fire = crit && !dead ? 0.75 + 0.25 * wob(t, 17, 1.7) : 0;
-    this.lFire.intensity = fire * 0.9; this.lFire.color.setRGB(1, 0.36, 0.06);
-    if (this.scene.environment) this.scene.environmentIntensity = 0.6 * Math.min(1.6, (amb.r + amb.g + amb.b) * 1.3);
+    const fire = dead ? smooth(0.08, 0.22, td) * (1 - 0.72 * smooth(0.55, 1.3, td)) * (1 - 0.6 * smooth(1.4, 2.2, td)) * (0.75 + 0.25 * wob(t, 19, 1.7)) : crit ? 0.75 + 0.25 * wob(t, 17, 1.7) : 0;
+    this.lFire.intensity = fire * (dead ? 2.6 : 0.9); this.lFire.color.setRGB(1, 0.36, 0.06);
+    if (dead) this.lFire.position.set(0.3, -0.26, sd * 0.42); else this.lFire.position.set(-0.2, -0.3, 0.25);
+    if (this.scene.environment) this.scene.environmentIntensity = (1 - 0.55 * fbS * fbE) * 0.6 * Math.min(1.6, (amb.r + amb.g + amb.b) * 1.3);
 
     /* uniforms */
     U.uTime.value = t;
     const burst = d > 0.4 && hash1(Math.floor(t * 1.7) + 11) < (crit ? 0.4 : 0.12) ? 1 : 0;
-    U.uGlitch.value = Math.max(A.hitGlitch, ion * 0.85, burst * 0.55, dead ? 1 : 0);
+    U.uGlitch.value = dead ? (td < 0.24 ? 1 : 0) : Math.max(A.hitGlitch, ion * 0.85, burst * 0.55);
     U.uWashAmt.value = wsh;
     const flick = A.hitGlitch > 0.25 && hash1(Math.floor(t * 40)) < A.hitGlitch * 0.6 ? 0.2 : 1;
-    const scr = U.uScr.value, alarm = crit && !dead;
+    const scr = U.uScr.value, alarm = dead ? td < 0.12 : crit;
     scr[SID.TAC] = pw * Math.max(flick, 0.65) * (burst ? 0.85 : 1);
     scr[SID.GAUGE] = pw * (crit && hash1(Math.floor(t * 11) + 5) < 0.3 ? 0.25 : 1);
     scr[SID.MFD_L] = pw * flick * (crit && hash1(Math.floor(t * 13) + 3) < 0.25 ? 0.2 : 1);
@@ -2140,22 +2346,30 @@ export class Cockpit3D {
     scr[SID.LAMP0 + 3] = pw * (0.8 + 0.4 * hash1(Math.floor(t * 20)));
     scr[SID.LAMP0 + 4] = pw; scr[SID.LAMP0 + 5] = pw * (0.9 + 0.25 * Math.sin(t * 9));
     scr[SID.HUD] = pw * flick * (ion > 0.3 && hash1(Math.floor(t * 17)) < 0.4 ? 0.3 : 1);
+    if (dead) for (let i = 0; i < 11; i++) scr[i] = td < 0.05 + ((i * 7) % 5) * 0.035 ? (hash1(Math.floor(t * 45) + i * 3) < 0.45 ? 0.15 : 1.1) : A.deadPaint && i < 10 ? 0.1 + fire * 0.75 : 0;      // glitch, die one after another, then just dead glass in the firelight
     const ch = U.uCh.value;
     ch[CH.STATIC] = pw; ch[CH.ALARM] = alarm ? (Math.sin(t * 13) > 0 ? 1 : 0.04) : 0;
     ch[CH.MUZ_L] = A.muzL + lz; ch[CH.MUZ_R] = A.muzR + lz;
     ch[CH.BLINK_A] = pw * (Math.sin(t * 3.1) > 0 ? 1 : 0.1); ch[CH.BLINK_B] = pw * (Math.sin(t * 4.7) > 0 ? 1 : 0.1);
     ch[CH.EMERG] = em * (0.55 + 0.45 * pulse) * (dead ? Math.max(0, 1 - A.deadT * 0.5) : 1);
-    ch[CH.HUDGLASS] = pw; ch[CH.ACCENT] = pw * (1 - em * 0.75);
+    ch[CH.HUDGLASS] = dead && td > 0.16 ? 0 : pw; ch[CH.ACCENT] = pw * (1 - em * 0.75);
     U.uSunC.value.set(sunC.r, sunC.g, sunC.b);
     U.uAmb.value.set(amb.r, amb.g, amb.b);
     const fl = A.flash * 0.12;
     U.uExtC.value.set((ext ? ext.r * ei : 0) * 0.22 + this.flashCol.x * fl, (ext ? ext.g * ei : 0) * 0.22 + this.flashCol.y * fl, (ext ? ext.b * ei : 0) * 0.22 + this.flashCol.z * fl);
     U.uGlow.value.set(lerp(th.x * 0.35, 0.9, em * pulse) * pw, lerp(th.y * 0.35, 0.03, em) * pw, lerp(th.z * 0.35, 0.02, em) * pw);
-    U.uWarp.value = warp; U.uFire.value = fire * 0.12;
-    U.uHaze.value = A.haze; U.uVig.value = em * 0.16 + warp * 0.15;
+    U.uCab.value = pw * (1 + em * 0.4) + A.flash * 0.6 + fire * (dead ? 1.5 : 0.5); U.uMuz.value = Math.max(A.muzL, A.muzR);
+    U.uWarp.value = warp; U.uFire.value = fire * (dead ? 0.3 : 0.12);
+    U.uHaze.value = A.haze; U.uVig.value = em * 0.16 + warp * 0.15 + (dead ? 0.3 * smooth(0.9, 2.0, td) : 0);
+    U.uBlack.value = dead ? smooth(1.85, 2.2, td) : 0;
+    U.uBuckle.value.set(dead ? smooth(0.1, 0.36, td) : 0, sd);
+    U.uFlashSide.value = dead ? sd : 0;
     U.uRed.value = em * pulse * 0.13 * (dead ? Math.max(0, 1 - A.deadT) : 1);
-    this.ovFlash.multiplyScalar(Math.exp(-dt * 8)); U.uFlash.value.copy(this.ovFlash);
-    U.uHazeCol.value.set(0.05 + amb.r * 0.25 + em * pulse * 0.04 + fire * 0.03, 0.05 + amb.g * 0.25 + fire * 0.008, 0.055 + amb.b * 0.25);
+    this.ovFlash.multiplyScalar(Math.exp(-dt * 8));
+    if (dead) { if (td < 0.08) this.ovFlash.set(0.5, 0.4, 0.26); else { const o = this.ovFlash; o.set(Math.min(o.x, 0.12), Math.min(o.y, 0.075), Math.min(o.z, 0.035)); } }      // one hard flash, never a white-out
+    U.uFlash.value.copy(this.ovFlash);
+    const vap = dead && td > 0.5 && td < 0.85 ? 0.09 : 0, fh = dead ? 0.12 : 0.03;      // fire-lit smoke, then a white burst of vapour
+    U.uHazeCol.value.set(0.05 + amb.r * 0.25 + em * pulse * 0.04 + fire * fh + vap, 0.05 + amb.g * 0.25 + fire * fh * 0.3 + vap, 0.055 + amb.b * 0.25 + vap);
     // shield dome and impact ripples
     A.shieldOn += ((s.shield && !dead ? 1 : 0) - A.shieldOn) * ex(6);
     U.uOn.value = A.shieldOn;
@@ -2163,7 +2377,7 @@ export class Cockpit3D {
     for (const r of U.uRip.value) if (r.w >= 0) { r.w += dt; if (r.w > 0.7) r.w = -1; else rip = true; }
     this.shield.visible = A.shieldOn > 0.01 || rip;
 
-    this._fxUpdate(dt, t, dead, sunC);
+    this._fxUpdate(dt, t, dead, dead && td >= 0.55, sunC);
     this._instruments(t, tMs || 0, s, d, crit, ion);
   }
 
@@ -2171,9 +2385,9 @@ export class Cockpit3D {
     if (k >= this.A.flash) { this.A.flash = k; this.lFlash.position.set(p[0] - 0.05, p[1] + 0.03, p[2]); this.flashCol.set(r, g, b); }
   }
 
-  _fxUpdate(dt, t, dead, sunC) {
+  _fxUpdate(dt, t, dead, breach, sunC) {
     const P = this.P, pos = this.fxPos.array, vel = this.fxVel.array, par = this.fxPar.array, col = this.fxCol.array, U = this.U;
-    const hz = U.uHazeCol.value, suck = dead ? 1 : 0;
+    const hz = U.uHazeCol.value, suck = breach ? 1 : 0;
     for (let i = 0; i < P.n; i++) {
       let size = 0, st = 0, al = 0, bl = 0, r = 0, g = 0, b = 0;
       if (P.life[i] > 0) {
@@ -2191,7 +2405,15 @@ export class Cockpit3D {
             size = P.size[i]; st = k === 4 ? 0.016 : 0.011; r = P.r[i] * f; g = P.g[i] * f * f; b = P.b[i] * f * f * f;
           } else if (k === 1) {
             P.vx[i] += suck * 12 * dt; P.vy[i] *= Math.exp(-dt * 0.4);
-            size = P.size[i] * (1 + (1 - f) * 2.4); al = Math.sin(Math.PI * Math.min(1, (1 - f) * 1.15)) * 0.2; bl = 1; r = hz.x * 2.2; g = hz.y * 2.2; b = hz.z * 2.2;
+            size = P.size[i] * (1 + (1 - f) * 2.4); al = Math.sin(Math.PI * Math.min(1, (1 - f) * 1.15)) * 0.2; bl = 1; r = hz.x * 2.2 * P.r[i]; g = hz.y * 2.2 * P.g[i]; b = hz.z * 2.2 * P.b[i];
+          } else if (k === 5) {      // fire: bright core cooling to sooty red as it rolls
+            P.vy[i] += 0.9 * dt; P.vx[i] += suck * 11 * dt; const dr = Math.exp(-dt * 1.6); P.vy[i] *= dr; P.vz[i] *= dr;
+            size = P.size[i] * (0.55 + (1 - f) * 1.5); al = 0.5 * f; bl = 0.45;
+            r = 0.45 + 0.75 * f; g = 0.08 + 0.42 * f * f; b = 0.02 + 0.12 * f * f * f;
+          } else if (k === 6) {      // embers
+            P.vy[i] += 0.12 * dt; P.vx[i] += suck * 1.2 * dt; P.vz[i] += Math.sin(t * 5 + P.seed[i] * 9) * 0.3 * dt;
+            const tw = 0.5 + 0.5 * Math.sin(t * 17 + P.seed[i] * 11);
+            size = P.size[i]; st = 0.004; r = 2.2 * f * tw; g = 0.7 * f * tw; b = 0.12 * f * tw;
           } else {      // canopy fragments
             P.vx[i] += 13 * dt; P.vy[i] -= 1.2 * dt;
             const tw = 0.4 + 0.6 * Math.abs(Math.sin(t * 23 + P.seed[i] * 7));
@@ -2214,6 +2436,7 @@ export class Cockpit3D {
   // repaint the instrument canvases: tactical at ~15 Hz, status only on change
   _instruments(t, tMs, s, d, crit, ion) {
     const A = this.A, th = this.cur.ui;
+    if (A.deadPaint) return;
     if (A.dirtyA || Math.abs(tMs - A.lastA) >= 66) {
       A.lastA = tMs; A.dirtyA = false;
       const c = this.cxA;
@@ -2245,6 +2468,8 @@ export class Cockpit3D {
     if (!this.cur) return;
     const A = this.A, R = this.rand, ship = this.cur;
     const side = clamp(o.side ?? 0, -1, 1), front = clamp(o.front ?? 1, -1, 1), pw = clamp(o.power ?? 0.6, 0, 1);
+    if (Math.abs(side) > 0.1) this.lastSide = side;
+    this.lastFront = front;
     // jolt away from the impact
     A.vel[2] -= side * (0.22 + pw * 0.5); A.vel[0] -= front * (0.1 + pw * 0.28); A.vel[1] += (R() - 0.5) * 0.25 * pw;
     A.vel[3] += (side || R() - 0.5) * (0.35 + pw * 0.7); A.vel[4] += front * 0.2 * pw + (R() - 0.5) * 0.3 * pw;
@@ -2292,18 +2517,103 @@ export class Cockpit3D {
     for (let i = 0; i < 2; i++) this._spawn(1, best[0], best[1], best[2], -0.06 - R() * 0.06, 0.1 + R() * 0.1, (R() - 0.5) * 0.12, 2 + R(), 0.04 + R() * 0.03, 1, 1, 1);
   }
 
-  // the canopy has gone: everything loose is blown out ahead
-  _decompress() {
-    const R = this.rand, C = this.cur.C, n = this.q >= 1 ? 46 : 20;
-    for (let i = 0; i < n; i++) {
-      const az = (R() - 0.5) * 2 * 60 * DEG, p = canPt(C, az, lerp(sillAt(C, az), Math.min(topAt(C, az), 1.3), R()), 0.96);
-      this._spawn(2, p[0], p[1], p[2], 1 + R() * 3, (R() - 0.3) * 2, (R() - 0.5) * 3, 0.7 + R() * 0.8, 0.003 + R() * 0.006, 1, 1, 1);
+  // the killing blow: jolt from the side it came from, a hard flash, everything loose lets go
+  _deathStart() {
+    const A = this.A, R = this.rand, ship = this.cur, sd = this.lastSide < 0 ? -1 : 1;
+    A.dSide = sd; A.dCr = 0; A.dFlags = 0;
+    A.vel[2] -= sd * 1.3; A.vel[3] += sd * 1.7; A.vel[0] -= this.lastFront * 0.5; A.vel[4] += 0.5; A.vel[1] += 0.3;
+    this._flashAt([0.6, 0.05, sd * 0.55], 3.2, 1, 0.72, 0.4);
+    for (const c of ship.controls) for (const g of c.grips) g.from.copy(g.obj.position);
+    for (const p of ship.emitPts) this._sparks(p, 7, 0.9);
+    // debris waits behind the panels for its moment
+    let i = 0;
+    for (const d of this.debris) {
+      const p = ship.emitPts[i % ship.emitPts.length];
+      d.at = d.kind === 'paper' ? 0.5 + R() * 0.15 : d.kind === 'cable' ? 0.12 : 0.1 + R() * 0.32;
+      if (d.kind === 'cable') d.home.set(0.655, -0.2, (i % 2 ? 1 : -1) * (0.2 + R() * 0.12));
+      else if (d.kind === 'paper') d.home.set(0.3 + R() * 0.2, -0.3, -sd * (0.25 + R() * 0.1));
+      else d.home.set(p[0] - 0.01, p[1] + (R() - 0.5) * 0.08, p[2] + (R() - 0.5) * 0.1);
+      d.mesh.position.copy(d.home); d.mesh.quaternion.set(0, 0, 0, 1); d.mesh.visible = false;
+      d.vel.set(-(0.5 + R() * 1.6), 0.5 + R() * 1.8, -sd * (0.3 + R() * 1.6) + (R() - 0.5));
+      d.axis.set(R() - 0.5, R() - 0.5, R() - 0.5).normalize(); d.spin = 4 + R() * 12;
+      i++;
     }
-    for (let i = 0; i < 12; i++) this._spawn(1, 0.3 + R() * 0.4, -0.2 + R() * 0.3, (R() - 0.5) * 0.7, 0.5 + R(), 0.1, (R() - 0.5) * 0.3, 0.9 + R() * 0.5, 0.07 + R() * 0.05, 1, 1, 1);
-    for (const p of this.cur.emitPts) this._sparks(p, 8, 0.8);
-    this._flashAt(this.cur.emitPts[0], 2, 1, 0.8, 0.5);
-    this.ovFlash.set(0.12, 0.1, 0.08);
-    this.A.vel[0] += 0.5; this.A.vel[4] -= 0.5; this.A.vel[3] += (R() - 0.5) * 1.5;
+    this.hudVel = this.hudVel || new this.T.Vector3();
+    this.hudVel.set(-0.5, 1.5, -sd * 0.9);
+  }
+
+  // per frame while dead; td = seconds since the blow
+  _death(dt, t, td) {
+    const A = this.A, R = this.rand, ship = this.cur, sd = A.dSide, hi = this.q >= 1 ? 1 : 0.5;
+    const fx = 0.36, fy = -0.3, fz = sd * 0.4, once = (bit) => { if (A.dFlags & bit) return false; A.dFlags |= bit; return true; };
+    // fire bursting through the side console, sparks showering, smoke rolling across the view
+    if (td > 0.08 && td < 0.62) {
+      for (let n = R() < dt * 70 * hi ? 2 : 0; n > 0; n--) this._spawn(5, fx + (R() - 0.5) * 0.15, fy + R() * 0.08, fz + (R() - 0.5) * 0.08, -0.25 + R() * 0.5, 0.5 + R() * 0.9, -sd * (0.3 + R() * 1.0), 0.3 + R() * 0.4, 0.05 + R() * 0.06, 1, 1, 1);
+      if (R() < dt * 26 * hi) this._spawn(1, fx + (R() - 0.5) * 0.2, fy + 0.05, fz * (0.4 + R() * 0.6), (R() - 0.5) * 0.3, 0.15 + R() * 0.25, -sd * (0.3 + R() * 0.5), 1 + R() * 0.6, 0.09 + R() * 0.07, 1, 1, 1);
+      if (R() < dt * 34) this._sparks(ship.emitPts[(R() * ship.emitPts.length) | 0], 3, 0.9, 1, 0.7, 0.3);
+    } else if (td >= 0.62) {
+      if (R() < dt * 9 * hi) this._spawn(5, fx + (R() - 0.5) * 0.1, fy, fz + (R() - 0.5) * 0.06, 0.1, 0.3 + R() * 0.3, -sd * 0.1, 0.3 + R() * 0.3, 0.025 + R() * 0.02, 1, 1, 1);      // dying fire
+      if (R() < dt * 11 * hi) this._spawn(6, fx + (R() - 0.5) * 0.3, fy + R() * 0.15, fz * R(), 0.1 + R() * 0.3, 0.05 + R() * 0.3, (R() - 0.5) * 0.4, 0.9 + R() * 0.9, 0.0012 + R() * 0.0012, 1, 1, 1);
+    }
+    if (td > 0.22 && once(8)) {      // every display is now a dark, cracked pane
+      paintDeadGlass(this.cxA, [R_TAC, ...R_GAUGE], R_HUD, this.cur.H.dash.gauge, R);
+      paintDeadGlass(this.cxB, [R_MFD_L, R_MFD_R, ...R_LAMP], null, '', R);
+      this.tA.needsUpdate = this.tB.needsUpdate = true; A.deadPaint = true;
+    }
+    // the cracks race across the canopy, then it goes
+    while (A.dCr < 7 && td > 0.3 + A.dCr * 0.033) {
+      const c = this.cxC, sc = this.crW / 2048, az = (-42 + A.dCr * 14 + (R() - 0.5) * 8) * DEG, el = (3 + ((A.dCr * 5) % 3) * 9 + R() * 4) * DEG;
+      c.save(); c.translate((az / CR_AZ + 0.5) * this.crW, (1 - (el - CR_E0) / CR_ER) * this.crH); c.scale(1.7, 2.0);
+      paintCrack(c, 0, 0, 1, R, sc);
+      c.restore(); this.tCrack.needsUpdate = true; A.dCr++;
+    }
+    if (td >= 0.55 && once(1)) {      // explosive decompression: glitter, a burst of vapour, everything heads for the breach
+      const C = ship.C;
+      for (let i = 0; i < 60 * hi; i++) {
+        const az = (R() - 0.5) * 2 * 60 * DEG, p = canPt(C, az, lerp(sillAt(C, az), Math.min(topAt(C, az), 1.3), R()), 0.97);
+        this._spawn(2, p[0], p[1], p[2], 1 + R() * 3, (R() - 0.3) * 2.5, (R() - 0.5) * 4, 0.6 + R() * 0.9, 0.002 + R() * 0.005, 1, 1, 1);
+      }
+      for (let i = 0; i < 16 * hi; i++) this._spawn(1, 0.35 + R() * 0.4, -0.2 + R() * 0.35, (R() - 0.5) * 0.8, 1 + R() * 2, 0.1, (R() - 0.5) * 0.5, 0.3 + R() * 0.25, 0.09 + R() * 0.07, 1.0, 1.05, 1.15);
+      A.vel[0] += 0.7; A.vel[4] -= 0.6; A.vel[3] += sd * 0.8;
+      this._flashAt([0.8, 0.2, 0], 1.2, 0.7, 0.8, 1);
+    }
+    // a last console arcing in the dark
+    if ((td >= 1.35 && once(2)) || (td >= 1.78 && once(4))) { const p = ship.emitPts[td < 1.5 ? 1 : 2] || ship.emitPts[0]; this._sparks(p, 9, 0.4, 0.6, 0.8, 1); this._flashAt(p, 1.3, 0.5, 0.7, 1); }
+    // panels, bezels and papers
+    for (const d of this.debris) {
+      if (td < d.at) continue;
+      const m = d.mesh;
+      m.visible = true;
+      if (d.kind === 'cable') {      // a torn loom whipping about, then streaming toward the breach
+        const w = Math.exp(-(td - d.at) * 1.6), out = smooth(0.55, 0.8, td);
+        m.rotation.set(Math.sin(td * 23 + d.home.z * 9) * 0.9 * w, 0, Math.sin(td * 19 + 1) * 0.8 * w + out * (1.25 + 0.15 * Math.sin(td * 14)));
+        continue;
+      }
+      const paper = d.kind === 'paper';
+      if (td >= 0.55) { d.vel.x += (paper ? 16 : 9) * dt; d.vel.y += (0.25 - m.position.y) * 4 * dt; d.vel.z -= m.position.z * 3 * dt; }
+      else { d.vel.y -= 2.5 * dt; d.vel.multiplyScalar(Math.exp(-dt * (paper ? 3 : 1.2))); }
+      if (paper) { d.vel.y += Math.sin(td * 21 + d.spin) * 2 * dt; d.vel.z += Math.cos(td * 17 + d.spin) * 2 * dt; }
+      m.position.addScaledVector(d.vel, dt);
+      m.rotateOnAxis(d.axis, d.spin * dt);
+      if (m.position.x > 5) m.visible = false;
+    }
+    // the HUD combiner snaps off its mounts
+    if (td > 0.16) {
+      const h = ship.hud;
+      if (td >= 0.55) this.hudVel.x += 10 * dt; else this.hudVel.y -= 3 * dt;
+      h.position.addScaledVector(this.hudVel, dt);
+      h.rotation.x += sd * 5 * dt; h.rotation.z += 7 * dt;
+      if (h.position.x > 5) h.visible = false;
+    }
+  }
+
+  // back to a living cockpit (respawn without a full reset still has to look right)
+  _deathClear() {
+    const A = this.A;
+    A.deadT = -1; A.open = 0; A.dFlags = 0; A.dCr = 0; A.deadPaint = false; A.dirtyA = A.dirtyB = true;
+    for (const d of this.debris) d.mesh.visible = false;
+    for (const sh of this.ships.values()) { sh.hud.position.copy(sh.hudPiv); sh.hud.rotation.set(0, 0, 0); sh.hud.visible = true; sh.glass.visible = true; }
+    this.U.uBuckle.value.x = 0; this.U.uBlack.value = 0; this.U.uFlashSide.value = 0; this.U.uShat.value = 0;
   }
 
   // new run / respawn: repair the glass, clear smoke, settle the head
@@ -2311,6 +2621,7 @@ export class Cockpit3D {
     const A = this.A;
     this.cxC.globalCompositeOperation = 'source-over'; this.cxC.fillStyle = '#000'; this.cxC.fillRect(0, 0, this.crW, this.crH);
     this.tCrack.needsUpdate = true; this.cracks = 0;
+    this._deathClear();
     A.pos.fill(0); A.vel.fill(0); A.hitGlitch = 0; A.haze = 0; A.emerg = 0; A.power = 1; A.deadT = -1; A.sparkIn = 3; A.flash = 0; A.recoil = A.muzL = A.muzR = 0;
     A.fireStamp = null; A.rocketStamp = null; A.extPrev = 0; A.dirtyA = A.dirtyB = true;
     this.ovFlash.set(0, 0, 0);
@@ -2346,7 +2657,8 @@ export class Cockpit3D {
     if (this.cur) this.root.remove(this.cur.group);
     this.cur = null;
     this.fx.geometry.dispose(); this.shield.geometry.dispose(); this.ovl.geometry.dispose();
-    for (const m of [this.mStruct, this.mDecal, this.mGlow, this.mScrA, this.mScrB, this.mHud, this.mGlass, this.mShield, this.mFx, this.mOvl]) m.dispose();
+    for (const d of this.debris) d.mesh.geometry.dispose();
+    for (const m of [this.mStruct, this.mPart, this.mDecal, this.mGlow, this.mScrA, this.mScrB, this.mHud, this.mGlass, this.mShield, this.mFx, this.mOvl]) m.dispose();
     for (const t of [this.tDetail, this.tDirt, this.tDecal, this.tA, this.tB, this.tCrack]) t.dispose();
     if (this.envRT) { this.envRT.dispose(); this.scene.environment = null; }
   }

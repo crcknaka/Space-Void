@@ -35,6 +35,9 @@
   &states=1       one boss through its states (&sv=beauty)
   state: &damage=0..1  &blown=2 (the first two) | &blown=0,3 (those; &ago=ms since they went)  &charge=laser:1,bay:0.6  &flash=0..1  &shield=1
          &arrive=0..1  &phase2=ms since the shell blew  &death=0..1 (&after=ms past the end)
+         &stage=0|1|2 (&stageago=ms since that stage began; omitted = long ago)  &hits=12 (shots landed, one every 250 ms up to now)
+         &wreck=ms    the death sequence ran, detachWreck() was called at its end, this is the wreck ms later (&scroll=60)
+  &stages=1       stage 0 / mid-transition / 1 / 2, plan view above tilt
   &t=ms frozen time (default 4000; &t= empty animates)   &q=0.5 low quality   &fx=0 no particles   &dist=1   &zoom=2&cx=.7&cy=.5
   &timings=1      slice count and build time in the HUD
   &life=1         build / dispose every level 1..12 twice and report leaked geometries
@@ -56,7 +59,7 @@ const num = (k, d) => (Q.has(k) && Q.get(k) !== '' && isFinite(+Q.get(k)) ? +Q.g
 const P = {
   level: num('level', 1), view: Q.get('view') || 'beauty', damage: num('damage', 0), flash: num('flash', 0), shield: !!num('shield', 0),
   arrive: num('arrive', 1), death: num('death', 0), after: num('after', 0), phase2: Q.has('phase2') ? num('phase2', 3000) : null,
-  ago: num('ago', 700), dist: num('dist', 1), q: num('q', 1), t: Q.has('t') ? (Q.get('t') === '' ? null : num('t', 4000)) : 4000, fx: num('fx', 1),
+  stage: num('stage', 0), stageAgo: Q.has('stageago') ? num('stageago', 600) : null, hits: num('hits', 0), wreck: Q.has('wreck') ? num('wreck', 500) : null, ago: num('ago', 700), dist: num('dist', 1), q: num('q', 1), t: Q.has('t') ? (Q.get('t') === '' ? null : num('t', 4000)) : 4000, fx: num('fx', 1),
 };
 const blown = !Q.get('blown') ? [] : Q.get('blown').includes(',') ? Q.get('blown').split(',').map(Number) : [...Array(+Q.get('blown')).keys()]; // a count, or a list with a comma
 const charges = {};
@@ -163,12 +166,20 @@ const GAME_VIEWS = ['top', 'tilt', 'chase', 'cockpit'];
 
 // run the last stretch of the timeline so particles, wreckage and eased state are where they would be at time T
 function simulate(b, st, T, w, h, pre = 1800) {
-  const u = b.g.userData, dt = 1000 / 60, t0 = T - pre;
-  const dq = st.death || 0, tDeath = T - dq * 1700 - (st.after || 0);
-  let p2 = false; const bl = new Set();
+  const u = b.g.userData, dt = 1000 / 60;
+  const wk = st.wreck != null, dq = wk ? 1 : st.death || 0, tDeath = T - dq * 1700 - (wk ? st.wreck : st.after || 0);
+  if (wk) pre = Math.max(pre, st.wreck + 2000);
+  const t0 = T - pre;
+  let p2 = false, stg = false, nh = 0, wreck = null; const bl = new Set();
+  let hs = 12345; const hr = () => ((hs = (hs * 16807) % 2147483647) / 2147483647);
   fx.clear();
+  if (st.stage) u.setStage(st.stageAgo != null ? st.stage - 1 : st.stage, { instant: true });
   for (let t = t0; t <= T + 0.01; t += dt) {
     fx.update(dt, cam, h);
+    if (st.stage && st.stageAgo != null && !stg && t >= T - st.stageAgo) { stg = true; u.setStage(st.stage); }
+    while (nh < (st.hits || 0) && t >= T - (st.hits - nh) * 250) { nh++; u.hit(-48 + hr() * 100, 0, (hr() - 0.5) * 34, 0.3 + hr() * 0.7); }
+    if (wk && !wreck && t >= T - st.wreck) { wreck = u.detachWreck(); wreck.userData.scroll = num('scroll', 60); scene.add(wreck); b.wreck = wreck; }
+    if (wreck) wreck.userData.update(dt, t);
     u.setDamage(st.damage || 0); u.setFlash(st.flash || 0); u.setShield(!!st.shield); u.setArrive(st.arrive ?? 1);
     for (const k of ['laser', 'sweep', 'ram', 'volley', 'bay']) u.setCharge(k, (st.charges && st.charges[k]) || 0);
     for (const i of st.blown || []) if (!bl.has(i) && t >= T - (st.ago ?? 700)) { bl.add(i); u.blowTurret(i); }
@@ -176,7 +187,7 @@ function simulate(b, st, T, w, h, pre = 1800) {
     if (dq > 0 && t >= tDeath) u.setDeath(Math.min(1, (t - tDeath) / 1700), t);
     b.gen.turrets.forEach((tr, i) => { if (u.turrets[i]) u.turrets[i].rotation.y = Math.sin(t * 0.0006 + i * 1.9) * 0.5 * (i < 2 ? 1 : 0.7); });
     u.update(dt, t, b.world);
-    if (!st.death && !p2) for (const n of u.nozzles) fx.exhaust(b.world.x - n.x * b.scale, n.y * b.scale, b.world.z - n.z * b.scale, 1, 0, n.r * b.scale * 2.2, { color: 'enemy' });
+    if (!st.death && !p2 && !(wk && t >= tDeath)) for (const n of u.nozzles) fx.exhaust(b.world.x - n.x * b.scale, n.y * b.scale, b.world.z - n.z * b.scale, 1, 0, n.r * b.scale * 2.2, { color: 'enemy' });
     fx.commit();
   }
 }
@@ -187,7 +198,7 @@ function label(str, x, y, col = '#8fa6c0') { ctx.fillStyle = col; ctx.font = '12
 function tile(x, y, w, h, text) { renderGL(w, h); ctx.drawImage(glc, 0, 0, w, h, x, y, w, h); if (text) label(text, x + 8, y + 16); }
 const hud = document.getElementById('hud');
 const fmt = (b) => `L${b.level} ${b.stats.cls}${b.mega ? ' (MEGA)' : ''}: ${b.stats.tris} tris, ${b.stats.draws} draws, ${b.stats.sections} sections, ${b.gen.turrets.length} turrets · whole frame incl. fx + post: ${calls} calls ${tris} tris`;
-const ST = () => ({ damage: P.damage, flash: P.flash, shield: P.shield, arrive: P.arrive, death: P.death, after: P.after, phase2: P.phase2, blown, ago: P.ago, charges });
+const ST = () => ({ stage: P.stage, stageAgo: P.stageAgo, hits: P.hits, wreck: P.wreck, damage: P.damage, flash: P.flash, shield: P.shield, arrive: P.arrive, death: P.death, after: P.after, phase2: P.phase2, blown, ago: P.ago, charges });
 
 function drawOne(T) {
   root.clear();
@@ -196,6 +207,7 @@ function drawOne(T) {
   if (game) { player.position.set(P.view === 'cockpit' ? -9999 : -380, 0, 0); root.add(player); player.userData.update?.(16, T); }
   setCam(P.view, VW / VH, b, P.dist);
   simulate(b, ST(), T, VW, VH);
+  if (b.wreck && !game) { b.world.x = b.wreck.position.x; setCam(P.view, VW / VH, b, P.dist); } // follow the wreck as it falls astern
   const zoom = num('zoom', 1), cx = num('cx', 0.5), cy = num('cy', 0.5);
   renderGL(VW, VH);
   const sw = VW / zoom, sh = VH / zoom, sx0 = Math.max(0, Math.min(VW - sw, cx * VW - sw / 2)), sy0 = Math.max(0, Math.min(VH - sh, cy * VH - sh / 2));
@@ -232,9 +244,21 @@ function drawStates(T) {
     tile((i % cols) * tw, Math.floor(i / cols) * th, tw, th, name);
   });
 }
+function drawStages(T) {
+  const S = [['stage 0', {}], ['stage 1, +0.5 s', { stage: 1, stageAgo: 500 }], ['stage 1', { stage: 1 }], ['stage 2, +0.5 s', { stage: 2, stageAgo: 500 }], ['stage 2', { stage: 2 }]];
+  const views = ['plan', Q.get('sv') || 'tilt45'], tw = Math.floor(VW / S.length), th = Math.floor(VH / 2);
+  S.forEach(([name, st], i) => views.forEach((v, r) => {
+    root.clear();
+    const b = makeBoss(P.level, 'g' + i);
+    place(b, 0, 0);
+    setCam(v, tw / th, b, P.dist * (r ? 0.8 : 0.9));
+    simulate(b, { ...st, damage: [0, 0.34, 0.4, 0.67, 0.7][i] * num('dmg', 0) }, T, tw, th, 1800);
+    tile(i * tw, r * th, tw, th, r ? '' : name);
+  }));
+}
 function draw(T) {
   ctx.fillStyle = '#04060b'; ctx.fillRect(0, 0, VW, VH);
-  if (Q.get('sheet')) drawSheet(T); else if (Q.get('states')) drawStates(T); else drawOne(T);
+  if (Q.get('sheet')) drawSheet(T); else if (Q.get('states')) drawStates(T); else if (Q.get('stages')) drawStages(T); else drawOne(T);
 }
 
 try {
@@ -248,6 +272,15 @@ try {
       tmp.add(g); g.userData.update(16, 1000, { x: 0, y: 0, z: 0, scale: 1, rotY: Math.PI });
       setCam('beauty', 1.7, null); gl.setRenderTarget(rt); gl.render(scene, cam); gl.setRenderTarget(null);
       peak = Math.max(peak, gl.info.memory.geometries - g0);
+      if (pass) { // second pass: the boss dies and leaves a wreck, which is disposed separately
+        g.userData.setStage(2); g.userData.hit(10, 0, 4, 1); g.userData.setDeath(1, 3000); g.userData.update(16, 3000, { x: 0, y: 0, z: 0, scale: 1, rotY: Math.PI });
+        const wk = g.userData.detachWreck(); tmp.add(wk);
+        g.userData.dispose();
+        for (let t = 3016; t < 16000 && !wk.userData.done; t += 100) wk.userData.update(100, t);
+        gl.setRenderTarget(rt); gl.render(scene, cam); gl.setRenderTarget(null);
+        if (!wk.userData.done) showErr('wreck never finished');
+        wk.userData.dispose();
+      }
       g.userData.dispose();
     }
     lib.dispose(); scene.remove(tmp);
@@ -255,7 +288,7 @@ try {
     window.lifeReport = `lifecycle: 24 builds, peak +${peak} geometries, after dispose +${gl.info.memory.geometries - g0}, programs ${gl.info.programs.length}`;
   }
   draw(P.t ?? 4000);
-  if (P.t == null && !Q.get('sheet') && !Q.get('states')) { // live: keep simulating forward in real time
+  if (P.t == null && !Q.get('sheet') && !Q.get('states') && !Q.get('stages')) { // live: keep simulating forward in real time
     const b = makeBoss(P.level), u = b.g.userData;
     let last = performance.now(), T = 4000;
     const loop = (now) => {
@@ -273,7 +306,7 @@ try {
   const lv = P.level;
   document.getElementById('nav').innerHTML = [...Array(12).keys()].map((i) => `<a href="?level=${i + 1}&view=${P.view}">${i + 1}</a>`).join('') + '<br>' +
     [...GAME_VIEWS, ...Object.keys(CLOSE)].map((v) => `<a href="?level=${lv}&view=${v}">${v}</a>`).join('') + '<br>' +
-    `<a href="?sheet=1">sheet</a><a href="?sheet=1&sv=plan&cols=5">plan 1-15</a><a href="?states=1&level=${lv}">states</a><a href="?level=${lv}&view=${P.view}&t=">live</a>`;
+    `<a href="?sheet=1">sheet</a><a href="?sheet=1&sv=plan&cols=5">plan 1-15</a><a href="?states=1&level=${lv}">states</a><a href="?stages=1&level=${lv}">stages</a><a href="?level=${lv}&view=${P.view}&t=">live</a>`;
 } catch (e) { showErr('FATAL: ' + (e.stack || e)); }
 </script>
 </body>

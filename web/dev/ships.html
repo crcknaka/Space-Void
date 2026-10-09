@@ -62,7 +62,7 @@ const P = {
   damage: num('damage', 0), flash: num('flash', 0), opacity: num('opacity', 1), tint: parseTint(Q.get('tint')),
   dist: num('dist', 1), q: num('q', 1), t: Q.has('t') ? num('t', 0) : null,
   pitch: num('pitch', 0), yaw: num('yaw', 0), bankn: Q.has('bankn') ? num('bankn', 0) : null, gear: num('gear', 0), canopy: num('canopy', 0),
-  weapon: num('weapon', 1), fire: num('fire', 0), cool: num('cool', 0), rocket: num('rocket', 0), laser: num('laser', 0), od: num('od', 0), brk: num('brk', 0),
+  weapon: num('weapon', 1), fire: num('fire', 0), cool: num('cool', 0), rocket: num('rocket', 0), laser: num('laser', 0), od: num('od', 0), brk: num('brk', 0), charge: num('charge', 0), hits: num('hits', 0), hitage: num('hitage', 0), kick: num('kick', 0), shadow: num('shadow', 0),
 };
 // in-game length (world units): sprite w * VIS, 50 → ~60
 const GAME_LEN = { vanguard: 60, player1: 60, player2: 60, interceptor: 50, juggernaut: 70, ghost: 53, ace: 60 };
@@ -90,6 +90,13 @@ const cam = new THREE.PerspectiveCamera(FOV, 16 / 9, 5, 30000);
   pmrem.dispose();
   const sun = new THREE.DirectionalLight(0xfff0dc, 2.7);
   sun.position.set(-0.45, 1, 0.55);
+  if (P.shadow) { // ?shadow=1: three's shadow map, to check that moving parts cast from where they are
+    gl.shadowMap.enabled = true; gl.shadowMap.type = THREE.PCFSoftShadowMap;
+    sun.position.multiplyScalar(300); sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -0.0015; sun.shadow.normalBias = 0.6;
+    const c = sun.shadow.camera; c.left = c.bottom = -80; c.right = c.top = 80; c.near = 50; c.far = 700; c.updateProjectionMatrix();
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), new THREE.MeshStandardMaterial({ color: 0x3a4250, roughness: 0.9 }));
+    floor.rotation.x = -Math.PI / 2; floor.position.y = -14; floor.receiveShadow = true; scene.add(floor);
+  }
   scene.add(sun, new THREE.HemisphereLight(0x8fb8ff, 0x1a1420, 0.9));
 }
 { // star field
@@ -137,14 +144,16 @@ function stage(list) {
     u.repair();
     u.setThrust(v('thrust')); u.setBank(v('bankn') ?? (s.bank ?? 0) / 0.45); u.setFlash(v('flash'));
     u.setPitch(v('pitch')); u.setYaw(v('yaw')); u.setGear(v('gear')); u.setCanopy(v('canopy')); u.setWeapon(v('weapon'));
-    u.setLaser(v('laser')); u.setOverdrive(!!v('od'));
+    u.setLaser(v('kick') ? 0 : v('laser')); u.setLaserCharge(v('charge')); u.setOverdrive(!!v('od'));
     u.setDamage(v('damage')); u.setOpacity(v('opacity'));
     u.update(0, simT); u.settle();
     for (let i = 0; i < v('brk'); i++) { const m = u.breakOff(); if (m) { g.add(m); m.position.y += 0.09; m.position.x -= 0.06; u.__pieces.push(m); } }
     for (let i = 0; i < v('fire'); i++) u.setFire();
     for (let c = v('cool'); c > 0; c -= 16) u.update(16, simT);
-    if (v('rocket')) { u.setRocket(); u.update(100, simT); }
-    u.update(v('fire') || v('rocket') ? 0 : 16, simT);
+    if (v('hits')) { u.hit(-0.1, 0, 0.16, 1); u.hit(0.12, 0, -0.03, 0.6); u.hit(-0.25, 0, -0.1, 1.5); for (let c = v('hitage'); c > 0; c -= 50) u.update(50, simT); }
+    if (v('kick')) { u.setLaser(1); u.update(v('kick') === 1 ? 0 : v('kick'), simT); }
+    if (v('rocket')) { u.setRocket(); const ms = v('rocket') === 1 ? 150 : v('rocket'); for (let c = ms; c > 0; c -= 50) u.update(Math.min(50, c), simT); }
+    u.update(v('fire') || v('rocket') || v('kick') ? 0 : 16, simT);
     root.add(g);
   }
 }
@@ -175,6 +184,9 @@ const STATES = {
   engines: { rows: ['nozzle', 'rear'], cells: [['idle', { thrust: 0 }], ['cruise', { thrust: 1 }], ['afterburner', { thrust: 2 }], ['vector', { thrust: 1, pitch: 1, yaw: 1 }], ['gutter', { thrust: 1, damage: 0.8 }]] },
   gear: { rows: ['gearside', 'low', 'cockpit'], cells: [['up', {}], ['gear 0.4', { gear: 0.4 }], ['gear 0.7', { gear: 0.7 }], ['down + canopy', { gear: 1, canopy: 1 }]] },
   under: { rows: ['belly', 'underrear', 'tail'], cells: [['clean', {}], ['gear down', { gear: 1 }], ['tier 3 + rocket', { weapon: 3, rocket: 1 }]] },
+  laser: { rows: ['guns', 'chase'], cells: [['idle', {}], ['charge 1', { charge: 1 }], ['fire (kick)', { kick: 1, charge: 1 }], ['firing, settled', { laser: 1 }]] },
+  rocket: { rows: ['rear', 'underrear'], cells: [['closed', {}], ['60 ms', { rocket: 60 }], ['150 ms', { rocket: 150 }], ['350 ms', { rocket: 350 }]] },
+  hits: { rows: ['tilt', 'chase'], cells: [['fresh', { hits: 1 }], ['0.6 s', { hits: 1, hitage: 600 }], ['1.5 s', { hits: 1, hitage: 1500 }], ['3 s (pit)', { hits: 1, hitage: 3000 }]] },
   all: { rows: ['beauty', 'rear'], cells: [['clean', {}], ['everything out', { gear: 1, canopy: 1, weapon: 3, laser: 1, od: 1, pitch: -1, thrust: 2 }], ['wrecked', { damage: 1, brk: 2 }]] },
 };
 function drawStates(name) {

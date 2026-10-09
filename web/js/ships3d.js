@@ -21,6 +21,7 @@
 //   setPitch(-1..1) setYaw(-1..1)            control surfaces / thrust vectoring / airbrakes (pitch < 0)
 //   setWeapon(1..3) setFire() setRocket() setLaser(0..1) setOverdrive(bool)
 //   setGear(0..1) setCanopy(0..1)            hangar / launch
+//   setLaserCharge(0..1) hit(x,y,z,power) rocketPort
 //   wounds, woundCount, breakOff(), repair() damage hooks
 //   muzzleCount, groundY, settle()
 
@@ -564,14 +565,14 @@ export class Livery {
 
 const GLASS_A = 0.34;
 // emissive channels: every glowing vertex names one, and its level is a uniform
-const CH = { STATIC: 0, ENGINE: 1, NAV: 2, STROBE: 3, ACCENT: 4, COCKPIT: 5, AB: 6, SHIM: 7, GOLD: 8, BHEAT: 9, COIL: 10, LASER: 11, ROCKET: 12, FLASHA: 13, FLASHB: 14, SPARK: 15 };
-const NCH = 16;
+const CH = { STATIC: 0, ENGINE: 1, NAV: 2, STROBE: 3, ACCENT: 4, COCKPIT: 5, AB: 6, SHIM: 7, GOLD: 8, BHEAT: 9, COIL: 10, LASER: 11, ROCKET: 12, FLASHA: 13, FLASHB: 14, SPARK: 15, PUFF: 16, CHARGE: 17 };
+const NCH = 18;
 // rig: slot 0 is the rigid hull; the others are posed every frame from the state channels below
 const NP = 48;
 const S = {
   ONE: 0, BANK: 1, PITCH: 2, YAW: 3, BRAKE: 4, THR: 5, AB: 6, GEARD: 7, GEARL: 8, CANOPY: 9, W2: 10, W3: 11,
   FIREA: 12, FIREB: 13, ROCKET: 14, LASER: 15, OD: 16, BRK1: 17, BRK2: 18, SPIN: 19, BREATHE: 20, DMG1: 21, DMG2: 22,
-  GUT: 23, TWITCH: 24, BANKP: 25, BANKN: 26, SWEEP: 27, N: 28,
+  GUT: 23, TWITCH: 24, BANKP: 25, BANKN: 26, SWEEP: 27, RAIL: 28, KICK: 29, N: 30,
 };
 const HEATC = [5.5, 1.5, 0.25], GOLDC = [6.5, 4.2, 0.7], SPARKC = [7, 2.4, 0.4];
 const METAL = lin(0x9aa0a8), GUNMETAL = lin(0x3a3e45), SOOT = lin(0x17171a), PITCH = lin(0x08090b);
@@ -588,6 +589,7 @@ export class Kit {
     this.nozzles = []; this.muzzles = [];
     this.parts = [{ p: [0, 0, 0], a: [0, 0, 1], ao: true, tag: 0 }]; this.ri = 0; this.rw = null;
     this.groundY = 0; this.tears = [];
+    this.nosePart = 0; this.noseW = null; this.noseK = 0; this.rocketPort = null;
     this.sw = [(0.495 + UV_X0) / UV_XW, 1 - 0.03 / (2 * zr)];
   }
   seg(n) { return this.q >= 1 ? n : Math.max(6, Math.round(n * 0.55)); }
@@ -847,6 +849,46 @@ export class Kit {
   }
 
   /* ---- moving parts ---- */
+  // Nose section that recoils when the beam fires: everything built inside nose(fn) slides back
+  // `kick`, blended in over `ramp` aft of x0 so the skin telescopes instead of tearing.
+  noseAt(x0, ramp = 0.05, kick = 0.03) {
+    this.nosePart = this.part({ mov: [S.KICK, -kick, 0, 0] });
+    this.noseK = kick;
+    this.noseW = (x) => { const t = clamp((x - x0) / ramp, 0, 1); return t * t * (3 - 2 * t); };
+  }
+  nose(fn) { if (this.nosePart) this.in(this.nosePart, fn, this.noseW); else fn(); }
+  // rocket bay: a mirrored pair of doors (see hatch) over a launch rail that pushes a round clear of
+  // the skin, with a puff of gas at the breech. Registers rocketPort (the starboard round).
+  rocketBay(x0, x1, z0, z1, y, o = {}) {
+    const up = o.up ?? 1, yh = Array.isArray(y) ? (y[0] + y[1]) / 2 : y, lo = (a, b) => Math.min(yh + up * a, yh + up * b), hi = (a, b) => Math.max(yh + up * a, yh + up * b);
+    this.hatch(x0, x1, z0, z1, y, { ...o, sym: true, open: [S.ROCKET, o.ang ?? 1.2], glow: [4, 0.5, 0.2], glowCh: CH.ROCKET });
+    const xm = (x0 + x1) / 2, zm = (z0 + z1) / 2, l = (x1 - x0) * 0.72, w = z1 - z0, rise = o.rise ?? 0.016;
+    const rail = this.part({ mov: [S.RAIL, 0, up * rise, 0], vis: [0, S.RAIL, 1], ao: false });
+    this.in(rail, () => {
+      for (const s of [1, -1]) {
+        this.metal(box(xm - l * 0.5, xm + l * 0.42, lo(-0.012, -0.007), hi(-0.012, -0.007), s * zm - w * 0.12, s * zm + w * 0.12), GUNMETAL, 30);
+        for (const fx of [-0.3, 0.25]) this.metal(box(xm + l * fx - 0.003, xm + l * fx + 0.003, lo(-0.016, -0.007), hi(-0.016, -0.007), s * zm - w * 0.2, s * zm + w * 0.2), METAL, 30);
+        this.missile(xm - l * 0.5, xm + l * 0.5, yh - up * 0.002, s * zm, Math.min(0.0075, w * 0.2));
+      }
+    });
+    for (const s of [1, -1]) this.glowBall(xm - l * 0.5, yh + up * 0.008, s * zm, w * 0.42, [2.4, 2.1, 1.9], CH.PUFF);
+    this.rocketPort = { x: xm, y: yh + up * 0.006, z: zm, part: rail };
+  }
+  // launch lamps for a bay the camera cannot see: a hooded light either side that flares with the rocket
+  launchCue(x0, x1, y, z) {
+    for (const s of [1, -1]) {
+      this.solid(side(box(x0 - 0.004, x1 + 0.004, y - 0.004, y + 0.002, z - 0.005, z + 0.005, 0.0015), s), lin(0x14161a), { crease: 30 });
+      this.glowBox(x0, x1, y + 0.002, y + 0.0036, s * z - 0.003, s * z + 0.003, [5, 0.7, 0.25], CH.ROCKET);
+      this.glowBall((x0 + x1) / 2, y + 0.006, s * z, 0.008, [2.2, 1.9, 1.7], CH.PUFF);
+    }
+  }
+  // capacitor coils across the spine: hoops with a lit band that pulses toward the nose while the beam charges
+  spineCoils(pts, hw = 0.014) {
+    for (const [x, y] of pts) {
+      this.metal(box(x - 0.005, x + 0.005, y - 0.005, y + 0.003, -hw, hw, 0.002), GUNMETAL, 30);
+      this.glowBox(x - 0.0028, x + 0.0028, y + 0.003, y + 0.0045, -hw * 0.82, hw * 0.82, K3(this.P.glow, 0.55), CH.CHARGE);
+    }
+  }
   // wing with hinged trailing-edge surfaces: flaps = [[z0, z1, rot], ...] aft of chord fraction fh.
   // Positive rotation = trailing edge down on either side (the port hinge axis is flipped so both
   // sides share the convention). Returns the rig slots.
@@ -1053,12 +1095,17 @@ export class Kit {
   // beam emitter looking along +X: housing, fixed collar and an iris whose blades draw back under
   // the collar while the beam is on, uncovering the lens
   emitter(x, y, z, r, o = {}) {
-    const n = this.seg(12), L = { y, z };
-    if (o.housing !== false) this.solid(lathe([[x - r * 6, r * 0.2], [x - r * 3.6, r * 1.3], [x - r * 0.3, r * 1.3], [x - r * 0.05, r * 1.1]], n, L), o.col || lin(0x2a2f37), { crease: 34 });
-    this.metal(lathe([[x - r * 0.4, r * 1.32], [x + r * 0.22, r * 1.24], [x + r * 0.22, r * 0.98], [x - r * 0.2, r * 0.92]], n, { ...L, capA: false, capB: false }), METAL, 28);
-    this.metal(lathe([[x - r * 0.62, r * 0.98], [x - r * 0.6, 0.0004]], n, { ...L, capA: false }), PITCH, 30);
+    const n = this.seg(12), L = { y, z }, kw = this.noseW ? this.noseW(x) * this.noseK : 0;
+    this.nose(() => {
+      if (o.housing !== false) this.solid(lathe([[x - r * 6, r * 0.2], [x - r * 3.6, r * 1.3], [x - r * 0.3, r * 1.3], [x - r * 0.05, r * 1.1]], n, L), o.col || lin(0x2a2f37), { crease: 34 });
+      this.metal(lathe([[x - r * 0.4, r * 1.32], [x + r * 0.22, r * 1.24], [x + r * 0.22, r * 0.98], [x - r * 0.2, r * 0.92]], n, { ...L, capA: false, capB: false }), METAL, 28);
+      this.metal(lathe([[x - r * 0.62, r * 0.98], [x - r * 0.6, 0.0004]], n, { ...L, capA: false }), PITCH, 30);
+      const g = o.glow || this.P.glow;
+      this.glowDisc(x - r * 0.3, y, z, [[0, K3(g, 1.3)], [r * 0.45, K3(g, 0.8)], [r * 0.9, K3(g, 0.25)]], n, CH.LASER);
+      this.glowCone(x - r * 0.3, r * 0.9, K3(g, 0.3), 0, x + r * 0.2, r * 0.96, K3(g, 0.12), 0, y, z, n, CH.LASER);
+    });
     const hub = o.hub ?? 0.14; // closed aperture as a fraction of r (a centre spike needs room)
-    const part = this.part({ p: [x, y, z], iris: [S.LASER, 0.9 / hub - 1] }), nb = 8, t = [];
+    const part = this.part({ p: [x, y, z], iris: [S.LASER, 0.9 / hub - 1], mov: [S.KICK, -kw, 0, 0] }), nb = 8, t = [];
     const P = (a, rr) => [x - r * 0.08, y + Math.sin(a) * rr, z + Math.cos(a) * rr];
     for (let j = 0; j < nb; j++) {
       const a0 = (j / nb) * TAU, a1 = ((j + 1) / nb) * TAU;
@@ -1066,9 +1113,6 @@ export class Kit {
     }
     if ((t[4] - t[1]) * (t[8] - t[2]) - (t[5] - t[2]) * (t[7] - t[1]) < 0) flip(t);
     this.in(part, () => this.metal(t, GUNMETAL, 4), (X, Y, Z) => (Math.hypot(Y - y, Z - z) < r * (hub + 0.97) * 0.5 ? 1 : 0));
-    const g = o.glow || this.P.glow;
-    this.glowDisc(x - r * 0.3, y, z, [[0, K3(g, 1.3)], [r * 0.45, K3(g, 0.8)], [r * 0.9, K3(g, 0.25)]], n, CH.LASER);
-    this.glowCone(x - r * 0.3, r * 0.9, K3(g, 0.3), 0, x + r * 0.2, r * 0.96, K3(g, 0.12), 0, y, z, n, CH.LASER);
     return part;
   }
   // rotating sensor bar on a short mast
@@ -1142,7 +1186,8 @@ function defVanguard(over = {}) {
       const q = k.q, A = lin(P.accent), B2 = lin(P.base2), DK = lin(P.dark), GND = -0.102;
       const G1 = k.gunSlots(1, { ext: 0.03 }), G2 = k.gunSlots(2, { stow: [-0.1, 0, 0] }), G3 = k.gunSlots(3, { stow: [0, 0.032, 0], recoil: 0.01 });
       const F = fuselage(FKEY, { n: k.seg(28), sub: q >= 1 ? 4 : 2 });
-      k.paint(F.tris, { crease: 38 });
+      k.noseAt(0.31);
+      k.nose(() => k.paint(F.tris, { crease: 38 }));
       // dorsal spine
       k.paint(fuselage([
         { x: -0.37, w: 0.012, t: 0.006, b: 0.01, y: 0.03 }, { x: -0.2, w: 0.022, t: 0.017, b: 0.01, y: 0.04, et: 2.6 },
@@ -1216,7 +1261,9 @@ function defVanguard(over = {}) {
       // chin beam emitter, sensor mast, rocket bay in the belly fairing, undercarriage
       k.emitter(0.405, -0.027, 0, 0.0085, { col: B2 });
       k.scanner(-0.255, 0.049, 0, 0.011);
-      k.hatch(-0.1, 0.0, 0.005, 0.03, -0.064, { up: -1, sym: true, open: [S.ROCKET, 1.25], col: B2, glow: [4, 0.5, 0.2], glowCh: CH.ROCKET });
+      k.rocketBay(-0.1, 0.0, 0.005, 0.03, -0.064, { up: -1, ang: 1.25, col: B2 });
+      k.launchCue(0.03, 0.055, 0.052, 0.041); // (the bay is under the belly: lamps on the shoulders show the launch from above)
+      k.spineCoils([[-0.3, 0.047], [-0.2, 0.055], [-0.095, 0.063]]);
       k.keel(-0.255, -0.115, -0.064, 0.024, { frames: 3, scoop: 0.135, beacon: -0.135, col: B2 });
       k.gear(0.25, -F.at(0.25).b, 0, GND, { foot: 'wheel', ya: -F.at(0.17).b, r: 0.0036 });
       k.gear(-0.2, -0.037, 0.062, GND, { foot: 'wheel', w: 0.0085 });
@@ -1326,7 +1373,8 @@ function defInterceptor() {
         { x: 0.28, w: 0.03, t: 0.03, b: 0.025, et: 1.5, eb: 1.5 }, { x: 0.42, w: 0.014, t: 0.013, b: 0.012, et: 1.5, eb: 1.5 },
         { x: 0.482, w: 0.005, t: 0.005, b: 0.005 }, { x: 0.5, w: 0.0012, t: 0.0012, b: 0.0012 },
       ], { n: k.seg(24), sub: q >= 1 ? 4 : 2 });
-      k.paint(F.tris, { crease: 38 });
+      k.noseAt(0.31);
+      k.nose(() => k.paint(F.tris, { crease: 38 }));
       k.paint(fuselage([
         { x: -0.4, w: 0.01, t: 0.005, b: 0.01, y: 0.022 }, { x: -0.2, w: 0.02, t: 0.014, b: 0.01, y: 0.036, et: 2.5 },
         { x: 0.0, w: 0.026, t: 0.022, b: 0.01, y: 0.038, et: 2.5 }, { x: 0.05, w: 0.026, t: 0.024, b: 0.01, y: 0.036, et: 2.5 },
@@ -1384,7 +1432,9 @@ function defInterceptor() {
       k.tear(2, 0.005, wTop(WING, 0.005, 0.225), 0.225, 0.05, 0.036, { skew: -0.3 });
       k.emitter(0.405, -0.018, 0, 0.007, { col: B2 });
       k.scanner(-0.22, 0.048, 0, 0.01);
-      k.hatch(-0.12, -0.03, 0.003, 0.02, -0.046, { up: -1, sym: true, open: [S.ROCKET, 1.25], col: B2, glow: [4, 0.5, 0.2], glowCh: CH.ROCKET });
+      k.rocketBay(-0.12, -0.03, 0.003, 0.02, -0.046, { up: -1, ang: 1.25, col: B2 });
+      k.launchCue(-0.06, -0.035, 0.037, 0.032);
+      k.spineCoils([[-0.32, 0.034], [-0.16, 0.047], [-0.04, 0.057]], 0.012);
       k.keel(-0.195, -0.13, -0.046, 0.015, { frames: 2, scoop: 0.155, beacon: -0.16, col: B2 });
       k.gear(0.24, -F.at(0.24).b, 0, GND, { foot: 'wheel', ya: -F.at(0.17).b, r: 0.0032, w: 0.006 });
       k.gear(-0.18, -0.002 - NR * 1.08, NZ, GND, { foot: 'skid', w: 0.007, r: 0.0036 });
@@ -1451,10 +1501,11 @@ function defJuggernaut() {
       const G1 = k.gunSlots(1, { ext: 0.035, recoil: 0.024 }), G2 = k.gunSlots(2, { stow: [-0.13, 0, 0], recoil: 0.018 });
       const G3 = k.part({ mov: [S.ONE, -0.1, 0, 0, S.W3, 0.1, 0, 0, S.FIREA, -0.01, 0, 0], vis: [0, S.W3, 1], ao: false });
       const F = fuselage(FK, { n: k.seg(28), sub: q >= 1 ? 4 : 2 });
-      k.paint(F.tris, { crease: 34 });
+      k.noseAt(0.36);
+      k.nose(() => k.paint(F.tris, { crease: 34 }));
       // raised armoured deck + bow plate
       k.paint(plate([[0.13, -0.062], [-0.02, -0.092], [-0.33, -0.092], [-0.36, -0.07], [-0.36, 0.07], [-0.33, 0.092], [-0.02, 0.092], [0.13, 0.062]], 0.045, 0.083, 0.007), { crease: 25 });
-      k.paint(plate([[0.44, -0.03], [0.3, -0.056], [0.3, 0.056], [0.44, 0.03]], 0.02, 0.052, 0.006), { crease: 25, shade: 0.9 });
+      k.nose(() => k.paint(plate([[0.44, -0.03], [0.3, -0.056], [0.3, 0.056], [0.44, 0.03]], 0.02, 0.052, 0.006), { crease: 25, shade: 0.9 }));
       // armoured greenhouse canopy
       k.canopy([
         { x: 0.135, w: 0.012, t: 0.004 }, { x: 0.17, w: 0.034, t: 0.022 }, { x: 0.23, w: 0.038, t: 0.03 },
@@ -1481,7 +1532,7 @@ function defJuggernaut() {
         k.navLight(TX - 0.038, TY + 0.088, -0.0185, NAV_RED, CH.STROBE, 0.005);
       }
       // layered bow armour: a second, smaller glacis plate and a pair of cheek plates
-      k.paint(plate([[0.41, -0.022], [0.33, -0.04], [0.33, 0.04], [0.41, 0.022]], 0.045, 0.06, 0.004), { crease: 25 });
+      k.nose(() => k.paint(plate([[0.41, -0.022], [0.33, -0.04], [0.33, 0.04], [0.41, 0.022]], 0.045, 0.06, 0.004), { crease: 25 }));
       k.vents(-0.33, -0.2, 0.084, -0.05, 0.05, 5);
       for (const s of [1, -1]) {
         k.paint(side(wing(WING, { tip: false }), s), { crease: 26 });
@@ -1553,7 +1604,8 @@ function defJuggernaut() {
         for (const s of [1, -1]) k.metal(side(box(-0.44, -0.4, up > 0 ? 0.046 : -0.056, up > 0 ? 0.056 : -0.046, 0.06, 0.072), s), GUNMETAL, 30);
       }
       // pod tops: rocket hatches forward, airbrakes aft; overdrive vents on the deck
-      k.hatch(-0.02, 0.08, PZ0 + 0.022, PZ1 - 0.022, 0.05, { sym: true, open: [S.ROCKET, 1.2], glow: [4, 0.5, 0.2], glowCh: CH.ROCKET });
+      k.rocketBay(-0.02, 0.08, PZ0 + 0.022, PZ1 - 0.022, 0.05, {});
+      k.spineCoils([[-0.045, 0.083], [0.005, 0.083], [0.05, 0.083]], 0.02);
       k.hatch(-0.19, -0.1, PZ0 + 0.022, PZ1 - 0.022, 0.05, { sym: true, open: [S.BRAKE, 1.05], th: 0.004 });
       k.hatch(0.03, 0.1, 0.03, 0.07, 0.083, { sym: true, open: [S.OD, 0.8], glow: K3(GOLDC, 0.5) });
       for (const s of [1, -1]) { k.trim([0.12, 0.083, s * 0.058], [-0.02, 0.083, s * 0.088], 0.0025); k.trim([-0.02, 0.083, s * 0.088], [-0.32, 0.083, s * 0.088], 0.0025); }
@@ -1645,7 +1697,8 @@ function defGhost() {
         { x: -0.18, w: 0.108, t: 0.048, b: 0.03, et: 1.3, eb: 1.3 }, { x: 0.06, w: 0.1, t: 0.056, b: 0.032, et: 1.3, eb: 1.3 },
         { x: 0.3, w: 0.05, t: 0.03, b: 0.02, et: 1.3, eb: 1.3 }, { x: 0.44, w: 0.02, t: 0.012, b: 0.009, et: 1.3, eb: 1.3 }, { x: 0.5, w: 0.0015, t: 0.001, b: 0.001, et: 1.3, eb: 1.3 },
       ], { n: 8, sub: 2 });
-      k.paint(F.tris, { crease: 12 });
+      k.noseAt(0.37);
+      k.nose(() => k.paint(F.tris, { crease: 12 }));
       k.canopy([
         { x: 0.095, w: 0.008, t: 0.003 }, { x: 0.15, w: 0.03, t: 0.02 }, { x: 0.22, w: 0.036, t: 0.03 },
         { x: 0.3, w: 0.024, t: 0.018 }, { x: 0.355, w: 0.006, t: 0.003 },
@@ -1741,7 +1794,8 @@ function defGhost() {
       }
       // overdrive vents on the engine humps, missile bays in the upper wing, battle damage on the armour tiles
       k.hatch(-0.1, -0.045, EZ - 0.012, EZ + 0.012, [0.0455, 0.0445], { sym: true, open: [S.OD, 0.75], glow: K3(GOLDC, 0.5), col: B2 });
-      k.hatch(-0.29, -0.2, 0.152, 0.196, [wTop(WING, -0.29, 0.174, 1, FAC), wTop(WING, -0.2, 0.174, 1, FAC)], { sym: true, open: [S.ROCKET, 1.15], glow: [4, 0.5, 0.2], glowCh: CH.ROCKET, col: B2 });
+      k.rocketBay(-0.29, -0.2, 0.152, 0.196, [wTop(WING, -0.29, 0.174, 1, FAC), wTop(WING, -0.2, 0.174, 1, FAC)], { ang: 1.15, col: B2 });
+      k.spineCoils([[-0.28, 0.042], [-0.22, 0.049], [0.0, 0.06], [0.05, 0.055]], 0.012);
       k.tear(1, -0.04, 0.0215, -0.165, 0.07, 0.045);
       k.tear(2, -0.165, 0.0135, 0.255, 0.06, 0.04, { skew: -0.3 });
       k.emitter(0.365, -0.014, 0, 0.0075, { col: DK });
@@ -1826,6 +1880,8 @@ function defAce() {
         { x: 0.16, w: 0.023, t: 0.024 }, { x: 0.205, w: 0.009, t: 0.006 }, { x: 0.218, w: 0.002, t: 0.0015 },
       ], 0.033, { arches: [0.045, 0.158], pilot: 0.095, helmet: 0xc3261a });
       // fork nose: a yoke that widens out of the fuselage into two chisel prongs around the beam emitter
+      k.noseAt(0.3, 0.04);
+      k.nose(() => {
       k.paint(loft([ringRect(0.19, -0.026, 0.03, -0.05, 0.05, 0.012), ringRect(0.27, -0.024, 0.027, -0.078, 0.078, 0.01), ringRect(0.318, -0.021, 0.023, -0.09, 0.09, 0.008)]), { crease: 30 });
       for (const s of [1, -1]) {
         k.paint(side(loft([ringRect(0.3, -0.021, 0.023, 0.034, 0.09, 0.008), ringRect(0.39, -0.017, 0.019, 0.036, 0.086, 0.007), ringRect(0.46, -0.011, 0.012, 0.04, 0.078, 0.005), ringRect(0.5, -0.003, 0.003, 0.05, 0.064, 0.0012)]), s), { crease: 30 });
@@ -1838,6 +1894,9 @@ function defAce() {
       k.emitter(0.3275, 0, 0, 0.0175, { housing: false, hub: 0.52 }); // the iris closes around the spike
       k.metal(lathe([[0.317, 0.0085], [0.4, 0.0055], [0.44, 0.001]], 8, {}), GUNMETAL, 30);
       for (const x of [0.345, 0.37, 0.395]) k.metal(lathe([[x - 0.004, 0.0105], [x + 0.004, 0.0105]], 8, {}), METAL, 30);
+      // capacitor bands on the prongs: they light as the beam charges
+      for (const s of [1, -1]) for (const cx of [0.34, 0.375, 0.41, 0.445]) k.glowBox(cx - 0.003, cx + 0.003, lerp(0.022, 0.014, (cx - 0.32) / 0.14), lerp(0.022, 0.014, (cx - 0.32) / 0.14) + 0.0016, s * 0.061 - 0.014, s * 0.061 + 0.014, K3(G, 0.5), CH.CHARGE);
+      });
       // centre engine
       k.nozzle(-0.5, 0.002, 0, 0.044, 0.12);
       for (const s of [1, -1]) {
@@ -1872,7 +1931,7 @@ function defAce() {
       }
       // overdrive vents and missile bays in the upper wing, battle damage
       k.hatch(-0.26, -0.19, 0.082, 0.12, [wTop(WING, -0.26, 0.1), wTop(WING, -0.19, 0.1)], { sym: true, open: [S.OD, 0.8], glow: K3(GOLDC, 0.5) });
-      k.hatch(-0.262, -0.185, 0.166, 0.2, [wTop(WING, -0.262, 0.183), wTop(WING, -0.185, 0.183)], { sym: true, open: [S.ROCKET, 1.2], glow: [4, 0.5, 0.2], glowCh: CH.ROCKET });
+      k.rocketBay(-0.262, -0.185, 0.166, 0.2, [wTop(WING, -0.262, 0.183), wTop(WING, -0.185, 0.183)], {});
       k.tear(1, -0.265, wTop(WING, -0.265, 0.228), -0.228, 0.05, 0.036);
       k.tear(2, 0.26, 0.027, 0.052, 0.05, 0.04, { skew: -0.3 });
       k.scanner(-0.09, 0.058, 0, 0.01);
@@ -2004,7 +2063,7 @@ float s3faces(vec3 p, float sideW, float bellyW) {
 }
 `;
 const FRAG_HEAD = `
-uniform float uFlash; uniform float uDamage; uniform vec4 uTint; uniform float uTime; uniform float uFade; uniform vec4 uBr[4]; uniform vec4 uSheen;
+uniform float uFlash; uniform float uDamage; uniform vec4 uTint; uniform float uTime; uniform float uFade; uniform vec4 uBr[4]; uniform vec4 uHit[4]; uniform vec4 uSheen;
 varying vec3 vS3Pos; varying vec3 vS3N; varying float vS3Nb;
 #ifdef S3_HINGE
 varying float vS3Sw;
@@ -2035,22 +2094,23 @@ diffuseColor.rgb *= s3faces(vS3Pos, s3sd, s3dn);
 #endif
 `;
 const FRAG_COLOR = `
-float s3soot = 0.0; float s3hot = 0.0;
+float s3soot = 0.0; float s3hot = 0.0; float s3white = 0.0;
 {
   #ifdef S3_TINT
   vec3 c0 = diffuseColor.rgb; float mx = max(c0.r, max(c0.g, c0.b)), mn = min(c0.r, min(c0.g, c0.b));
   float tm = smoothstep(0.42, 0.78, (mx - mn) / (mx + 1e-4)) * uTint.a;
   diffuseColor.rgb = mix(c0, uTint.rgb * mx, tm);
   #endif
+  vec2 q = vS3Pos.xz;
+  float s3fn = smoothstep(0.3, 0.65, abs(normalize(vS3N).y));
   if (uDamage > 0.001) {
-    vec2 q = vS3Pos.xz;
     // scorches first: soot dragged aft in streaks, spreading as the hull takes more
     float n = mix(s3f(vec2(q.x * 5.0, q.y * 16.0) + uBr[0].xy * 31.0), s3f(q * 9.0 + 4.0), 0.4);
     float a = mix(0.69, 0.34, uDamage);
     s3soot = smoothstep(a, a + 0.12, n) * 0.85;
     // then the breaches, one after another: burnt skin around a hole with the frames showing and fire underneath.
     // They are punched along Y, so only skin that faces up or down takes them (no smears down a fin).
-    float flat_ = smoothstep(0.3, 0.65, abs(normalize(vS3N).y)) * (1.0 - vS3Nb);
+    float flat_ = s3fn * (1.0 - vS3Nb);
     for (int i = 0; i < 4; i++) {
       float r = uBr[i].z * smoothstep(uBr[i].w, uBr[i].w + 0.28, uDamage) * flat_;
       if (r > 0.0005) {
@@ -2066,8 +2126,21 @@ float s3soot = 0.0; float s3hot = 0.0;
       }
     }
     s3hot *= 0.72 + 0.28 * sin(uTime * 0.011 + n * 40.0);
-    diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.012, 0.011, 0.01), s3soot * 0.9);
   }
+  // hit marks (the last four): a flash, a white-hot rim that cools through orange, and the scorched pit it leaves
+  for (int i = 0; i < 4; i++) {
+    float r = uHit[i].z;
+    if (r > 0.0) {
+      float h = uHit[i].w, kf = 0.4 + 0.6 * s3fn;
+      float d = length(q - uHit[i].xy) + (s3n(q * 60.0 + float(i) * 5.0) - 0.5) * r * 0.5;
+      float pit = 1.0 - smoothstep(r * 0.3, r * 0.9, d);
+      float rim = smoothstep(r * 0.45, r * 0.8, d) * (1.0 - smoothstep(r * 0.8, r * 1.15, d));
+      s3soot = max(s3soot, (1.0 - smoothstep(r * 0.6, r * 1.8, d)) * 0.92 * kf);
+      s3hot += (rim * 0.8 + pit * 0.35) * h * kf;
+      s3white += (rim * h * h * h * 0.55 + (1.0 - smoothstep(0.0, r * 1.7, d)) * pow(h, 10.0) * 0.3) * kf;
+    }
+  }
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.012, 0.011, 0.01), s3soot * 0.9);
 }
 `;
 
@@ -2099,13 +2172,19 @@ function patchStd(mat, U, kind) { // kind 0 hull, 1 mech, 2 glass
       .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\n#if defined(S3_HINGE) && defined(USE_NORMALMAP_TANGENTSPACE)\nnormal = normalize(mix(nonPerturbedNormal, normal, s3up));\n#endif')
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n#if defined(S3_HINGE) && defined(USE_ROUGHNESSMAP)\nvec4 s3orm = texture2D(roughnessMap, vRoughnessMapUv, 3.0);\nif (vS3Sw < 0.5) roughnessFactor = mix(s3orm.g * roughness, roughnessFactor, s3up);\n#endif\nroughnessFactor = mix(roughnessFactor, 0.95, s3soot);')
       .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\n#if defined(S3_HINGE) && defined(USE_ROUGHNESSMAP)\nif (vS3Sw < 0.5) metalnessFactor = mix(s3orm.b * metalness, metalnessFactor, s3up);\n#endif\nmetalnessFactor *= 1.0 - 0.8 * s3soot;')
-      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += vec3(5.0, 1.1, 0.14) * s3hot;')
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += vec3(5.0, 1.1, 0.14) * s3hot + vec3(7.0, 6.0, 4.6) * s3white;')
       .replace('#include <opaque_fragment>', FRAG_OUT + '\n#include <opaque_fragment>');
   };
   mat.customProgramCacheKey = () => 's3d' + kind;
   return mat;
 }
 
+// shadow pass: the same pose, or moving parts would cast from their rest position
+const DEPTH_BEGIN = `
+int s3i = int(aRig.x + 0.1);
+vec4 s3A = uPa[s3i], s3B = uPb[s3i];
+if (s3i > 0) transformed = mix(transformed, s3pose(transformed, vec4(s3A.xyz, sqrt(max(0.0, 1.0 - dot(s3A.xyz, s3A.xyz)))), s3B), aRig.y);
+`;
 const EMIS_VERT = `
 attribute vec3 aCol; attribute vec2 aCh;
 uniform float uLv[${NCH}]; uniform float uFlame; uniform float uTime; uniform vec4 uTint;
@@ -2117,6 +2196,7 @@ void main() {
   vec4 s3A = uPa[s3i], s3B = uPb[s3i];
   vec3 c = aCol;
   if (ch == 4 || ch == 5) { float mx = max(c.r, max(c.g, c.b)); c = mix(c, uTint.rgb * mx, uTint.a); }
+  if (ch == 17) c *= 0.55 + 0.45 * sin(uTime * 0.02 + position.x * 30.0); // charge pulses running forward
   if (ch == 7) c *= 0.5 + 0.5 * sin(uTime * 0.011 + position.x * 75.0 + position.y * 48.0 + position.z * 31.0); // heat haze crawling aft
   c *= s3A.w;
   vCol = c * uLv[ch];
@@ -2188,7 +2268,7 @@ export class Ships3D {
       for (const rad of [0.02, 0.04, 0.08]) {
         let y = -Infinity;
         const p = k.hull.pos, rg = k.hull.rig;
-        for (let i = 0; i < p.length; i += 3) if (rg[(i / 3) * 2] < 1 && Math.abs(p[i] - x) < rad && Math.abs(p[i + 2] - z) < rad && p[i + 1] > y) y = p[i + 1];
+        for (let i = 0; i < p.length; i += 3) if ((rg[(i / 3) * 2] < 1 || rg[(i / 3) * 2 + 1] === 0) && Math.abs(p[i] - x) < rad && Math.abs(p[i + 2] - z) < rad && p[i + 1] > y) y = p[i + 1];
         if (y > -Infinity) return y;
       }
       return 0;
@@ -2254,7 +2334,7 @@ export class Ships3D {
       // muzzles: [0] is the centreline reference, then the guns in tier order (stable)
       muzzles: k.muzzles.map((m, i) => ({ part: 0, tier: 1, ...m, i })).sort((a, b) => a.tier - b.tier || a.i - b.i).map(pt),
       breach: BR.map(([x, z, r], i) => [(x - ox) * sc, (z - oz) * sc, r * sc, BT[i]]),
-      wounds: wd.map(pt), parts: k.parts, debris, groundY: k.groundY * sc,
+      wounds: wd.map(pt), parts: k.parts, debris, groundY: k.groundY * sc, rocketPort: k.rocketPort ? pt(k.rocketPort) : null,
       size: [1, (y1 - y0) * sc, (z1 - z0) * sc],
       tris: { hull: k.hull.pos.length / 9, mech: k.mech.pos.length / 9, glass: k.glass.pos.length / 9, emis: k.emis.pos.length / 9 },
     };
@@ -2298,6 +2378,7 @@ export class Ships3D {
       uFlash: { value: 0 }, uDamage: { value: 0 }, uTint: { value: new T.Vector4(1, 1, 1, 0) }, uTime: { value: 0 },
       uFade: { value: 1 }, uSheen: { value: new T.Vector4(...(def.P.sheen || [0, 0, 0, 0])) }, uBr: { value: g.breach.map((b) => new T.Vector4(b[0], b[1], b[2], b[3])) },
       uLv: { value: lv }, uFlame: { value: 0.3 }, uPa: { value: pa }, uPb: { value: pb },
+      uHit: { value: [0, 1, 2, 3].map(() => new T.Vector4(0, 0, 0, 0)) },
     };
     const hull = patchStd(new T.MeshStandardMaterial({
       vertexColors: true, map: tex ? tex.map : null, normalMap: tex ? tex.normal : null,
@@ -2315,13 +2396,23 @@ export class Ships3D {
       vertexShader: EMIS_VERT, fragmentShader: EMIS_FRAG,
       blending: T.AdditiveBlending, transparent: true, depthWrite: false, side: T.DoubleSide,
     });
-    const mats = [hull, mech, glass, emis];
+    // depth material for the shadow pass (one program, shared by every hull): poses the rig like the lit pass
+    const depth = new T.MeshDepthMaterial({ depthPacking: T.RGBADepthPacking });
+    depth.onBeforeCompile = (sh) => {
+      sh.uniforms.uPa = U.uPa; sh.uniforms.uPb = U.uPb;
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\n' + GLSL_RIG).replace('#include <begin_vertex>', '#include <begin_vertex>\n' + DEPTH_BEGIN);
+    };
+    depth.customProgramCacheKey = () => 's3dd';
+    const mats = [hull, mech, glass, emis, depth];
     for (const m of mats) this.live.add(m);
 
     const group = new T.Group();
     group.name = 'ship:' + id;
     const mh = new T.Mesh(g.hull, hull), mm = new T.Mesh(g.mech, mech), mg = new T.Mesh(g.glass, glass), me = new T.Mesh(g.emis, emis);
     mg.renderOrder = 1; me.renderOrder = 2;
+    // shadows: painted hull and mechanics cast and receive; glass and the additive lights do neither
+    mh.castShadow = mm.castShadow = true; mh.receiveShadow = mm.receiveShadow = true;
+    mh.customDepthMaterial = mm.customDepthMaterial = mg.customDepthMaterial = depth;
     group.add(mh, mm, mg, me);
 
     // --- state. Setters only store targets; update() eases the channels and poses the rig. ---
@@ -2331,8 +2422,9 @@ export class Ships3D {
     const st = {
       thrust: 1, damage: 0, opacity: 1, time: 0, flick: 1, snap: true,
       bank: 0, pitch: 0, yaw: 0, gearT: 0, gear: 0, canopyT: 0, canopy: 0, laserT: 0, od: 0, tier: 1, w2: 0, w3: 0,
-      fireA: 0, fireB: 0, next: 0, heat: 0, rocket: -1, brk: 0,
+      fireA: 0, fireB: 0, next: 0, heat: 0, rocket: -1, brk: 0, charge: 0, chargeT: 0, kick: 0, hitN: 0,
     };
+    const hitAge = [0, 0, 0, 0], HIT_MS = 2500;
     const ud = group.userData;
     const applyEngine = () => {
       const t = st.thrust;
@@ -2374,6 +2466,7 @@ export class Ships3D {
         if (m.active) n = i + 1;
       }
       ud.muzzleCount = n;
+      if (g.rocketPort) { const r = g.rocketPort, q = r.part * 3, o = ud.rocketPort; o.x = r.x + pT[q]; o.y = r.y + pT[q + 1]; o.z = r.z + pT[q + 2]; }
     };
     ud.shipId = id;
     ud.nozzles = g.nozzles.map((n) => ({ ...n }));
@@ -2383,8 +2476,10 @@ export class Ships3D {
     ud.groundY = g.groundY; // lowest point of the lowered gear: sit the hull at -groundY * scale above a deck
     ud.wounds = g.wounds.map((w) => ({ x: w.x, y: w.y, z: w.z, heat: 0 }));
     ud.woundCount = 0;
+    ud.rocketPort = g.rocketPort ? { x: g.rocketPort.x, y: g.rocketPort.y, z: g.rocketPort.z } : { x: 0, y: 0, z: 0 }; // starboard bay; mirror z for port
     const mkPiece = (d) => {
       const m = new T.Mesh(d.geo, hull);
+      m.castShadow = m.receiveShadow = true; m.customDepthMaterial = depth;
       m.name = 'debris:' + id; m.userData.center = d.c.slice();
       m.userData.dispose = () => { m.removeFromParent(); }; // geometry and material stay with the hull
       return m;
@@ -2399,11 +2494,20 @@ export class Ships3D {
     ud.setWeapon = (tier) => { st.tier = clamp(Math.round(+tier || 1), 1, 3); };
     ud.setFire = () => { if ((st.next ^= 1)) st.fireA = 1; else st.fireB = 1; st.heat = Math.min(1, st.heat + 0.14); };
     ud.setRocket = () => { st.rocket = 0; };
-    ud.setLaser = (v) => { st.laserT = clamp(+v || 0, 0, 1); };
+    ud.setLaser = (v) => { v = clamp(+v || 0, 0, 1); if (v >= 0.5 && st.laserT < 0.5) st.kick = 1; st.laserT = v; };
+    ud.setLaserCharge = (v) => { st.chargeT = clamp(+v || 0, 0, 1); };
+    // Scorch the hull where it was struck (model units, hull-local; only x/z place the mark). The
+    // last four marks are kept; each flashes, cools over ~2.5 s and stays as a dark pit until repair().
+    ud.hit = (x, y, z, power = 1) => {
+      const i = st.hitN++ & 3;
+      U.uHit.value[i].set(+x || 0, +z || 0, 0.028 + 0.03 * clamp(+power || 0, 0, 2), 1);
+      hitAge[i] = 0;
+    };
     ud.setOverdrive = (on) => { st.od = on ? 1 : 0; };
     ud.setFlash = (v) => { U.uFlash.value = clamp(+v || 0, 0, 1); };
     ud.repair = () => {
       st.brk = 0; st.damage = U.uDamage.value = 0; ud.woundCount = 0;
+      for (const h of U.uHit.value) h.set(0, 0, 0, 0);
       for (const w of ud.wounds) w.heat = 0; // (pieces already handed out by breakOff() are the caller's: they keep tumbling)
     };
     ud.setDamage = (d) => {
@@ -2466,15 +2570,26 @@ export class Ships3D {
       lv[CH.BHEAT] = st.heat;
       st.fireA = st.fireA < 0.01 ? 0 : st.fireA * fd; st.fireB = st.fireB < 0.01 ? 0 : st.fireB * fd;
       st.heat *= Math.exp(-dt / 1700);
-      let rk = 0;
-      if (st.rocket >= 0) { // bay door: snaps open, holds, slams shut
+      let rk = 0, rail = 0, puff = 0;
+      if (st.rocket >= 0) { // launch: door snaps open (50 ms), the rail runs the round out, gas puffs at the breech, rail back, door shut by 400 ms
         const r = st.rocket;
-        rk = r < 50 ? r / 50 : r < 240 ? 1 : r < 400 ? 1 - (r - 240) / 160 : 0;
+        rk = r < 50 ? r / 50 : r < 310 ? 1 : r < 400 ? 1 - (r - 310) / 90 : 0;
+        rail = sstep(40, 140, r) * (1 - sstep(230, 310, r));
+        puff = r < 90 ? 0 : Math.exp(-(r - 90) / 70);
         st.rocket = r >= 400 ? -1 : r + dt;
       }
-      C[S.ROCKET] = rk; lv[CH.ROCKET] = rk;
-      C[S.LASER] = toward(C[S.LASER], st.laserT, 130); C[S.OD] = toward(C[S.OD], st.od, 350);
-      lv[CH.LASER] = C[S.LASER] * (0.85 + 0.15 * Math.sin(t * 0.09));
+      C[S.ROCKET] = rk; lv[CH.ROCKET] = rk; C[S.RAIL] = rail; lv[CH.PUFF] = puff;
+      // beam: charge opens the iris part-way and runs light up the spine coils; firing kicks the nose back
+      const lz = toward(st.laserV || 0, st.laserT, 130);
+      st.laserV = lz; st.charge = toward(st.charge, st.chargeT, 160);
+      C[S.LASER] = Math.max(lz, st.charge * 0.55); C[S.OD] = toward(C[S.OD], st.od, 350);
+      C[S.KICK] = snap ? 0 : st.kick + 0.06 * lz * Math.sin(t * 0.11); st.kick = st.kick < 0.01 ? 0 : st.kick * Math.exp(-dt / 170);
+      lv[CH.LASER] = lz * (0.85 + 0.15 * Math.sin(t * 0.09)) + st.charge * (1 - lz) * 0.3 * (0.6 + 0.4 * Math.sin(t * 0.05));
+      lv[CH.CHARGE] = Math.max(st.charge, lz * 0.75);
+      for (let i = 0; i < 4; i++) { // hit marks cool
+        const h = U.uHit.value[i];
+        if (h.w > 0) { hitAge[i] += dt; const c = Math.max(0, 1 - hitAge[i] / HIT_MS); h.w = c * c; }
+      }
       lv[CH.COIL] = C[S.W3] * (0.6 + 0.2 * Math.sin(t * 0.012)) + Math.max(C[S.FIREA], C[S.FIREB]) * 1.4;
       lv[CH.AB] = C[S.AB]; lv[CH.SHIM] = C[S.OD]; lv[CH.GOLD] = C[S.OD] * (0.82 + 0.18 * Math.sin(t * 0.009));
       // idle life
@@ -2501,7 +2616,7 @@ export class Ships3D {
       st.snap = false;
     };
     // jump every eased channel straight to its target (after spawning a ship in a given state)
-    ud.settle = () => { st.snap = true; st.fireA = st.fireB = st.heat = 0; st.rocket = -1; ud.update(0, st.time); };
+    ud.settle = () => { st.snap = true; st.fireA = st.fireB = st.heat = st.kick = 0; st.rocket = -1; ud.update(0, st.time); };
     ud.dispose = () => { for (const m of mats) { m.dispose(); this.live.delete(m); } };
     if (opts.tint) ud.setTint(opts.tint, opts.tintAmount ?? 1);
     ud.setThrust(opts.thrust ?? 1);

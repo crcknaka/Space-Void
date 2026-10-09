@@ -25,12 +25,18 @@
 //
 // Breaking: every LOD has a fracture mesh cut from that very surface (so the hand-over is seamless):
 // a 3D Voronoi diagram of 90 … 330 seeds scattered through the volume, every cell a closed solid —
-// the rock's own skin outside (clipped along the planar cuts), flat fresh fracture faces inside, all
-// the way to the core. shatter() draws it as one GPU-animated instance: the body dilates and its
-// cracks open and flash (~50 ms), clusters push apart, by ~120 ms every cluster is in pieces, and
-// each piece crumbles to its own final size — never more than a quarter of the parent's diameter —
-// tumbling, then shrinking away. On top of that: CPU-driven instanced pools of mid chunks, shards
-// and grit in the rock's palette. Debris pools are fixed-capacity typed arrays — no per-frame allocation.
+// the rock's own skin outside (clipped along the planar cuts), fresh fracture faces inside, all the way
+// to the core (each family has its own interior: beds, Widmanstätten metal, clear ice and geode crystals,
+// a molten core under a setting crust). shatter() draws it as one GPU-animated instance and only decides
+// how the cells group: two planes through the point of impact cut the rock into up to four chunks that
+// keep their skin, drift apart and tumble; the cells at the impact are crushed to gravel and sprayed
+// back, those along the planes fall out as slabs and splinters, the largest chunks snap again ~0.4 s
+// later, and in the end every chunk crumbles from the outside in, each crumb shrinking away. On top of
+// that: CPU-driven instanced pools of shards and grit in the rock's palette, thrown from the crushed zone
+// and the cracks. Debris pools are fixed-capacity typed arrays — no per-frame allocation.
+// Before it breaks a rock shows its damage: chip() leaves a dent, and a crack network spreads from the
+// dents with every hit (plates between the cracks work loose; magma shows in the cracks of volcanic
+// rock). The fracture mesh takes scars and cracks over, so nothing changes on the frame of the break.
 
 /* ------------------------------- tunables -------------------------------- */
 
@@ -57,7 +63,7 @@ const TUNE = {
   maxFragFrac: 0.2,       // largest pooled fragment / parent diameter
   fxExplosionPerSize: 0.01, // fx.explosion scale per unit of rock diameter (volcanic shatter)
   meshScale: 1.2,         // the caller draws a rock of gameplay size S at scale S * meshScale
-  crackMs: 85,            // length of the "cracking apart" beat before the burst
+  crackMs: 55,            // length of the "cracking apart" beat before the burst
   lodSmall: 34,           // sizeHint below this → LOD 0
   lodMedium: 80,          // below this → LOD 1
   lodHuge: 150,           // at/above this → LOD 3 (else 2)
@@ -68,9 +74,10 @@ const TUNE = {
 
 const LOD_FREQ = [8, 16, 28, 48]; // geodesic frequency → 1280 / 5120 / 15680 / 46080 triangles (+ boulders)
 const FRAC_CELLS = [90, 150, 240, 330];   // Voronoi cells of the fracture mesh cut from surface LOD 0..3
-const FRAC_CLUSTERS = [6, 9, 12, 15];     // clusters the cells are grouped into (they separate first)
-const FRAC_LIMIT = 0.2;                   // largest piece once the pieces are apart, mesh units (= 24 % of the gameplay diameter at meshScale 1.2)
+const FRAC_LIMIT = 0.2;                   // largest loose shard, mesh units (the chunks that keep their skin are larger: they crumble instead)
 const MAX_BURSTS = 24;
+const BT_ROWS = 28;                        // rows of the per-burst texture (see uRockBurst)
+const MAX_EV = 12;                         // timed puffs per burst (a chunk snapping, crumbling)
 const FLASH_COL = [1, 0.82, 0.6];
 
 /* -------------------------------- helpers -------------------------------- */
@@ -404,7 +411,7 @@ function prepareVariant(specIn, id) {
     pal: { base: p[0], high: p[1], low: p[2], tintA: p[3], tintB: p[4], fresh: p[5] },
     data: [null, null, null, null],   // per-LOD surface data (typed arrays)
     geo: [null, null, null, null],    // per-LOD BufferGeometry
-    sh: [null, null, null, null],     // per-LOD fracture mesh { geo, mat, tex, mesh, burst, imp, n, clusters, … }
+    sh: [null, null, null, null],     // per-LOD fracture mesh { geo, mat, tex, cellTex, mesh, burst, imp, slot, n, … }
     jobs: [null, null, null, null, null, null, null, null],
     norm: null, surf: null, mat: null, shMat: null,
     dustColor: dustTone(p[0], p[1], spec.volcanic ? 0.2 : spec.pal === 'carbon' ? 0.22 : 0.42),
@@ -1064,9 +1071,10 @@ function growArr(a, n) { const g = new a.constructor(n); g.set(a); return g; }
 // 3D Voronoi diagram of seeds scattered through its volume. Every cell is a closed convex-ish solid:
 // the rock's own skin where it reaches the surface (triangles clipped along the planar cuts, so the
 // cracks are straight, not triangle-edge zigzags) and flat fresh fracture faces everywhere else, all
-// the way to the core. Cells are grouped into clusters that separate first and split a moment later.
-// Per vertex: aCid = cell index; per cell (float texture): centroid + random, cluster centroid + random
-// (+1 = splits a little later), final scale (so that nothing stays larger than FRAC_LIMIT) + tone.
+// the way to the core (aRock.w of those = 0.5 + half their depth below the skin). How the cells group
+// into chunks, shards and gravel is decided per break (Rocks3D._plan), not here.
+// Per vertex: aCid = cell index; per cell (float texture): centroid + random; scale as a loose shard
+// (so that nothing loose stays larger than FRAC_LIMIT), random, diameter.
 function* genFracture(vr, d, level) {
   const spec = vr.spec, P = d.pos, idx = d.index, nV = d.count, nT = idx.length / 3, pal = vr.pal;
   const rnd = mulberry32(spec.seed * 131 + level * 977 + 5);
@@ -1097,7 +1105,7 @@ function* genFracture(vr, d, level) {
   let N = 0, guard = 0;
   while (N < want && guard < want * 600) {
     let best = -1, bx = 0, by = 0, bz = 0;
-    for (let t = 0; t < 7; t++) {
+    for (let t = 0; t < 3; t++) {
       let x = 0, y = 0, z = 0, ok = false;
       for (let k = 0; k < 60 && !ok; k++) {
         guard++;
@@ -1279,8 +1287,17 @@ function* genFracture(vr, d, level) {
   // are inside plus the points where the skin was cut by this plane, ordered around their centre
   const kind = spec.special;
   const innerSp = kind === 'glow' ? 0.9 : kind === 'metal' ? 0.9 : kind === 'frost' ? 0.15 : 0.6;
-  const fr = [(pal.base[0] + pal.fresh[0]) * 0.5, (pal.base[1] + pal.fresh[1]) * 0.5, (pal.base[2] + pal.fresh[2]) * 0.5];
+  // unweathered rock: darker than the dusty skin, a little of the pale colour of a fresh break
+  const fr = [0, 1, 2].map((k) => pal.base[k] * 0.55 + pal.low[k] * 0.25 + pal.fresh[k] * 0.2 + (pal.tintA[k] - pal.base[k]) * 0.25);
   const pts = [];
+  // depth below the skin of an interior point (0 … 1 at a quarter of a diameter), from a sparse sample of the skin
+  const sStep = Math.max(1, (d.baseCount / 700) | 0), sN = Math.ceil(d.baseCount / sStep), sP = new Float32Array(sN * 3);
+  for (let i = 0, w = 0; i < d.baseCount; i += sStep, w++) { sP[w * 3] = P[i * 3]; sP[w * 3 + 1] = P[i * 3 + 1]; sP[w * 3 + 2] = P[i * 3 + 2]; }
+  const depthW = (x, y, z) => {
+    let m = 1e9;
+    for (let i = 0; i < sN; i++) { const dx = sP[i * 3] - x, dy = sP[i * 3 + 1] - y, dz = sP[i * 3 + 2] - z, dd = dx * dx + dy * dy + dz * dz; if (dd < m) m = dd; }
+    return 0.5 + 0.5 * clamp((Math.sqrt(m) - 0.02) / 0.22, 0, 1);
+  };
   for (let c = 0; c < N; c++) {
     const F = faces[c];
     for (let f = 0; f < F.length; f++) {
@@ -1305,8 +1322,8 @@ function* genFracture(vr, d, level) {
       if (rn < 3) continue;
       const tone = 0.62 + 0.5 * hash1(c * 7.13 + j * 3.71 + spec.seed);
       const cr = clamp(fr[0] * tone, 0, 0.86), cg = clamp(fr[1] * tone, 0, 0.86), cb = clamp(fr[2] * tone, 0, 0.86);
-      const v0 = addV(ring.cx, ring.cy, ring.cz, nx, ny, nz, cr, cg, cb, 0, 1, innerSp, 1, c);
-      for (let k = 0; k < rn; k++) addV(ring[k * 3], ring[k * 3 + 1], ring[k * 3 + 2], nx, ny, nz, cr, cg, cb, 0, 1, innerSp, 1, c);
+      const v0 = addV(ring.cx, ring.cy, ring.cz, nx, ny, nz, cr, cg, cb, 1, 1, innerSp, depthW(ring.cx, ring.cy, ring.cz), c);
+      for (let k = 0; k < rn; k++) addV(ring[k * 3], ring[k * 3 + 1], ring[k * 3 + 2], nx, ny, nz, cr, cg, cb, 1, 1, innerSp, depthW(ring[k * 3], ring[k * 3 + 1], ring[k * 3 + 2]), c);
       for (let k = 0; k < rn; k++) {
         // a long outer edge may bridge a hollow of the outline (the face is not star-shaped there): skip the wedge if it is outside the rock
         const k1 = (k + 1) % rn, mx = (ring[k * 3] + ring[k1 * 3]) * 0.5, my = (ring[k * 3 + 1] + ring[k1 * 3 + 1]) * 0.5, mz = (ring[k * 3 + 2] + ring[k1 * 3 + 2]) * 0.5;
@@ -1314,8 +1331,9 @@ function* genFracture(vr, d, level) {
           && inside(mx + (ring.cx - mx) * 0.12 + 1.3e-7, my + (ring.cy - my) * 0.12 + 2.9e-7, mz + (ring.cz - mz) * 0.12) <= 0) continue;
         tri(v0, v0 + 1 + k, v0 + 1 + k1);
       }
+      if ((f & 7) === 7) yield;
     }
-    if (c & 1) yield;
+    yield;
   }
 
   // per-cell: centroid, size, final scale
@@ -1328,50 +1346,19 @@ function* genFracture(vr, d, level) {
     if (r > crad[c]) crad[c] = r;
   }
   yield;
-  // clusters: a few cells picked far apart, every cell joins the nearest
-  const nClus = Math.min(FRAC_CLUSTERS[level], N), ks = new Int32Array(nClus);
-  for (let k = 0; k < nClus; k++) {
-    let best = -1, bi = 0;
-    for (let t = 0; t < (k === 0 ? 1 : 6); t++) {
-      const c = (rnd() * N) | 0;
-      let near = 1e9;
-      for (let q = 0; q < k; q++) { const o = ks[q]; const dd = (cc[c * 3] - cc[o * 3]) ** 2 + (cc[c * 3 + 1] - cc[o * 3 + 1]) ** 2 + (cc[c * 3 + 2] - cc[o * 3 + 2]) ** 2; if (dd < near) near = dd; }
-      if (near > best) { best = near; bi = c; }
-    }
-    ks[k] = bi;
-  }
-  const clusters = [];
-  for (let k = 0; k < nClus; k++) clusters.push({ x: 0, y: 0, z: 0, n: 0, w: 0.02 + rnd() * 0.96, late: false, rad: 0 });
-  const cellClus = new Uint16Array(N);
+  // per cell: centroid + random; scale as a loose shard (nothing above FRAC_LIMIT) + random + diameter
+  const tex = new Float32Array(N * 2 * 4);
+  let maxCell = 0, maxPiece = 0;
   for (let c = 0; c < N; c++) {
-    if (!cn[c]) continue;
-    let best = 1e9, bi = 0;
-    for (let k = 0; k < nClus; k++) { const o = ks[k]; const dd = (cc[c * 3] - cc[o * 3]) ** 2 + (cc[c * 3 + 1] - cc[o * 3 + 1]) ** 2 + (cc[c * 3 + 2] - cc[o * 3 + 2]) ** 2; if (dd < best) { best = dd; bi = k; } }
-    cellClus[c] = bi;
-    const K = clusters[bi];
-    K.x += cc[c * 3]; K.y += cc[c * 3 + 1]; K.z += cc[c * 3 + 2]; K.n++;
-  }
-  for (const K of clusters) if (K.n) { K.x /= K.n; K.y /= K.n; K.z /= K.n; }
-  const bySize = clusters.filter((K) => K.n > 0).sort((a, b) => b.n - a.n);
-  for (let i = 0; i < Math.min(2, bySize.length); i++) bySize[i].late = true;
-  const tex = new Float32Array(N * 4 * 4);
-  let maxCell = 0, maxPiece = 0, maxClus = 0;
-  for (let c = 0; c < N; c++) {
-    const K = clusters[cellClus[c]], dia = crad[c] * 2;
-    if (!cn[c]) continue;
-    const kr = Math.hypot(cc[c * 3] - K.x, cc[c * 3 + 1] - K.y, cc[c * 3 + 2] - K.z) + crad[c];
-    if (kr > K.rad) K.rad = kr;
-    // nothing stays larger than the limit; below it a spread of sizes
-    const u = rnd(), shrink = Math.min(1, FRAC_LIMIT / Math.max(dia, 1e-4)) * (0.34 + 0.66 * Math.pow(u, 1.4));
+    if (!cn[c]) { tex[c * 4] = 9; tex[c * 4 + 1] = 9; tex[c * 4 + 2] = 9; continue; } // empty cell: parked far from every plane
+    const dia = crad[c] * 2;
+    const u = rnd(), shrink = Math.min(1, FRAC_LIMIT / Math.max(dia, 1e-4)) * (0.5 + 0.5 * Math.pow(u, 1.4));
     if (dia > maxCell) maxCell = dia;
     if (dia * shrink > maxPiece) maxPiece = dia * shrink;
     tex[c * 4] = cc[c * 3]; tex[c * 4 + 1] = cc[c * 3 + 1]; tex[c * 4 + 2] = cc[c * 3 + 2]; tex[c * 4 + 3] = 0.01 + rnd() * 0.98;
-    let o = (N + c) * 4;
-    tex[o] = K.x; tex[o + 1] = K.y; tex[o + 2] = K.z; tex[o + 3] = K.w + (K.late ? 1 : 0);
-    o = (2 * N + c) * 4;
-    tex[o] = shrink; tex[o + 1] = rnd(); tex[o + 2] = dia; tex[o + 3] = 0;
+    const o = (N + c) * 4;
+    tex[o] = shrink; tex[o + 1] = rnd(); tex[o + 2] = dia; tex[o + 3] = cn[c];
   }
-  for (const K of clusters) if (K.rad * 2 > maxClus) maxClus = K.rad * 2;
   yield;
   // packed for the GPU here, a buffer per step, so that finishing the job costs nothing
   const pos = oP.slice(0, vc * 3);
@@ -1386,7 +1373,7 @@ function* genFracture(vr, d, level) {
   yield;
   return {
     pos, nor, col, rock, cid: oI.slice(0, vc), index, count: vc,
-    cells: N, tex, clusters: clusters.filter((K) => K.n > 0), maxCell, maxPiece, maxClus, skinTris,
+    cells: N, tex, maxCell, maxPiece, skinTris,
   };
 }
 
@@ -1473,59 +1460,153 @@ varying vec4 vRock;
 varying vec3 vRockMacro;
 varying float vRockBodyK;
 uniform vec4 uRockScar[ 4 ];   // impact scars: xyz = object-space direction of the hit, w = angular radius (0 = free slot)
+uniform vec4 uRockDmg;         // x = damage 0..1 (cracks spread from the scars, plates work loose), y = flash of the last hit
+uniform vec3 uRockSeed;
 #ifdef ROCK_HEAT
   varying float vRockHeat;
 #endif
 #ifdef ROCK_DEBRIS
   attribute float aHeat;
+#else
+  #define RK_PLATES 4.2
+  vec3 rkVH3( vec3 p ) {
+    p = fract( p * vec3( 0.1031, 0.1030, 0.0973 ) );
+    p += dot( p, p.yxz + 33.33 );
+    return fract( ( p.xxy + p.yxx ) * p.zyx );
+  }
+  // Battle damage, the same for the whole rock and for its fracture mesh (so the hand-over is seamless): every scar
+  // is a real dent (the fragment shader shades the same bowl), and the plates between the cracks that spread from
+  // the scars work loose — each shifts as a block (the fragment shader draws the cracks on the same Voronoi cells).
+  vec3 rkDamage( vec3 p, vec4 sc[ 4 ], float dmg ) {
+    vec3 mac = normalize( p + vec3( 1e-5 ) );
+    float pl = length( p ), dent = 0.0, scars = 0.0;
+    for ( int i = 0; i < 4; i ++ ) {
+      float sr = sc[ i ].w;
+      if ( sr > 0.0 ) {
+        scars = 1.0;
+        float t = acos( clamp( dot( mac, sc[ i ].xyz ), -1.0, 1.0 ) ) / sr;
+        if ( t < 1.6 ) {
+          float bowl = 1.0 - smoothstep( 0.0, 1.0, t );
+          float rq = ( t - 1.05 ) / 0.18;
+          dent += sr * ( 0.44 * bowl - 0.08 * exp( - rq * rq ) );
+        }
+      }
+    }
+    vec3 q = p - mac * ( pl * dent );
+    if ( dmg * scars > 0.0 ) {
+      vec3 x = p * RK_PLATES + uRockSeed.yxz, ip = floor( x ), f = fract( x ), br = vec3( 0.0 ), bid = ip;
+      float d1 = 8.0;
+      for ( int k = -1; k <= 1; k ++ ) for ( int j = -1; j <= 1; j ++ ) for ( int i = -1; i <= 1; i ++ ) {
+        vec3 c = vec3( float( i ), float( j ), float( k ) );
+        vec3 r = c + rkVH3( ip + c ) - f;
+        float d = dot( r, r );
+        if ( d < d1 ) { d1 = d; br = r; bid = ip + c; }
+      }
+      vec3 fp = normalize( p + br / RK_PLATES + vec3( 1e-5 ) );   // the plate's own centre
+      float m = 0.0;
+      for ( int i = 0; i < 4; i ++ ) {
+        float sr = sc[ i ].w;
+        if ( sr > 0.0 ) m = max( m, 1.0 - smoothstep( sr * 0.8, sr * ( 2.0 + 4.5 * dmg ), acos( clamp( dot( fp, sc[ i ].xyz ), -1.0, 1.0 ) ) ) );
+      }
+      q += fp * ( pl * 0.06 * dmg * m * ( rkVH3( bid + 7.3 ).x - 0.4 ) );
+    }
+    return q;
+  }
 #endif
 #ifdef ROCK_SHATTER
   attribute float aCid;
-  attribute vec4 aBurst;
-  attribute vec4 aImp;
-  uniform sampler2D uRockCells;  // per cell: row 0 centroid + random, row 1 cluster centroid + random (+1 = late), row 2 final scale, random
+  attribute vec4 aBurst;         // age (s), speed (diameters / s), life (s), heat
+  attribute vec4 aImp;           // impact push (object space, diameters / s), seed
+  attribute float aSlot;         // column of uRockBurst
+  uniform sampler2D uRockCells;  // per cell: row 0 centroid + random, row 1 scale as a loose shard, random, diameter
+  uniform sampler2D uRockBurst;  // per burst: rows 0-3 scars, 4-5 fracture planes, 6 hit point + crush radius, 7 shot direction + damage,
+                                 // then 5 rows per chunk: pivot + split time | velocity + spin | axis + erosion start |
+                                 // split normal + erosion span | split speed, split spin, eroded scale, eroded life
   varying vec4 vRockCell;
+  flat varying float vRockSlot;
   vec3 rkH3( float n ) { return fract( sin( vec3( n, n + 1.31, n + 2.77 ) * vec3( 127.1, 311.7, 74.7 ) ) * 43758.5453 ); }
   vec3 rkRot( vec3 v, vec3 k, float a ) { float c = cos( a ), s = sin( a ); return v * c + cross( k, v ) * s + k * ( dot( k, v ) * ( 1.0 - c ) ); }
+  float rkGf( float t, float k ) { return ( 1.0 - exp( - k * t ) ) / k; }
 #endif
 `;
 
-// Fracture animation, all analytic in time (aBurst = age s, speed diam/s, life s, heat):
-// the body dilates and its cracks open (clusters first, hairlines between cells), clusters push
-// apart, and within ~120 ms every cluster has come apart into its cells, which crumble to their
-// final size as they separate. The cluster part is mirrored on the CPU (Rocks3D._clusterOffset).
+// Fracture animation, all analytic in time. The rock splits along two planes through the point of impact
+// (chosen per break, see Rocks3D._plan) into up to four chunks that keep their skin and drift apart, tumbling;
+// the cells of the Voronoi mesh that lie at the impact are crushed to gravel and sprayed back, those along
+// the planes fall out of the opening cracks as shards (squashed into slabs and splinters), the largest
+// chunks snap in two again a moment later, and in the end every chunk sheds its cells from the outside in —
+// each one shrinking away as it drifts off. A cell is carried by its chunk until its release time, then flies on
+// its own with the velocity it had. The chunk part is mirrored on the CPU (Rocks3D._chunkPos).
 const GLSL_VERT_NORMAL = /* glsl */ `
 #ifdef ROCK_SHATTER
+  int rkSl = int( aSlot + 0.5 );
   ivec2 rkTc = ivec2( int( aCid + 0.5 ), 0 );
   vec4 aCell = texelFetch( uRockCells, rkTc, 0 );
-  vec4 aClus = texelFetch( uRockCells, rkTc + ivec2( 0, 1 ), 0 );
-  vec4 rkCx = texelFetch( uRockCells, rkTc + ivec2( 0, 2 ), 0 );
+  vec4 rkCx = texelFetch( uRockCells, rkTc + ivec2( 0, 1 ), 0 );
+  vec4 rkP1 = texelFetch( uRockBurst, ivec2( rkSl, 4 ), 0 );
+  vec4 rkP2 = texelFetch( uRockBurst, ivec2( rkSl, 5 ), 0 );
+  vec4 rkHit = texelFetch( uRockBurst, ivec2( rkSl, 6 ), 0 );
+  vec4 rkDir = texelFetch( uRockBurst, ivec2( rkSl, 7 ), 0 );
+  float rkS1 = dot( aCell.xyz, rkP1.xyz ) - rkP1.w, rkS2 = dot( aCell.xyz, rkP2.xyz ) - rkP2.w;
+  int rkRow = 8 + 5 * ( ( rkS1 > 0.0 ? 1 : 0 ) + ( rkS2 > 0.0 ? 2 : 0 ) );
+  vec4 rkK0 = texelFetch( uRockBurst, ivec2( rkSl, rkRow ), 0 );
+  vec4 rkK1 = texelFetch( uRockBurst, ivec2( rkSl, rkRow + 1 ), 0 );
+  vec4 rkK2 = texelFetch( uRockBurst, ivec2( rkSl, rkRow + 2 ), 0 );
+  vec4 rkK3 = texelFetch( uRockBurst, ivec2( rkSl, rkRow + 3 ), 0 );
+  vec4 rkK4 = texelFetch( uRockBurst, ivec2( rkSl, rkRow + 4 ), 0 );
   float rkT = aBurst.x;
-  float rkOpen = smoothstep( 0.0, 0.075, rkT );
-  float rkTm = max( 0.0, rkT - 0.045 );
-  float rkGc = ( 1.0 - exp( - 2.1 * rkTm ) ) / 2.1;
-  float rkC1 = fract( aClus.w ), rkC2 = fract( rkC1 * 7.31 ), rkC3 = fract( rkC1 * 13.77 );
-  float rkLate = step( 1.0, aClus.w );
-  float rkCl = length( aClus.xyz );
-  vec3 rkCDir = aClus.xyz / max( rkCl, 1e-4 );
-  float rkCoreK = clamp( rkCl / 0.3, 0.3, 1.0 );
-  vec3 rkCOff = aClus.xyz * ( 0.075 * rkOpen ) + ( rkCDir * ( aBurst.y * ( 0.45 + 0.9 * rkC1 ) * rkCoreK ) + aImp.xyz * ( 0.4 + 0.8 * rkC2 ) ) * rkGc;
-  vec3 rkCAxis = normalize( rkH3( rkC1 * 37.1 + 3.0 ) - 0.5 + 1e-4 );
-  float rkCAng = ( rkC3 - 0.5 ) * 7.0 * rkGc;
-  float rkCw = aCell.w;
-  vec3 rkL = rkH3( rkCw * 57.3 + aImp.w );
-  float rkTb = 0.05 + 0.045 * rkC2 + rkLate * 0.025;
-  float rkTl = max( 0.0, rkT - rkTb );
-  float rkGl = ( 1.0 - exp( - 2.4 * rkTl ) ) / 2.4;
-  vec3 rkLRel = aCell.xyz - aClus.xyz;
-  vec3 rkLDir = normalize( rkLRel + aCell.xyz * 0.4 + ( rkL - 0.5 ) * 0.22 + 1e-4 );
-  vec3 rkLOff = rkLRel * ( 0.03 * rkOpen ) + rkLDir * ( aBurst.y * ( 0.3 + 0.7 * rkL.x ) * rkGl );
-  vec3 rkLAxis = normalize( rkH3( rkCw * 13.9 + aImp.w + 7.0 ) - 0.5 + 1e-4 );
-  float rkLAng = ( rkL.y - 0.5 ) * 18.0 * rkGl;
-  float rkLife = aBurst.z * ( 0.45 + 0.55 * rkL.z );
-  // pieces crumble to their own final size as they come apart (nothing stays above a quarter of the parent), then shrink away
-  float rkShrink = ( 1.0 - smoothstep( rkLife - 0.42, rkLife, rkT ) ) * mix( 1.0, rkCx.x, smoothstep( 0.045, 0.118, rkT ) );
-  objectNormal = rkRot( rkRot( objectNormal, rkLAxis, rkLAng ), rkCAxis, rkCAng );
+  vec3 rkL = rkH3( aCell.w * 57.3 + aImp.w );
+  vec3 rkM = rkH3( aCell.w * 13.9 + aImp.w + 7.0 );
+  // what becomes of this cell, and when it leaves its chunk
+  float rkMp = min( abs( rkS1 ), abs( rkS2 ) );
+  float rkS3 = dot( aCell.xyz - rkK0.xyz, rkK3.xyz );
+  float rkSg = rkS3 > 0.0 ? 1.0 : -1.0;
+  float rkBand = 0.015 + 0.1 * rkL.y;
+  float rkIsG = step( length( aCell.xyz - rkHit.xyz ), rkHit.w * ( 0.5 + 1.0 * rkL.x ) );
+  float rkIsS = step( rkMp, rkBand ) * ( 1.0 - rkIsG );
+  float rkIsP = step( abs( rkS3 ), rkBand * 0.8 ) * step( rkK0.w, 50.0 ) * ( 1.0 - rkIsG ) * ( 1.0 - rkIsS );
+  float rkIsE = ( 1.0 - rkIsG ) * ( 1.0 - rkIsS ) * ( 1.0 - rkIsP );
+  float rkRim = 1.0 - clamp( length( aCell.xyz - rkK0.xyz ) / 0.32, 0.0, 1.0 );
+  float rkTr = rkK2.w + rkK3.w * ( 0.5 * rkL.z + 0.5 * rkRim );
+  rkTr = mix( rkTr, min( rkTr, rkK0.w + 0.01 + 0.07 * rkL.z ), rkIsP );
+  rkTr = mix( rkTr, min( rkTr, 0.035 + 0.08 * rkL.z + rkMp * 1.5 ), rkIsS );
+  rkTr = mix( rkTr, 0.012 + 0.035 * rkL.z, rkIsG );
+  // carried by the chunk (which may itself snap in two at rkK0.w)
+  float rkTcar = min( rkT, rkTr );
+  float rkOpen = smoothstep( 0.0, 0.07, rkTcar );
+  float rkG1 = rkGf( max( 0.0, rkTcar - 0.03 ), 0.9 );
+  float rkA1 = rkK1.w * rkG1;
+  float rkG2 = rkGf( max( 0.0, rkTcar - rkK0.w ), 1.2 );
+  float rkA2 = rkSg * rkK4.y * rkG2;
+  vec3 rkAx2 = normalize( cross( rkK3.xyz, rkK2.xyz ) + vec3( 1e-4, 2e-4, 0.0 ) );
+  vec3 rkPv2 = rkK0.xyz + rkK3.xyz * ( rkSg * 0.1 );
+  vec3 rkOff2 = rkK3.xyz * ( rkSg * rkK4.x * rkG2 );
+  vec3 rkOff1 = rkK0.xyz * ( 0.07 * rkOpen ) + rkK1.xyz * rkG1;
+  // on its own
+  float rkTl = max( 0.0, rkT - rkTr );
+  vec3 rkJit = rkM - 0.5;
+  vec3 rkOut = normalize( aCell.xyz - rkHit.xyz + rkJit * 0.15 + 1e-4 );
+  vec3 rkNp = abs( rkS1 ) < abs( rkS2 ) ? rkP1.xyz * sign( rkS1 ) : rkP2.xyz * sign( rkS2 );
+  vec3 rkAway = normalize( aCell.xyz - rkK0.xyz + rkJit * 0.3 + 1e-4 );
+  vec3 rkVo = rkAway * ( aBurst.y * ( 0.02 + 0.07 * rkL.x ) );
+  rkVo = mix( rkVo, rkAway * ( aBurst.y * ( 0.06 + 0.13 * rkL.x ) ), rkIsP );
+  rkVo = mix( rkVo, normalize( rkOut + rkNp * 0.5 + rkJit * 0.8 ) * ( aBurst.y * ( 0.2 + 0.55 * rkL.x ) ) + aImp.xyz * ( 0.25 + 0.5 * rkM.z ), rkIsS );
+  rkVo = mix( rkVo, normalize( rkOut * 0.8 - rkDir.xyz * ( 0.2 + 1.3 * rkL.x ) + rkJit * 1.2 ) * ( aBurst.y * ( 0.5 + 1.2 * rkM.x ) ), rkIsG );
+  vec3 rkLOff = rkK1.xyz * ( exp( - 0.9 * max( 0.0, rkTr - 0.03 ) ) * step( 0.03, rkTr ) * rkGf( rkTl, 0.9 ) ) + rkVo * rkGf( rkTl, mix( 1.6, 2.6, rkIsG ) );
+  vec3 rkLAxis = normalize( rkJit + 1e-4 );
+  float rkLAng = ( rkL.y - 0.5 ) * mix( mix( 5.0, 11.0, rkIsS ), 26.0, rkIsG ) * rkGf( rkTl, 1.3 );
+  // a loose piece crumbles to its own size, squashed into a slab or a splinter, and in the end shrinks away into dust
+  float rkCr = smoothstep( 0.0, 0.1, rkTl );
+  float rkFs = mix( mix( rkK4.z, max( rkCx.x, 0.6 ), max( rkIsS, rkIsP ) ), clamp( 0.05 / max( rkCx.z, 0.01 ), 0.16, 0.6 ) * ( 0.6 + 0.8 * rkM.y ), rkIsG );
+  float rkLa = mix( mix( rkK4.w * ( 0.6 + 0.4 * rkL.x ), 0.7 + 0.6 * rkM.z, max( rkIsS, rkIsP ) ), 0.4 + 0.5 * rkM.z, rkIsG );
+  float rkDie = min( rkTr + rkLa, aBurst.z );
+  float rkFade = mix( 0.4, rkLa, rkIsE );
+  float rkSc = mix( 1.0, rkFs, rkCr ) * ( 1.0 - smoothstep( rkDie - rkFade, rkDie, rkT ) );
+  vec3 rkSqA = normalize( rkL - 0.5 + 1e-4 );
+  vec3 rkSqB = normalize( cross( rkSqA, rkLAxis ) + vec3( 1e-4, 0.0, 2e-4 ) );
+  float rkSq1 = rkCr * ( 1.0 - rkIsE ) * ( 0.35 + 0.4 * rkM.x );
+  float rkSq2 = rkCr * ( 1.0 - rkIsE ) * step( 0.55, rkM.y ) * 0.5;
+  objectNormal = rkRot( rkRot( rkRot( objectNormal, rkAx2, rkA2 ), rkK2.xyz, rkA1 ), rkLAxis, rkLAng );
 #endif
 `;
 
@@ -1534,28 +1615,28 @@ vRockPos = position;
 vRock = aRock * vec4( 1.0, 1.0, 1.25, 1.0 );
 vec3 rkMac = normalize( position + vec3( 1e-5 ) );
 #ifdef ROCK_SHATTER
-  vec3 rkp = aCell.xyz + rkRot( position - aCell.xyz, rkLAxis, rkLAng ) * rkShrink + rkLOff;
-  transformed = aClus.xyz + rkRot( rkp - aClus.xyz, rkCAxis, rkCAng ) + rkCOff;
+  vec4 rkScr[ 4 ];
+  for ( int i = 0; i < 4; i ++ ) rkScr[ i ] = texelFetch( uRockBurst, ivec2( rkSl, i ), 0 );
+  vec3 rkq = rkDamage( position, rkScr, rkDir.w );
+  rkq = rkPv2 + rkRot( rkq - rkPv2, rkAx2, rkA2 ) + rkOff2;
+  rkq = rkK0.xyz + rkRot( rkq - rkK0.xyz, rkK2.xyz, rkA1 ) + rkOff1;
+  vec3 rkc = rkPv2 + rkRot( aCell.xyz - rkPv2, rkAx2, rkA2 ) + rkOff2;
+  rkc = rkK0.xyz + rkRot( rkc - rkK0.xyz, rkK2.xyz, rkA1 ) + rkOff1;
+  vec3 rkv = rkq - rkc;
+  rkv -= rkSqA * ( dot( rkv, rkSqA ) * rkSq1 );
+  rkv -= rkSqB * ( dot( rkv, rkSqB ) * rkSq2 );
+  transformed = rkc + rkRot( rkv, rkLAxis, rkLAng ) * rkSc + rkLOff;
   vRockBodyK = 1.0 - smoothstep( 0.03, 0.2, rkT );
-  vRockHeat = aBurst.w * aRock.w;
+  // what is deep inside a chunk is laid bare later: it has had less time to cool
+  vRockHeat = aBurst.w * step( 0.25, aRock.w ) * ( aBurst.w > 0.0 ? exp( 1.7 * min( rkT, 0.6 * rkTr ) ) : 1.0 );
   vRockCell = vec4( aCell.xyz, rkCx.y );
+  vRockSlot = aSlot;
 #elif defined( ROCK_DEBRIS )
   vRockBodyK = 0.0;
   vRockHeat = aHeat * mix( 0.3, 1.0, aRock.w );
 #else
   vRockBodyK = 1.0;
-  // impact scars are real dents (the fragment shader shades the same bowl)
-  for ( int i = 0; i < 4; i ++ ) {
-    float sr = uRockScar[ i ].w;
-    if ( sr > 0.0 ) {
-      float t = acos( clamp( dot( rkMac, uRockScar[ i ].xyz ), -1.0, 1.0 ) ) / sr;
-      if ( t < 1.6 ) {
-        float bowl = 1.0 - smoothstep( 0.0, 1.0, t );
-        float rq = ( t - 1.05 ) / 0.18;
-        transformed -= rkMac * ( length( position ) * sr * ( 0.44 * bowl - 0.08 * exp( - rq * rq ) ) );
-      }
-    }
-  }
+  transformed = rkDamage( position, uRockScar, uRockDmg.x );
 #endif
 #ifdef USE_INSTANCING
   rkMac = mat3( instanceMatrix ) * rkMac;
@@ -1583,6 +1664,7 @@ uniform vec4 uRockBreak;   // fresh fracture faces: conchoidal ripples, striatio
 uniform vec3 uRockAxis;    // bedding axis (object space)
 uniform vec3 uRockFresh;   // colour of freshly broken rock
 uniform vec4 uRockScar[ 4 ];
+uniform vec4 uRockDmg;     // x = damage 0..1 (cracks spread from the scars), y = flash of the last hit
 #ifdef ROCK_SHATTER
   varying vec4 vRockCell;
 #endif
@@ -1594,6 +1676,10 @@ uniform vec4 uRockScar[ 4 ];
 #ifdef ROCK_HEAT
   uniform vec2 uRockHot;   // glow gain, HDR ceiling
   varying float vRockHeat;
+#endif
+#ifdef ROCK_SHATTER
+  uniform sampler2D uRockBurst;
+  flat varying float vRockSlot;
 #endif
 
 const mat3 rkR1 = mat3( 0.8, 0.36, -0.48, -0.6, 0.48, -0.64, 0.0, 0.8, 0.6 );
@@ -1666,7 +1752,9 @@ vec3 rkPy = dFdy( rkP );
 float rkFw = length( rkPx ) + length( rkPy ) + 1e-7;
 vec3 rkG = vec3( 0.0 ), rkW0 = vec3( 0.0 );
 float rkCav = 0.0, rkV1 = 0.5, rkN2 = 0.5, rkN3 = 0.5, rkN4 = 0.5, rkCryst = 0.0, rkFrost = 0.0, rkGlow = 0.0, rkScarHot = 0.0;
-float rkInner = vRock.w;
+float rkInner = step( 0.25, vRock.w );                 // a freshly broken face …
+float rkDepth = clamp( vRock.w * 2.0 - 1.0, 0.0, 1.0 ); // … and how deep below the skin it lies
+float rkLam = 0.0, rkDmgCrack = 0.0, rkDmgM = 0.0;
 #ifdef ROCK_SHATTER
   vec4 rkCellV = vRockCell;
 #else
@@ -1686,7 +1774,7 @@ float rkInner = vRock.w;
     vec3 g = i == 0 ? n.yzw : i == 1 ? n.yzw * rkR1 : n.yzw * rkR2;
     warp = n.yzw * 0.2;
     float w = i == 0 ? 0.3 : i == 1 ? 0.45 : 0.8;
-    rkG += ( uRockBump.x * w * a * boost * ( i < 2 ? 1.0 - 0.85 * rkInner : 1.0 ) ) * g;
+    rkG += ( uRockBump.x * w * a * boost * ( i < 2 ? 1.0 - 0.4 * rkInner : 1.0 ) ) * g;
     if ( i == 0 ) { rkV1 = mix( 0.5, n.x, a ); rkW0 = g * a; }
     else if ( i == 1 ) rkN2 = mix( 0.5, n.x, a );
     else rkN4 = mix( 0.5, n.x, a );
@@ -1727,7 +1815,7 @@ float rkCellA = 0.0;
     float wv = 0.015 + 0.11 * cpatch * smoothstep( 0.3, 0.62, rkN2 + 0.4 * ( rkV1 - 0.5 ) );
     float t = clamp( e / wv, 0.0, 1.0 );
     float crack = ( 1.0 - t * t * ( 3.0 - 2.0 * t ) ) * cpatch;
-    rkG += ( uRockCell.y * skin * cpatch * 6.0 * t * ( 1.0 - t ) / 0.09 ) * cg + ( uRockCell.w * 0.35 * ac * ( 1.0 + rkInner ) ) * ( rkCh - 0.5 );
+    rkG += ( uRockCell.y * skin * cpatch * 6.0 * t * ( 1.0 - t ) / 0.09 ) * cg + ( uRockCell.w * 0.35 * ac * ( 1.0 + 3.0 * rkInner ) ) * ( rkCh - 0.5 );
     rkCav += crack * skin * min( 1.0, uRockCell.y * 12.0 );
     // pits: steep little bowls of random size
     float pr = 0.1 + 0.17 * rkCh.z;
@@ -1760,7 +1848,7 @@ float rkCellA = 0.0;
 #endif
 if ( rkInner > 0.01 ) {
   // freshly broken rock: conchoidal ripples spreading from a focus, hackle striations along the bedding,
-  // bands of the interior, darker towards the core
+  // beds of the interior, darker towards the core
   vec3 fo = rkCellV.xyz * 0.5 + ( rkHash3( vec3( rkCellV.w * 91.0, 3.0, 7.0 ) ) - 0.5 ) * 0.3;
   vec3 dv = rkP - fo;
   float dl = length( dv ) + 1e-4;
@@ -1770,33 +1858,100 @@ if ( rkInner > 0.01 ) {
   float sa = dot( rkP, uRockAxis ) * uRockFreq.x * 2.6;
   vec4 sn = rkNoiseD( vec3( sa, sa * 0.31 + 5.0, dot( rkP, uRockAxis.yzx ) * 3.0 ) + uRockSeed.zyx );
   rkG += uRockAxis * ( ( sn.y + 0.31 * sn.z ) * uRockBreak.y * ra * 2.2 );
-  float core = 1.0 - smoothstep( 0.12, 0.5, length( rkP ) );
-  diffuseColor.rgb *= mix( 1.0, ( 1.0 + uRockBreak.z * ( sn.x - 0.5 ) * 3.0 ) * ( 1.0 - uRockBreak.w * core ) * ( 0.74 + 0.4 * rkV1 ), rkInner );
+  // beds: layers of uneven thickness across the bedding axis, each its own tone, a ledge where two meet
+  float bq = rkNoiseD( vec3( dot( rkP, uRockAxis ) * uRockFreq.x * 0.55, 3.7, 9.1 ) + uRockSeed.yzx ).x * 9.0 + 0.6 * ( rkV1 - 0.5 );
+  float bt = fract( bq ), bw = max( 0.14, fwidth( bq ) * 1.5 );
+  float bed = rkHash( vec3( floor( bq ), 4.0, 9.0 ) );
+  float ledge = smoothstep( 1.0 - bw, 1.0, bt ) * ra;
+  rkG += uRockAxis * ( uRockBreak.z * ledge * 2.4 * ( bed - 0.3 ) );
+  diffuseColor.rgb *= mix( 1.0, ( 0.55 + 0.85 * bed ) * ( 1.0 + uRockBreak.z * ( sn.x - 0.5 ) ), min( 1.0, uRockBreak.z * 1.25 ) );
+  rkCav += uRockBreak.z * 0.5 * smoothstep( 1.0 - bw, 1.0, bt ) * ra;
+  // inclusions: the odd pale or dark grain set in the matrix
+  diffuseColor.rgb *= 1.0 + rkCellA * ( step( 0.86, rkCh.y ) * 0.45 - step( rkCh.y, 0.1 ) * 0.4 );
+  diffuseColor.rgb *= ( 1.0 - uRockBreak.w * rkDepth ) * ( 0.8 + 0.4 * rkV1 );
+  rkG *= 1.7;   // a fresh break is rougher than anything weathered
+  #ifdef ROCK_METAL
+  {
+    // iron: Widmanstätten pattern — three families of bright lamellae crossing at fixed angles in an etched matrix,
+    // dark troilite nodules between
+    float la = 1.0 - smoothstep( 0.15, 0.4, rkFw * 52.0 );
+    vec3 wp = rkP * 52.0 + uRockSeed;
+    float l1 = abs( fract( dot( wp, vec3( 0.82, 0.31, 0.48 ) ) + 0.7 * rkV1 ) - 0.5 );
+    float l2 = abs( fract( dot( wp, vec3( -0.36, 0.86, 0.36 ) ) * 0.83 + 0.7 * rkN2 ) - 0.5 );
+    float l3 = abs( fract( dot( wp, vec3( 0.3, -0.42, 0.86 ) ) * 1.21 + 0.5 * rkV1 ) - 0.5 );
+    float d1 = smoothstep( 0.4, 0.56, rkV1 ), d2 = smoothstep( 0.4, 0.56, rkN2 );
+    rkLam = max( max( smoothstep( 0.27, 0.36, l1 ) * d1, smoothstep( 0.3, 0.4, l2 ) * d2 ), smoothstep( 0.33, 0.42, l3 ) * ( 1.0 - d1 * d2 ) ) * la;
+    float nod = step( 0.9, rkCh.x ) * rkCellA;
+    diffuseColor.rgb = mix( diffuseColor.rgb * 0.8, vec3( 0.5, 0.52, 0.57 ) * ( 0.8 + 0.4 * rkN3 ), rkLam * 0.85 ) * ( 1.0 - 0.7 * nod );
+    rkLam *= 1.0 - nod;
+    rkG *= 1.0 - 0.6 * rkLam;
+  }
+  #endif
+  #ifdef ROCK_MAGMA
+    // basalt that was molten a moment ago: nearly black, the emissive term does the rest
+    diffuseColor.rgb *= 0.55 + 0.3 * ( 1.0 - rkDepth );
+  #endif
+  #ifdef ROCK_ORE
+    // clear ice inside (frost only ever formed on the skin): deep blue, glassy
+    diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.07, 0.2, 0.34 ) * ( 0.7 + 0.6 * rkN2 ), 0.75 * uRockFx.y );
+  #endif
 }
-#if ! defined( ROCK_SHATTER ) && ! defined( ROCK_DEBRIS )
+#ifndef ROCK_DEBRIS
+// battle damage of the skin; a rock that breaks takes it along (the fracture mesh reads it from its burst's column)
+vec4 rkScr[ 4 ];
+float rkDmgX = 0.0;
+#ifdef ROCK_SHATTER
+  if ( rkInner < 0.5 ) {
+    int sl = int( vRockSlot + 0.5 );
+    for ( int i = 0; i < 4; i ++ ) rkScr[ i ] = texelFetch( uRockBurst, ivec2( sl, i ), 0 );
+    rkDmgX = texelFetch( uRockBurst, ivec2( sl, 7 ), 0 ).w;
+  } else for ( int i = 0; i < 4; i ++ ) rkScr[ i ] = vec4( 0.0 );
+#else
+  for ( int i = 0; i < 4; i ++ ) rkScr[ i ] = uRockScar[ i ];
+  rkDmgX = uRockDmg.x;
+#endif
 for ( int i = 0; i < 4; i ++ ) {
   // impact scars: a fresh bowl with a raised, broken lip and a splash of pale ejecta
-  float sr = uRockScar[ i ].w;
+  float sr = rkScr[ i ].w;
   if ( sr > 0.0 ) {
     vec3 pn = normalize( rkP );
-    float ca = dot( pn, uRockScar[ i ].xyz );
+    float ca = dot( pn, rkScr[ i ].xyz );
     float t0 = acos( clamp( ca, -1.0, 1.0 ) ) / sr;
+    rkDmgM = max( rkDmgM, 1.0 - smoothstep( sr * 0.8, sr * ( 2.0 + 4.5 * rkDmgX ), t0 * sr ) );
     if ( t0 < 2.2 ) {
       float t = t0 * ( 1.0 + 0.34 * ( rkN2 - 0.5 ) + 0.3 * ( rkV1 - 0.5 ) );
-      vec3 away = normalize( pn * ca - uRockScar[ i ].xyz + 1e-5 );
+      vec3 away = normalize( pn * ca - rkScr[ i ].xyz + 1e-5 );
       float in1 = step( t, 1.0 );
       float bowl = 1.0 - smoothstep( 0.0, 1.0, t );
       float rq = ( t - 1.05 ) / 0.18;
       float rim = exp( - rq * rq );
       rkG += away * ( 0.44 * 6.0 * t * ( 1.0 - t ) * in1 - 0.08 * rim * 2.0 * rq / 0.18 );
       float fresh = 1.0 - smoothstep( 0.82, 1.08, t );
-      float ray = smoothstep( 0.55, 0.8, rkNoiseD( away * 5.0 + uRockScar[ i ].xyz * 9.0 ).x ) * ( 1.0 - smoothstep( 1.0, 2.1, t ) ) * step( 1.0, t );
+      float ray = smoothstep( 0.55, 0.8, rkNoiseD( away * 5.0 + rkScr[ i ].xyz * 9.0 ).x ) * ( 1.0 - smoothstep( 1.0, 2.1, t ) ) * step( 1.0, t );
       diffuseColor.rgb = mix( diffuseColor.rgb, uRockFresh * ( 0.7 + 0.5 * rkN3 ) * ( 1.0 - 0.6 * bowl * bowl ), fresh * 0.92 );
       diffuseColor.rgb = mix( diffuseColor.rgb, uRockFresh * 1.15, max( 0.7 * rim * ( 1.0 - fresh ), 0.6 * ray ) );
       rkCav += bowl * bowl * 0.7;
       rkScarHot = max( rkScarHot, sqrt( bowl ) * ( 0.5 + 0.5 * rkN2 ) );
     }
   }
+}
+if ( rkDmgM * rkDmgX > 0.0 ) {
+  // the crack network: fissures between the plates of a coarse Voronoi mosaic (the vertex shader shifts the same
+  // plates), spreading from the scars with every hit — wide open near them, ragged hairlines at the front
+  vec3 did, dg, dr1;
+  vec2 F = rkVoronoi( rkP * 4.2 + uRockSeed.yxz, did, dg, dr1 );
+  float e = F.y - F.x;
+  float open = smoothstep( 0.0, 0.4, rkDmgM * ( 0.6 + 0.9 * rkDmgX ) - 0.3 * rkN2 - 0.25 * rkHash( did + 2.3 ) );
+  float w = ( 0.008 + 0.03 * rkDmgX * open ) * ( 0.5 + rkV1 );
+  float ew = max( w, fwidth( e ) * 1.2 );
+  float crack = ( 1.0 - smoothstep( ew * 0.45, ew, e ) ) * open * min( 1.0, 1.5 * w / ew );
+  float bt = clamp( e / ( ew * 3.0 ), 0.0, 1.0 );
+  rkG += dg * ( 0.05 * open * 6.0 * bt * ( 1.0 - bt ) / ( ew * 3.0 ) );
+  diffuseColor.rgb = mix( diffuseColor.rgb, uRockFresh * ( 0.75 + 0.4 * rkN3 ), 0.35 * ( 1.0 - bt ) * ( 1.0 - bt ) * open * ( 1.0 - crack ) );
+  diffuseColor.rgb *= 1.0 - 0.97 * crack;
+  rkCav += crack;
+  rkDmgCrack = crack;
+  rkScarHot = max( rkScarHot, crack * ( 0.45 + 0.25 * rkN2 ) );
 }
 #endif
 {
@@ -1812,7 +1967,7 @@ for ( int i = 0; i < 4; i ++ ) {
   float prov = mix( 0.25, 1.0, min( vRock.z, 1.0 ) );
   float vn = rkNoiseD( rkP * 3.4 + uRockSeed + 20.0 ).x;
   float vein = ( 1.0 - smoothstep( 0.0, 0.045 + rkFw * 2.0, abs( vn - 0.5 ) ) ) * uRockFx.x * prov * ( 1.0 - gem );
-  float cc = step( 1.0 - ( 0.04 + 0.5 * vein ) * uRockFx.x, rkCh.y ) * rkCellA * ( 1.0 - gem );
+  float cc = step( 1.0 - ( 0.04 + 0.5 * vein ) * uRockFx.x - rkInner * ( 0.1 + 0.34 * rkDepth ) * ( 0.4 + 0.6 * uRockFx.x ), rkCh.y ) * rkCellA * ( 1.0 - gem );  // a geode: more of them inside
   if ( cc > 0.0 ) {
     vec3 best = vec3( 0.0 );
     float bd = -1e9;
@@ -1853,7 +2008,11 @@ for ( int i = 0; i < 4; i ++ ) {
 
 const GLSL_FRAG_ROUGH = /* glsl */ `
 roughnessFactor = clamp( roughnessFactor * ( 0.86 + 0.28 * rkN2 ) + 0.15 * clamp( rkCav, 0.0, 1.0 ), 0.06, 1.0 );
+#ifdef ROCK_METAL
+  roughnessFactor = mix( roughnessFactor, mix( 0.66, 0.36, rkLam ), rkInner );
+#endif
 #ifdef ROCK_ORE
+  roughnessFactor = mix( roughnessFactor, 0.3 + 0.25 * rkN2, rkInner * uRockFx.y * 0.85 );
   roughnessFactor = mix( roughnessFactor, 0.85, rkFrost );
   roughnessFactor = mix( roughnessFactor, 0.14, rkCryst * 0.9 );
 #endif
@@ -1886,7 +2045,7 @@ const GLSL_FRAG_NORMAL = /* glsl */ `
 const GLSL_FRAG_EMISSIVE = /* glsl */ `
 #ifdef ROCK_MAGMA
 {
-  float glow = smoothstep( 0.3, 0.85, vRock.z ) * ( 0.35 + 0.65 * vRock.z ) * ( 1.0 - vRock.w );
+  float glow = smoothstep( 0.3, 0.85, vRock.z ) * ( 0.35 + 0.65 * vRock.z ) * ( 1.0 - rkInner );
   float pulse = 0.76 + 0.24 * sin( uRockPulse + rkPlate * 6.2832 + uRockSeed.x );
   float slow = 0.6 + 0.4 * sin( uRockPulse * 0.5 + rkPlate * 17.0 );
   vec3 hot = mix( vec3( 2.0, 0.3, 0.025 ), vec3( 4.2, 1.8, 0.36 ), rkMagCore * rkMagCore );
@@ -1898,6 +2057,9 @@ const GLSL_FRAG_EMISSIVE = /* glsl */ `
   em = mix( em, vec3( 2.8, 0.7, 0.07 ) * ( 0.35 + 0.65 * rkN3 ) * pulse, rkScarHot * rkScarHot * ( 3.0 - 2.0 * rkScarHot ) );
   totalEmissiveRadiance += em * uRockMagma;
 }
+#else
+  // a hit lights the fissures it has just torn open, for a moment
+  totalEmissiveRadiance += vec3( 1.2, 0.62, 0.26 ) * ( rkDmgCrack * uRockDmg.y );
 #endif
 #ifdef ROCK_ORE
   totalEmissiveRadiance += uRockOre * ( rkGlow * 0.3 * uRockFx.w * uRockMat.w );
@@ -1913,8 +2075,11 @@ const GLSL_FRAG_EMISSIVE = /* glsl */ `
     float hv = 1.0 - smoothstep( 0.0, 0.07, abs( rkN2 - 0.5 ) + 0.5 * abs( rkV1 - 0.5 ) );
   #endif
   #ifdef ROCK_SHATTER
-    float hc = 1.0 - smoothstep( 0.1, 0.46, length( rkP ) );
-    float rh = max( vRockHeat, 0.0 ) * ( 0.025 + 1.7 * hv + 0.45 * hc * hc * hc * ( 0.5 + rkN3 ) );
+    // molten inside: the core glows; a crust has set at the skin and thickens as the piece cools, lava still in its joints
+    float hk = min( max( vRockHeat, 0.0 ) / 0.5, 1.0 );
+    float crust = 0.12 + 0.55 * ( 1.0 - hk );
+    float melt = smoothstep( crust, crust + 0.28, rkDepth + 0.3 * ( rkN2 - 0.5 ) + 0.16 * ( rkN3 - 0.5 ) );
+    float rh = max( vRockHeat, 0.0 ) * ( 0.02 + 1.1 * hv * ( 0.35 + 0.65 * smoothstep( 0.0, 0.25, rkDepth ) ) + 1.15 * melt * ( 0.5 + 0.7 * rkV1 ) );
   #else
     float rh = max( vRockHeat, 0.0 ) * ( 0.22 + 1.2 * hv + 0.5 * rkN3 );
   #endif
@@ -1957,7 +2122,7 @@ const GLSL_FRAG_LIGHTS = /* glsl */ `
   if ( rkCryst > 0.0 ) {
     vec3 hv = normalize( rkLv + rkVv );
     float gl = pow( saturate( dot( normal, hv ) ), 180.0 ) * 8.0 + pow( saturate( dot( normal, hv ) ), 24.0 ) * 0.12;
-    totalEmissiveRadiance += uRockSunCol * mix( vec3( 1.0 ), uRockOre, 0.5 ) * ( gl * rkCryst * uRockFx.w * uRockMat.w * sh );
+    totalEmissiveRadiance += uRockSunCol * mix( vec3( 1.0 ), uRockOre, 0.5 ) * ( gl * rkCryst * uRockFx.w * uRockMat.w * sh * ( 1.0 - 0.6 * rkInner ) );
   }
   #endif
 }
@@ -2014,9 +2179,18 @@ export class Rocks3D {
       uRockFill: { value: new THREE.Vector4(T.fillColor[0], T.fillColor[1], T.fillColor[2], T.fill) },
       uRockRim: { value: new THREE.Vector4(T.rimColor[0], T.rimColor[1], T.rimColor[2], T.rim) },
       uRockScar: { value: [new THREE.Vector4(0, 0, 0, 0), new THREE.Vector4(0, 0, 0, 0), new THREE.Vector4(0, 0, 0, 0), new THREE.Vector4(0, 0, 0, 0)] },
+      uRockDmg: { value: new THREE.Vector4(0, 0, 0, 0) },
+      uRockBurst: { value: null },
       uRockSun: { value: new THREE.Vector3(-0.38, 0.84, 0.46) },
       uRockSunCol: { value: new THREE.Vector3(0, 0, 0) },
     };
+    // per-burst fracture plan (planes, chunks, the rock's scars), a column per burst — written once, in shatter()
+    this._bt = new Float32Array(MAX_BURSTS * BT_ROWS * 4);
+    this._btTex = new THREE.DataTexture(this._bt, MAX_BURSTS, BT_ROWS, THREE.RGBAFormat, THREE.FloatType);
+    this._btTex.minFilter = this._btTex.magFilter = THREE.NearestFilter;
+    this._btTex.generateMipmaps = false; this._btTex.flipY = false;
+    this._btTex.needsUpdate = true;
+    this._u.uRockBurst.value = this._btTex;
     this._bright = T.brightness;
     this._materials = [];
     for (const vr of this._all) {
@@ -2035,6 +2209,9 @@ export class Rocks3D {
     this._tmp = [0, 0, 0];
     this._c3 = [0, 0, 0];
     this._o3 = [0, 0, 0];
+    this._pc = new Float32Array(4 * 4);  // scratch of _plan: chunk centroid sums + counts
+    this._pf = new Float32Array(4 * 4);  // … and each chunk's farthest cell
+    this._scarred = [];                  // scar materials in use (their hit flash decays in update())
     this._dustOpts = { color: this._c3, count: 8, speed: 110, life: 1000 };
     this._sparkOpts = { spread: 0.9, speed: 380, life: 420, color: undefined, light: false };
     this._smokeOpts = { vx: 0, vy: 10, vz: 0, dark: 0.35, life: 1100, alpha: 1, color: this._c3, drift: false };
@@ -2043,9 +2220,13 @@ export class Rocks3D {
 
     this._bursts = [];
     for (let i = 0; i < MAX_BURSTS; i++) {
-      this._bursts.push({ active: false, age: 0, life: 0, x: 0, y: 0, z: 0, vx: 0, vz: 0, D: 0, scale: 1, vr: null, volcanic: false,
+      this._bursts.push({ slot: i, active: false, age: 0, life: 0, x: 0, y: 0, z: 0, vx: 0, vz: 0, D: 0, scale: 1, vr: null, volcanic: false,
         qx: 0, qy: 0, qz: 0, qw: 1, ix: 0, iz: 0, hasImpact: false, intensity: 1, burst: false, sm: null, speed: 1, lifeS: 1,
-        heat0: 0, heatRate: 1, ox: 0, oy: 0, oz: 0, seed: 0, ev: [-1, -1], evT: [0, 0] });
+        heat0: 0, heatRate: 1, ox: 0, oy: 0, oz: 0, seed: 0, wx: 0, wy: 0, wz: 0,
+        dx: 1, dy: 0, dz: 0, hx: 0, hy: 0, hz: 0,           // shot direction and hit point, object space
+        pl: new Float32Array(8),                             // the two fracture planes (normal, offset)
+        ck: new Float32Array(4 * 8),                         // per chunk: pivot xyz, share of the rock, velocity xyz, (free)
+        evT: new Float32Array(MAX_EV), evK: new Int8Array(MAX_EV), evKind: new Int8Array(MAX_EV), evN: 0 });
     }
     this._shMeshes = [];
     this._live = [];       // rocks handed out by create() and not yet released (chip() finds the one that was hit)
@@ -2095,7 +2276,7 @@ export class Rocks3D {
         .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n' + GLSL_FRAG_EMISSIVE)
         .replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\n' + GLSL_FRAG_LIGHTS);
     };
-    mat.customProgramCacheKey = () => 'rocks3d-3';
+    mat.customProgramCacheKey = () => 'rocks3d-4';
     this._materials.push(mat);
     return mat;
   }
@@ -2249,19 +2430,19 @@ export class Rocks3D {
       geo.setAttribute('aRock', staticAttr(THREE, d.rock, 4, true, keep));
       geo.setAttribute('aCid', staticAttr(THREE, d.cid, 1, false, keep));
       geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 4);
-      const tex = new THREE.DataTexture(d.tex, d.cells, 4, THREE.RGBAFormat, THREE.FloatType);
+      const tex = new THREE.DataTexture(d.tex, d.cells, 2, THREE.RGBAFormat, THREE.FloatType);
       tex.minFilter = tex.magFilter = THREE.NearestFilter;
       tex.generateMipmaps = false; tex.flipY = false;
       tex.needsUpdate = true;
       const mat = this._material(vr, true, tex);
       mat.color.setScalar(this._bright);
       if (!vr.shMat) vr.shMat = mat;
-      vr.sh[lod] = { geo, mat, tex, mesh: null, burst: null, imp: null, n: 0, lod, clusters: d.clusters, maxChunk: d.maxCell, maxPiece: d.maxPiece, maxClus: d.maxClus,
+      vr.sh[lod] = { geo, mat, tex, mesh: null, burst: null, imp: null, slot: null, n: 0, lod, maxChunk: d.maxCell, maxPiece: d.maxPiece,
         cells: d.cells, tris: d.index.length / 3, verts: d.count, cellTex: d.tex };
       vr.data[lod] = null;
       vr.sh[lod].used = this._tick;
       if (lod === 3) this._trimFracture(vr);
-      this.buildLog.push({ name: vr.spec.name, kind: 'shatter', lod, ms: j.ms + (nowMs() - tg), tris: d.index.length / 3, verts: d.count, cells: d.cells, maxChunk: d.maxCell, maxPiece: d.maxPiece, maxClus: d.maxClus });
+      this.buildLog.push({ name: vr.spec.name, kind: 'shatter', lod, ms: j.ms + (nowMs() - tg), tris: d.index.length / 3, verts: d.count, cells: d.cells, maxChunk: d.maxCell, maxPiece: d.maxPiece });
     }
     this.buildMs += nowMs() - tg;
     return true;
@@ -2396,7 +2577,8 @@ export class Rocks3D {
       }
     }
     const mesh = new this.THREE.Mesh(vr.geo[lod], vr.mat);
-    mesh.userData.rock = { variant: variantIndex | 0, volcanic: !!volcanic, lod, wantLod: want, name: vr.spec.name, released: false, vr, scar: null, scars: 0 };
+    mesh.userData.rock = { variant: variantIndex | 0, volcanic: !!volcanic, lod, wantLod: want, name: vr.spec.name, released: false, vr, scar: null, scars: 0, damage: 0,
+      pq: [0, 0, 0, 1], pqOk: false, w: [0, 0, 0] };   // last pose and the angular velocity measured from it (rad / ms)
     this._live.push(mesh);
     if (lod !== want) this._pending.push({ mesh, vr, lod: want });
     // have its fracture mesh ready by the time it dies
@@ -2413,6 +2595,9 @@ export class Rocks3D {
       if (info.scar) { // hand the scarred material back to its variant's pool
         const sv = info.scar.u.uRockScar.value;
         for (let i = 0; i < 4; i++) sv[i].set(0, 0, 0, 0);
+        info.scar.u.uRockDmg.value.set(0, 0, 0, 0);
+        const si = this._scarred.indexOf(info.scar);
+        if (si >= 0) { this._scarred[si] = this._scarred[this._scarred.length - 1]; this._scarred.pop(); }
         info.scar.used = false; info.scar = null;
         obj.material = info.vr.mat;
       }
@@ -2507,8 +2692,11 @@ export class Rocks3D {
       sh.burst = new THREE.InstancedBufferAttribute(new Float32Array(MAX_BURSTS * 4), 4);
       sh.imp = new THREE.InstancedBufferAttribute(new Float32Array(MAX_BURSTS * 4), 4);
       sh.burst.setUsage(THREE.DynamicDrawUsage); sh.imp.setUsage(THREE.DynamicDrawUsage);
+      sh.slot = new THREE.InstancedBufferAttribute(new Float32Array(MAX_BURSTS), 1);
+      sh.slot.setUsage(THREE.DynamicDrawUsage);
       sh.geo.setAttribute('aBurst', sh.burst);
       sh.geo.setAttribute('aImp', sh.imp);
+      sh.geo.setAttribute('aSlot', sh.slot);
       const mesh = new THREE.InstancedMesh(sh.geo, sh.mat, MAX_BURSTS);
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       mesh.frustumCulled = false;
@@ -2522,14 +2710,118 @@ export class Rocks3D {
     return sh;
   }
 
-  // object-space offset of a cluster centre at burst age t (seconds) — mirrors GLSL_VERT_NORMAL
-  _clusterOffset(K, t, speed, ix, iy, iz, out) {
-    const open = sstep(0, 0.075, t), tm = Math.max(0, t - 0.045), g = (1 - Math.exp(-2.1 * tm)) / 2.1;
-    const c1 = K.w, c2 = (c1 * 7.31) % 1;
-    const l = Math.hypot(K.x, K.y, K.z), il = 1 / Math.max(l, 1e-4), ck = clamp(l / 0.3, 0.3, 1);
-    const v = speed * (0.45 + 0.9 * c1) * ck, im = (0.4 + 0.8 * c2) * g, a = v * g, d = 1 + 0.075 * open;
-    out[0] = K.x * d + K.x * il * a + ix * im; out[1] = K.y * d + K.y * il * a + iy * im; out[2] = K.z * d + K.z * il * a + iz * im;
+  // object-space position of a chunk's pivot at burst age t (seconds) — mirrors GLSL_VERT_NORMAL
+  _chunkPos(B, k, t, out) {
+    const c = B.ck, o = k * 8, d = 1 + 0.07 * sstep(0, 0.07, t), g = (1 - Math.exp(-0.9 * Math.max(0, t - 0.03))) / 0.9;
+    out[0] = c[o] * d + c[o + 4] * g; out[1] = c[o + 1] * d + c[o + 5] * g; out[2] = c[o + 2] * d + c[o + 6] * g;
     return out;
+  }
+
+  // a point (or, with s = 1 and no offset, a direction) of the burst's own frame → world
+  _local(B, lx, ly, lz, s, out) {
+    const qx = B.qx, qy = B.qy, qz = B.qz, qw = B.qw;
+    lx *= s; ly *= s; lz *= s;
+    const tx = 2 * (qy * lz - qz * ly), ty = 2 * (qz * lx - qx * lz), tz = 2 * (qx * ly - qy * lx);
+    out[0] = lx + qw * tx + (qy * tz - qz * ty); out[1] = ly + qw * ty + (qz * tx - qx * tz); out[2] = lz + qw * tz + (qx * ty - qy * tx);
+    return out;
+  }
+
+  _bput(col, row, x, y, z, w) {
+    const o = (row * MAX_BURSTS + col) * 4, bt = this._bt;
+    bt[o] = x; bt[o + 1] = y; bt[o + 2] = z; bt[o + 3] = w;
+  }
+
+  // The fracture plan of one break, written into the burst's column of uRockBurst (the vertex shader does the rest):
+  // two planes through the point of impact — one along the shot, one oblique across it — cut the rock into up to four
+  // chunks; a chunk too small to count is rubble (it crumbles at once), the largest snap in two again a moment later.
+  _plan(B, sm, info) {
+    const rnd = this.random, col = B.slot, tmp = this._tmp, t2 = this._o3, pc = this._pc, pf = this._pf;
+    const N = sm.cells, ct = sm.cellTex, dx = B.dx, dy = B.dy, dz = B.dz;
+    // the rock's battle damage goes with it
+    const sv = info && info.scar ? info.scar.u.uRockScar.value : null;
+    for (let i = 0; i < 4; i++) { if (sv) this._bput(col, i, sv[i].x, sv[i].y, sv[i].z, sv[i].w); else this._bput(col, i, 0, 0, 0, 0); }
+    this._bput(col, 7, dx, dy, dz, sv ? info.damage : 0);
+    // extent along the shot → the hit point on the near face (a break without a shot starts at the heart)
+    let far = 0, far2 = 0, live = 0;
+    for (let c = 0; c < N; c++) {
+      if (ct[c * 4] > 8) continue;
+      live++;
+      const sd = ct[c * 4] * dx + ct[c * 4 + 1] * dy + ct[c * 4 + 2] * dz;
+      if (-sd > far) far = -sd;
+      if (sd > far2) far2 = sd;
+    }
+    const hd = B.hasImpact ? far + 0.04 : 0;
+    const hx = B.hx = -dx * hd, hy = B.hy = -dy * hd, hz = B.hz = -dz * hd;
+    this._bput(col, 6, hx, hy, hz, (B.hasImpact ? 0.2 + 0.08 * rnd() : 0.14) * Math.sqrt(clamp(B.intensity, 0.4, 1.6)));
+    // plane 1 holds the line of the shot (any roll about it)
+    perp(dx, dy, dz, tmp);
+    const ux = tmp[0], uy = tmp[1], uz = tmp[2], wx = dy * uz - dz * uy, wy = dz * ux - dx * uz, wz = dx * uy - dy * ux;
+    const a = rnd() * Math.PI, ca = Math.cos(a), sa = Math.sin(a);
+    const n1x = ux * ca + wx * sa, n1y = uy * ca + wy * sa, n1z = uz * ca + wz * sa;
+    const d1 = hx * n1x + hy * n1y + hz * n1z + (rnd() - 0.5) * 0.08;
+    // plane 2: oblique, somewhere between "across the shot" (it knocks the far side off) and "along it" (four wedges)
+    const mx = n1y * dz - n1z * dy, my = n1z * dx - n1x * dz, mz = n1x * dy - n1y * dx;
+    const th = 0.35 + rnd() * 1.2, ct2 = Math.cos(th), st2 = Math.sin(th) * (rnd() < 0.5 ? -1 : 1);
+    const n2x = dx * ct2 + mx * st2, n2y = dy * ct2 + my * st2, n2z = dz * ct2 + mz * st2;
+    const along = B.hasImpact ? -far + (far + far2) * (0.36 + 0.3 * rnd()) : (rnd() - 0.5) * 0.12;
+    const d2 = along * (dx * n2x + dy * n2y + dz * n2z);
+    this._bput(col, 4, n1x, n1y, n1z, d1);
+    this._bput(col, 5, n2x, n2y, n2z, d2);
+    const pl = B.pl;
+    pl[0] = n1x; pl[1] = n1y; pl[2] = n1z; pl[3] = d1; pl[4] = n2x; pl[5] = n2y; pl[6] = n2z; pl[7] = d2;
+    // chunks: centroid and share of the rock, then the cell farthest from the centroid (the chunk snaps across that axis)
+    pc.fill(0); pf.fill(0);
+    for (let c = 0; c < N; c++) {
+      const x = ct[c * 4], y = ct[c * 4 + 1], z = ct[c * 4 + 2];
+      if (x > 8) continue;
+      const k = ((x * n1x + y * n1y + z * n1z - d1 > 0 ? 1 : 0) + (x * n2x + y * n2y + z * n2z - d2 > 0 ? 2 : 0)) * 4;
+      pc[k] += x; pc[k + 1] += y; pc[k + 2] += z; pc[k + 3]++;
+    }
+    let big1 = -1, big2 = -1;
+    for (let k = 0; k < 4; k++) {
+      const n = pc[k * 4 + 3];
+      if (n > 0) { pc[k * 4] /= n; pc[k * 4 + 1] /= n; pc[k * 4 + 2] /= n; }
+      if (big1 < 0 || n > pc[big1 * 4 + 3]) { big2 = big1; big1 = k; } else if (big2 < 0 || n > pc[big2 * 4 + 3]) big2 = k;
+    }
+    for (let c = 0; c < N; c++) {
+      const x = ct[c * 4], y = ct[c * 4 + 1], z = ct[c * 4 + 2];
+      if (x > 8) continue;
+      const k = ((x * n1x + y * n1y + z * n1z - d1 > 0 ? 1 : 0) + (x * n2x + y * n2y + z * n2z - d2 > 0 ? 2 : 0)) * 4;
+      const dd = (x - pc[k]) ** 2 + (y - pc[k + 1]) ** 2 + (z - pc[k + 2]) ** 2;
+      if (dd >= pf[k + 3]) { pf[k] = x - pc[k]; pf[k + 1] = y - pc[k + 1]; pf[k + 2] = z - pc[k + 2]; pf[k + 3] = dd; }
+    }
+    const ox = hx + dx * 0.14, oy = hy + dy * 0.14, oz = hz + dz * 0.14, push = B.hasImpact ? 0.45 : 0;
+    const ck = B.ck, lifeS = B.lifeS;
+    B.evN = 0;
+    for (let k = 0; k < 4; k++) {
+      const o = k * 4, row = 8 + k * 5, n = pc[o + 3], frac = n / Math.max(1, live), big = frac >= 0.08;
+      const px = pc[o], py = pc[o + 1], pz = pc[o + 2];
+      // away from where the blow landed, carried along by it; the bigger the slower
+      let vx = px - ox, vy = py - oy, vz = pz - oz;
+      const vl = Math.hypot(vx, vy, vz) || 1;
+      const sp = B.speed * (big ? 0.26 + 0.34 * (1 - frac) : 0.55) * (0.8 + 0.4 * rnd());
+      vx = (vx / vl + dx * push) * sp; vy = (vy / vl + dy * push) * sp; vz = (vz / vl + dz * push) * sp;
+      const spin = (rnd() < 0.5 ? -1 : 1) * (0.7 + 1.8 * rnd()) * (1.15 - frac);
+      randUnit(rnd, t2);
+      let split = 99;
+      if (big && frac > 0.2 && (k === big1 || (k === big2 && rnd() < 0.7))) split = 0.3 + 0.22 * rnd();
+      const e0 = big ? (split < 50 ? split + 0.2 : 0.45) + 0.2 * rnd() : 0.05;
+      const span = big ? Math.max(0.25, lifeS - 0.55 - e0) : 0.2;
+      const fl = Math.sqrt(pf[o + 3]) || 1;
+      this._bput(col, row, px, py, pz, split);
+      this._bput(col, row + 1, vx, vy, vz, spin);
+      this._bput(col, row + 2, t2[0], t2[1], t2[2], e0);
+      this._bput(col, row + 3, pf[o] / fl, pf[o + 1] / fl, pf[o + 2] / fl, span);
+      this._bput(col, row + 4, B.speed * (0.045 + 0.05 * rnd()), 0.4 + 0.9 * rnd(), big ? 0.6 : 0.8, big ? 0.6 : 0.9);
+      const q = k * 8;
+      ck[q] = px; ck[q + 1] = py; ck[q + 2] = pz; ck[q + 3] = frac; ck[q + 4] = vx; ck[q + 5] = vy; ck[q + 6] = vz; ck[q + 7] = split;
+      if (!big || B.evN > MAX_EV - 3) continue;
+      // a puff where it snaps, and as it crumbles
+      if (split < 50) { B.evT[B.evN] = split * 1000; B.evK[B.evN] = k; B.evKind[B.evN++] = 1; }
+      B.evT[B.evN] = (e0 + span * 0.3) * 1000; B.evK[B.evN] = k; B.evKind[B.evN++] = 2;
+      B.evT[B.evN] = (e0 + span * 0.75) * 1000; B.evK[B.evN] = k; B.evKind[B.evN++] = 2;
+    }
+    this._btTex.needsUpdate = true;
   }
 
   /**
@@ -2537,7 +2829,10 @@ export class Rocks3D {
    * { x, y, z, size, variant, volcanic, quaternion, vx, vz, byImpact: {dirX, dirZ} | null }
    * vx/vz: the rock's velocity in units per ms. byImpact.dir = travel direction of whatever hit it.
    * Optional: intensity (default 1) scales fragment count and speed; scale = the scale the rock mesh
-   * was drawn at (default size * tune.meshScale).
+   * was drawn at; object = the mesh from create() (else it is recognised by `quaternion` being that mesh's own
+   * quaternion object) — the break then starts from exactly what was on screen: its scale, level of detail,
+   * scars and cracks, and it keeps the rock's spin; spin = { x, y, z } angular velocity in rad / ms (world),
+   * overrides the measured one.
    */
   shatter(o) {
     if (this._disposed) return;
@@ -2545,6 +2840,11 @@ export class Rocks3D {
     const D = o.size || 60, x = o.x || 0, y = o.y || 0, z = o.z || 0;
     const volcanic = !!o.volcanic;
     const vr = this._variant(o.variant || 0, volcanic);
+    const q = o.quaternion;
+    let mesh = o.object || null;
+    if (!mesh && q) { const L = this._live; for (let i = 0; i < L.length; i++) if (L[i].quaternion === q) { mesh = L[i]; break; } }
+    let info = mesh && mesh.userData ? mesh.userData.rock : null;
+    if (info && (info.released || info.vr !== vr)) info = null;
 
     // a free burst record (or the oldest)
     let B = null, oldest = -1;
@@ -2556,10 +2856,11 @@ export class Rocks3D {
     if (B.active && !B.burst) this._burst(B);
     B.active = true; B.age = 0; B.burst = false;
     B.x = x; B.y = y; B.z = z; B.vx = o.vx || 0; B.vz = o.vz || 0;
-    B.D = D; B.scale = o.scale || D * T.meshScale; B.vr = vr; B.volcanic = volcanic;
+    B.D = D; B.scale = o.scale || (info ? mesh.scale.x : D * T.meshScale); B.vr = vr; B.volcanic = volcanic;
     B.intensity = o.intensity == null ? 1 : o.intensity;
-    const q = o.quaternion;
     B.qx = q ? q.x : 0; B.qy = q ? q.y : 0; B.qz = q ? q.z : 0; B.qw = q ? q.w : 1;
+    const sp = o.spin || null;
+    B.wx = sp ? sp.x || 0 : info ? info.w[0] : 0; B.wy = sp ? sp.y || 0 : info ? info.w[1] : 0; B.wz = sp ? sp.z || 0 : info ? info.w[2] : 0;
     B.ix = 0; B.iz = 0; B.hasImpact = false;
     if (o.byImpact) {
       const l = Math.hypot(o.byImpact.dirX || 0, o.byImpact.dirZ || 0);
@@ -2567,122 +2868,128 @@ export class Rocks3D {
     }
     const U = (0.14 + 0.0014 * D) * T.speed * (0.75 + 0.25 * B.intensity); // world units per ms
     B.speed = (U * 1000) / B.scale * 1.15;                                 // rock diameters per second
-    B.lifeS = clamp(0.9 + 0.003 * D, 0.95, 1.4) * T.life;
+    B.lifeS = clamp(1.7 + 0.003 * D, 1.8, 2.2) * T.life;
     B.life = B.lifeS * 1000;
     // several volcanic rocks going off together share one budget of light (this._volLoad counts the recent ones)
     B.heat0 = volcanic ? 0.62 * (0.55 + 0.45 / (1 + 0.6 * this._volLoad)) : -T.impactHeat * (B.hasImpact ? 1 : 0.6); // negative = dusty flash, not magma
-    B.heatRate = volcanic ? 2.4 : 30;
+    B.heatRate = volcanic ? 1.7 : 30;
     B.seed = rnd() * 50;
-    // impact push in the rock's own frame (inverse rotation of the world direction)
+    // the shot in the rock's own frame (inverse rotation of the world direction); without one, any direction
     {
-      const p = (U * 1000) / B.scale * 0.55;
-      const vx = B.ix * p, vz = B.iz * p, qx = -B.qx, qy = -B.qy, qz = -B.qz, qw = B.qw;
-      const tx = 2 * (qy * vz), ty = 2 * (qz * vx - qx * vz), tz = 2 * (-qy * vx);
-      B.ox = vx + qw * tx + (qy * tz - qz * ty); B.oy = qw * ty + (qz * tx - qx * tz); B.oz = vz + qw * tz + (qx * ty - qy * tx);
+      const tmp = this._tmp;
+      if (B.hasImpact) { tmp[0] = B.ix; tmp[1] = 0; tmp[2] = B.iz; } else randUnit(rnd, tmp);
+      const vx = tmp[0], vy = tmp[1], vz = tmp[2], qx = -B.qx, qy = -B.qy, qz = -B.qz, qw = B.qw;
+      const tx = 2 * (qy * vz - qz * vy), ty = 2 * (qz * vx - qx * vz), tz = 2 * (qx * vy - qy * vx);
+      B.dx = vx + qw * tx + (qy * tz - qz * ty); B.dy = vy + qw * ty + (qz * tx - qx * tz); B.dz = vz + qw * tz + (qx * ty - qy * tx);
+      const p = B.hasImpact ? (U * 1000) / B.scale * 0.55 : 0;
+      B.ox = B.dx * p; B.oy = B.dy * p; B.oz = B.dz * p;
     }
-    // fracture mesh: the high one if built, else the low one (built on the spot if need be — a few ms)
-    // fracture mesh: the one cut from the LOD the rock was drawn with; if that is not built yet, the best
-    // coarser one that is (the coarsest is built on the spot if need be — a few ms)
+    // fracture mesh: the one cut from the LOD the rock was drawn with (so nothing moves on the first frame); if that
+    // is not built yet, the best coarser one that is (the coarsest is built on the spot if need be — a few ms)
     B.sm = null;
-    for (let l = this._lodFor(D); l >= 0 && !B.sm; l--) B.sm = this._shatterMesh(vr, l, false);
+    for (let l = info ? info.lod : this._lodFor(D); l >= 0 && !B.sm; l--) B.sm = this._shatterMesh(vr, l, false);
     if (!B.sm) B.sm = this._shatterMesh(vr, 0, true);
-    if (B.sm) B.sm.used = this._tick;
-    B.ev[0] = B.ev[1] = -1;
-    if (B.sm) {
-      // the clusters that split late get a puff of grit when they do
-      let e = 0;
-      const cl = B.sm.clusters;
-      for (let k = 0; k < cl.length && e < 2; k++) {
-        if (!cl[k].late) continue;
-        const c1 = cl[k].w, c2 = (c1 * 7.31) % 1, c3 = (c1 * 13.77) % 1;
-        B.ev[e] = k; B.evT[e] = (0.05 + 0.045 * c2 + 0.025 + 0.03 * c3) * 1000; e++;
-      }
-    } else this._burst(B);
+    B.evN = 0;
+    if (B.sm) { B.sm.used = this._tick; this._plan(B, B.sm, info); } else this._burst(B);
 
-    // the crack beat: sparks and a spit of grit at the struck face, a first breath of dust
+    // the crack beat: sparks and a spit of grit at the struck face, and the cloud the pieces will come out of
     const R = B.scale * 0.5, tmp = this._tmp;
+    const hp = this._local(B, B.hx, B.hy, B.hz, B.scale, this._o3), hx = x + hp[0], hy = y + hp[1], hz = z + hp[2];
     if (B.hasImpact) {
-      const hx = x - B.ix * R * 0.8, hz = z - B.iz * R * 0.8;
       const n = clamp(Math.round(4 + D * 0.05), 5, 12);
       for (let i = 0; i < n; i++) {
         randUnit(rnd, tmp);
         let dx = -B.ix * 1.2 + tmp[0], dy = tmp[1] * 1.1, dz = -B.iz * 1.2 + tmp[2];
         const dl = Math.hypot(dx, dy, dz) || 1, v = U * (0.7 + rnd() * 1.6);
-        this._fragment(GRIT_POOLS[i & 1], vr, volcanic, hx, y, hz, tmp[0] * R * 0.15, tmp[1] * R * 0.15, tmp[2] * R * 0.15,
-          (dx / dl) * v + B.vx, (dy / dl) * v, (dz / dl) * v + B.vz, 1.5 + rnd() * 1.6 + D * 0.006, 500 + rnd() * 500, volcanic ? 0.8 : 0.5, false);
+        this._fragment(GRIT_POOLS[i & 1], vr, volcanic, hx, hy, hz, tmp[0] * R * 0.15, tmp[1] * R * 0.15, tmp[2] * R * 0.15,
+          (dx / dl) * v + B.vx, (dy / dl) * v, (dz / dl) * v + B.vz, 1.5 + rnd() * 1.6 + D * 0.006, 500 + rnd() * 500, volcanic ? 0.8 : 0.2, false);
       }
-      if (fx && fx.sparks) fx.sparks(hx, y, hz, Math.round(8 + D * 0.12), -B.ix, -B.iz, this._sparkOpts);
+      if (fx && fx.sparks) fx.sparks(hx, hy, hz, Math.round(8 + D * 0.12), -B.ix, -B.iz, this._sparkOpts);
     }
-    if (fx && fx.dust) {
-      const c = this._c3, dc = vr.dustColor, d = this._dustOpts;
+    if (fx) {
+      const c = this._c3, dc = vr.dustColor;
       c[0] = dc[0]; c[1] = dc[1]; c[2] = dc[2];
-      d.count = clamp(Math.round(3 + D * 0.03), 3, 8); d.speed = 60; d.life = 700;
-      fx.dust(x, y, z, B.scale * 0.8, d);
+      if (fx.dust) {
+        const d = this._dustOpts;
+        d.count = clamp(Math.round(5 + D * 0.05), 5, 12); d.speed = 45 + D * 0.2; d.life = 800 + D * 2;
+        fx.dust(x, y, z, B.scale * 0.85, d);
+        d.count = 3; d.speed = 70; d.life = 600;
+        fx.dust(hx, hy, hz, B.scale * 0.45, d);
+      }
+      if (fx.smokePuff && D >= 40) {
+        const s = this._smokeOpts;
+        s.vx = B.vx * 1000 + B.ix * 25; s.vy = 6; s.vz = B.vz * 1000 + B.iz * 25; s.dark = 0.35; s.life = 900 + D * 2; s.alpha = volcanic ? 0.5 : 0.7;
+        fx.smokePuff(x, y, z, B.scale * 1.15, s);
+      }
     }
   }
 
-  // the burst proper: pooled chunks, shards and grit + dust / smoke / fire
+  // the burst proper: pooled shards and grit thrown out of the crushed zone and the opening cracks + dust / fire
   _burst(B) {
     B.burst = true;
-    const rnd = this.random, T = this.tune, fx = this.fx, tmp = this._tmp;
+    const rnd = this.random, T = this.tune, fx = this.fx, tmp = this._tmp, t2 = this._o3;
     const D = B.D, x = B.x, y = B.y, z = B.z, vr = B.vr, volcanic = B.volcanic, intensity = B.intensity;
-    const ix = B.ix, iz = B.iz, hasImpact = B.hasImpact, pvx = B.vx, pvz = B.vz;
-    const qx = B.qx, qy = B.qy, qz = B.qz, qw = B.qw;
+    const hasImpact = B.hasImpact, pvx = B.vx, pvz = B.vz, pl = B.pl;
     const ax = vr.spec.axes, axm = Math.max(ax[0], ax[1], ax[2]);
-    const extra = (fx ? 1 : 1.3) * (B.sm ? 1 : 1.5) * intensity;
-    const nMid = clamp(Math.round((2 + D * 0.05) * extra), 3, 16);
-    const nShard = clamp(Math.round((12 + D * 0.2) * extra), 12, 64);
-    const nGrit = clamp(Math.round((20 + D * 0.38) * extra), 22, 120);
-    const total = nMid + nShard + nGrit;
+    const extra = (fx ? 1 : 1.3) * (B.sm ? 1 : 2) * intensity;
+    const nMid = clamp(Math.round((1 + D * 0.02) * extra), 1, 8);
+    const nShard = clamp(Math.round((10 + D * 0.17) * extra), 10, 56);
+    const nGrit = clamp(Math.round((22 + D * 0.4) * extra), 24, 120);
+    const nSlow = clamp(Math.round((6 + D * 0.06) * extra), 6, 24);
+    const total = nMid + nShard + nGrit + nSlow;
     const U = (0.14 + 0.0014 * D) * T.speed * (0.75 + 0.25 * intensity); // units per ms
-    const heatChance = volcanic ? 0.65 : hasImpact ? 0.28 : 0.1;
-    const body = B.scale / axm;
+    const heatChance = volcanic ? 0.65 : hasImpact ? 0.14 : 0.05;
+    const dx = B.dx, dy = B.dy, dz = B.dz, hx = B.hx, hy = B.hy, hz = B.hz, sc = B.scale;
     let trails = 0;
 
     for (let i = 0; i < total; i++) {
       let size, speed, life, pool, trail = false;
       if (i < nMid) {
-        size = D * (0.07 + rnd() * (T.maxFragFrac - 0.07) * rnd());
-        speed = 0.55 + rnd() * 0.75; life = 850 + rnd() * 500;
+        size = D * (0.06 + rnd() * (T.maxFragFrac - 0.08) * rnd());
+        speed = 0.35 + rnd() * 0.5; life = 1000 + rnd() * 600;
         pool = CHUNK_POOLS[(rnd() * 2) | 0];
-        if (fx && trails < 3 && D >= 50 && rnd() < 0.6) { trail = true; trails++; }
+        if (fx && trails < 2 && D >= 50 && rnd() < 0.6) { trail = true; trails++; }
       } else if (i < nMid + nShard) {
-        size = Math.max(2.3, D * (0.022 + rnd() * 0.045));
-        speed = 0.8 + rnd() * 1.3; life = 700 + rnd() * 650;
+        size = Math.max(2.3, D * (0.02 + rnd() * 0.042));
+        speed = 0.7 + rnd() * 1.2; life = 750 + rnd() * 700;
         pool = SHARD_POOLS[(rnd() * 2) | 0];
-      } else {
+      } else if (i < nMid + nShard + nGrit) {
         size = 1.3 + rnd() * 1.7 + D * 0.007;
-        speed = 0.45 + rnd() * 2.1; life = 900 + rnd() * 1100;
+        speed = 0.8 + rnd() * 2.3; life = 800 + rnd() * 900;
         pool = GRIT_POOLS[(rnd() * 2) | 0];
+      } else {
+        // lingering: slow crumbs that hang about where the rock was and dwindle
+        size = 1.6 + rnd() * 2.2 + D * 0.012;
+        speed = 0.08 + rnd() * 0.3; life = 1700 + rnd() * 1300;
+        pool = rnd() < 0.35 ? SHARD_POOLS[(rnd() * 2) | 0] : GRIT_POOLS[(rnd() * 2) | 0];
       }
 
-      // start somewhere inside the parent's (oriented, stretched) body
+      // where it leaves the rock (its own frame, mesh units): the crushed zone at the hit, or somewhere along a crack
       randUnit(rnd, tmp);
-      const rr = Math.cbrt(rnd()) * 0.46 * body;
-      const lx = tmp[0] * rr * ax[0], ly = tmp[1] * rr * ax[1], lz = tmp[2] * rr * ax[2];
-      const tx = 2 * (qy * lz - qz * ly), ty = 2 * (qz * lx - qx * lz), tz = 2 * (qx * ly - qy * lx);
-      const ox = lx + qw * tx + (qy * tz - qz * ty);
-      const oy = ly + qw * ty + (qz * tx - qx * tz);
-      const oz = lz + qw * tz + (qx * ty - qy * tx);
-
-      // fly radially outward in 3D, with a random component so the burst is not a perfect shell
-      const ol = Math.sqrt(ox * ox + oy * oy + oz * oz) || 1;
-      randUnit(rnd, tmp);
-      const dx = ox / ol + tmp[0] * 0.55, dy = oy / ol + tmp[1] * 0.55, dz = oz / ol + tmp[2] * 0.55;
-      const dl = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
-      const v = U * speed;
-      let vx = (dx / dl) * v, vy = (dy / dl) * v, vz = (dz / dl) * v;
-      if (hasImpact) {
-        if (i >= nMid && rnd() < 0.2) {
-          // back-spray: a few bits spit back toward the shooter
-          const b = U * (0.7 + rnd() * 0.9);
-          vx -= ix * b; vz -= iz * b;
-        } else {
-          const b = U * (0.3 + rnd() * 0.55);
-          vx += ix * b; vz += iz * b;
+      let lx, ly, lz, ux, uy, uz;
+      if (B.sm && rnd() < (hasImpact ? 0.45 : 0.25) && i >= nMid) {
+        const r = 0.17 * Math.cbrt(rnd()), back = hasImpact ? 0.3 + rnd() * 1.1 : 0;
+        lx = hx + tmp[0] * r; ly = hy + tmp[1] * r; lz = hz + tmp[2] * r;
+        ux = tmp[0] - dx * back; uy = tmp[1] - dy * back; uz = tmp[2] - dz * back;
+      } else {
+        const rr = Math.cbrt(rnd()) * 0.46 / axm;
+        lx = tmp[0] * rr * ax[0]; ly = tmp[1] * rr * ax[1]; lz = tmp[2] * rr * ax[2];
+        let nx = 0, ny = 0, nz = 0;
+        if (B.sm) {
+          const po = rnd() < 0.5 ? 0 : 4, s = lx * pl[po] + ly * pl[po + 1] + lz * pl[po + 2] - pl[po + 3], side = (rnd() - 0.5) * 1.2;
+          nx = pl[po] * side; ny = pl[po + 1] * side; nz = pl[po + 2] * side;
+          lx -= pl[po] * s; ly -= pl[po + 1] * s; lz -= pl[po + 2] * s;
         }
+        const ox = lx - hx * 0.6, oy = ly - hy * 0.6, oz = lz - hz * 0.6, ol = Math.hypot(ox, oy, oz) || 1;
+        randUnit(rnd, tmp);
+        const fwd = hasImpact ? 0.25 + rnd() * 0.5 : 0;
+        ux = ox / ol + nx + tmp[0] * 0.5 + dx * fwd; uy = oy / ol + ny + tmp[1] * 0.5 + dy * fwd; uz = oz / ol + nz + tmp[2] * 0.5 + dz * fwd;
       }
-      this._fragment(pool, vr, volcanic, x, y, z, ox, oy, oz, vx + pvx, vy, vz + pvz, size, life, heatChance, trail);
+      const ul = Math.hypot(ux, uy, uz) || 1, v = U * speed / ul;
+      this._local(B, lx, ly, lz, sc, tmp);
+      this._local(B, ux, uy, uz, 1, t2);
+      // only molten rock glows in the lump; a dry rock gives off the odd friction-hot crumb
+      this._fragment(pool, vr, volcanic, x, y, z, tmp[0], tmp[1], tmp[2], t2[0] * v + pvx, t2[1] * v, t2[2] * v + pvz, size, life, volcanic || i >= nMid + nShard ? heatChance : 0, trail);
     }
 
     if (fx) {
@@ -2742,12 +3049,14 @@ export class Rocks3D {
       for (let i = 0; i < pool.length; i++) if (!pool[i].used) { S = pool[i]; break; }
       if (!S) {
         if (pool.length >= 12) return;
-        const THREE = this.THREE, u = { uRockScar: { value: [new THREE.Vector4(0, 0, 0, 0), new THREE.Vector4(0, 0, 0, 0), new THREE.Vector4(0, 0, 0, 0), new THREE.Vector4(0, 0, 0, 0)] } };
+        const THREE = this.THREE, u = { uRockScar: { value: [new THREE.Vector4(0, 0, 0, 0), new THREE.Vector4(0, 0, 0, 0), new THREE.Vector4(0, 0, 0, 0), new THREE.Vector4(0, 0, 0, 0)] }, uRockDmg: { value: new THREE.Vector4(0, 0, 0, 0) } };
         const mat = this._material(vr, false, null, u);
         mat.color.setScalar(this._bright);
         pool.push(S = { mat, u, used: false });
       }
       S.used = true; info.scar = S; info.scars = 0;
+      S.u.uRockDmg.value.set(0, 0, 0, 0);
+      this._scarred.push(S);
       mesh.material = S.mat;
     }
     // into the rock's own frame
@@ -2771,7 +3080,8 @@ export class Rocks3D {
    * the projectile (chips spray back out of the surface, i.e. mostly along −dir).
    * Optional: variant (for the palette), vx/vz (rock velocity, units per ms), count.
    * The rock that was hit keeps a scar (a fresh dent with a broken lip): it is found from the hit point, or pass
-   * `object` (the mesh from create()). Where the scar goes: the direction centre → (x, y, z); override it with a
+   * `object` (the mesh from create()). `damage` (optional, 0..1 = 1 - hp / maxHp) sets how far the crack network that
+   * grows from the scars has spread; without it every hit adds 0.3. Where the scar goes: the direction centre → (x, y, z); override it with a
    * world-space direction `nx, ny, nz` (centre → impact point) when the hit point is only approximate. `scar: false` = none.
    */
   chip(o) {
@@ -2791,6 +3101,12 @@ export class Rocks3D {
           if (Math.hypot(nx, ny, nz) < 0.05 * D) { nx = -ix; ny = 0; nz = -iz; } // hit point = the centre: the face the shot came in through
         }
         if (nx || ny || nz) this._scar(m, nx, ny, nz, D);
+        const info = m.userData && m.userData.rock;
+        if (info && info.scar) {
+          // every hit spreads the cracks (or the caller says how far gone the rock is)
+          info.damage = o.damage != null ? clamp(o.damage, 0, 1) : Math.min(1, info.damage + 0.3);
+          info.scar.u.uRockDmg.value.set(info.damage, 1, 0, 0);
+        }
       }
     }
     const pvx = o.vx || 0, pvz = o.vz || 0;
@@ -2854,44 +3170,70 @@ export class Rocks3D {
     this._volLoad *= Math.exp(-dt / 400);
     this._u.uRockHot.value.y = T.hotCap / (1 + 0.45 * this._volLoad);
 
+    // rocks in play: their spin (a break inherits it), the flash of a fresh hit dying down
+    if (dt > 0) {
+      const L = this._live;
+      for (let i = 0; i < L.length; i++) {
+        const info = L[i].userData.rock, q = L[i].quaternion, p = info.pq;
+        if (info.pqOk) {
+          // q * conj(p): the turn since the last update
+          const rx = -q.w * p[0] + q.x * p[3] - q.y * p[2] + q.z * p[1], ry = -q.w * p[1] + q.x * p[2] + q.y * p[3] - q.z * p[0];
+          const rz = -q.w * p[2] - q.x * p[1] + q.y * p[0] + q.z * p[3], rw = q.w * p[3] + q.x * p[0] + q.y * p[1] + q.z * p[2];
+          const k = (rw < 0 ? -2 : 2) / dt, w = info.w;
+          w[0] += (rx * k - w[0]) * 0.5; w[1] += (ry * k - w[1]) * 0.5; w[2] += (rz * k - w[2]) * 0.5;
+        }
+        p[0] = q.x; p[1] = q.y; p[2] = q.z; p[3] = q.w; info.pqOk = true;
+      }
+      const SC = this._scarred, fl = Math.exp(-dt / 80);
+      for (let i = 0; i < SC.length; i++) SC[i].u.uRockDmg.value.y *= fl;
+    }
+
     // fracture instances
     const SM = this._shMeshes;
     for (let i = 0; i < SM.length; i++) SM[i].n = 0;
-    const pdamp = Math.exp(-0.0011 * dt), off = this._o3;
+    const pdamp = Math.exp(-0.0011 * dt), wdamp = Math.exp(-dt / 900), off = this._o3;
     for (let bi = 0; bi < MAX_BURSTS; bi++) {
       const B = this._bursts[bi];
       if (!B.active) continue;
       B.age += dt;
       B.vx *= pdamp; B.vz *= pdamp;
       B.x += B.vx * dt; B.z += B.vz * dt;
+      if (B.wx || B.wy || B.wz) {
+        // the debris keeps the rock's spin for a while
+        const hx = B.wx * dt * 0.5, hy = B.wy * dt * 0.5, hz = B.wz * dt * 0.5, ax = B.qx, ay = B.qy, az = B.qz, aw = B.qw;
+        let nx = ax + hx * aw + hy * az - hz * ay, ny = ay + hy * aw + hz * ax - hx * az, nz = az + hz * aw + hx * ay - hy * ax, nw = aw - hx * ax - hy * ay - hz * az;
+        const il = 1 / (Math.hypot(nx, ny, nz, nw) || 1);
+        B.qx = nx * il; B.qy = ny * il; B.qz = nz * il; B.qw = nw * il;
+        B.wx *= wdamp; B.wy *= wdamp; B.wz *= wdamp;
+      }
       if (!B.burst && B.age >= T.crackMs) this._burst(B);
       if (B.age >= B.life) { B.active = false; continue; }
       const sm = B.sm;
       if (!sm) { if (B.burst) B.active = false; continue; }
       const qx = B.qx, qy = B.qy, qz = B.qz, qw = B.qw, s = B.scale;
-      // late cluster breaks: grit + dust where the cluster is right now
-      for (let e = 0; e < 2; e++) {
-        if (B.ev[e] < 0 || B.age < B.evT[e]) continue;
-        const K = sm.clusters[B.ev[e]];
-        B.ev[e] = -1;
-        this._clusterOffset(K, B.age / 1000, B.speed, B.ox, B.oy, B.oz, off);
-        const lx = off[0] * s, ly = off[1] * s, lz = off[2] * s;
-        const tx = 2 * (qy * lz - qz * ly), ty = 2 * (qz * lx - qx * lz), tz = 2 * (qx * ly - qy * lx);
-        const wx = B.x + lx + qw * tx + (qy * tz - qz * ty), wy = B.y + ly + qw * ty + (qz * tx - qx * tz), wz = B.z + lz + qw * tz + (qx * ty - qy * tx);
-        const rnd = this.random, tmp = this._tmp, n = clamp(Math.round(5 + B.D * 0.05), 6, 14), U = 0.1 + 0.0007 * B.D;
-        const kvx = (wx - B.x) / Math.max(B.age, 1) * 0.5, kvy = (wy - B.y) / Math.max(B.age, 1) * 0.5, kvz = (wz - B.z) / Math.max(B.age, 1) * 0.5;
+      // a chunk snaps in two, or crumbles: grit + dust where it is right now
+      for (let e = 0; e < B.evN; e++) {
+        if (B.evK[e] < 0 || B.age < B.evT[e]) continue;
+        const k = B.evK[e], snap = B.evKind[e] === 1, frac = B.ck[k * 8 + 3];
+        B.evK[e] = -1;
+        this._chunkPos(B, k, B.age / 1000, off);
+        this._local(B, off[0], off[1], off[2], s, off);
+        const wx = B.x + off[0], wy = B.y + off[1], wz = B.z + off[2], R = B.D * Math.cbrt(frac) * 0.5;
+        const rnd = this.random, tmp = this._tmp, n = snap ? clamp(Math.round(5 + B.D * 0.05), 6, 14) : 4, U = 0.06 + 0.0005 * B.D;
+        const kvx = (wx - B.x) / Math.max(B.age, 1) * 0.6 + B.vx, kvy = (wy - B.y) / Math.max(B.age, 1) * 0.6, kvz = (wz - B.z) / Math.max(B.age, 1) * 0.6 + B.vz;
         for (let i = 0; i < n; i++) {
           randUnit(rnd, tmp);
-          const v = U * (0.4 + rnd() * 1.4), r = B.D * 0.08;
-          this._fragment(i < 3 ? SHARD_POOLS[i & 1] : GRIT_POOLS[i & 1], B.vr, B.volcanic, wx, wy, wz, tmp[0] * r, tmp[1] * r, tmp[2] * r,
-            tmp[0] * v + kvx, tmp[1] * v + kvy, tmp[2] * v + kvz, i < 3 ? Math.max(2.3, B.D * (0.02 + rnd() * 0.025)) : 1.3 + rnd() * 1.6, 500 + rnd() * 600, B.volcanic ? 0.7 : 0.2, false);
+          const v = U * (0.3 + rnd() * 1.3), r = R * 0.7;
+          this._fragment(snap && i < 3 ? SHARD_POOLS[i & 1] : GRIT_POOLS[i & 1], B.vr, B.volcanic, wx, wy, wz, tmp[0] * r, tmp[1] * r, tmp[2] * r,
+            tmp[0] * v + kvx, tmp[1] * v + kvy, tmp[2] * v + kvz, snap && i < 3 ? Math.max(2.3, B.D * (0.02 + rnd() * 0.025)) : 1.3 + rnd() * 1.8, 600 + rnd() * 700, B.volcanic ? 0.7 : 0.15, false);
         }
         if (fx && fx.dust) {
           const c = this._c3, dc = B.vr.dustColor, d = this._dustOpts;
           c[0] = dc[0]; c[1] = dc[1]; c[2] = dc[2];
-          d.count = 3; d.speed = 50; d.life = 600;
-          fx.dust(wx, wy, wz, B.D * 0.35, d);
+          d.count = snap ? 4 : 3; d.speed = snap ? 55 : 25; d.life = snap ? 650 : 800;
+          fx.dust(wx, wy, wz, R * (snap ? 1.2 : 1.5), d);
         }
+        if (snap && B.volcanic && fx && fx.sparks) fx.sparks(wx, wy, wz, 6, 0, 0, this._sparkOpts);
       }
       const i = sm.n++, m = sm.mesh.instanceMatrix.array, e = i * 16;
       const x2 = qx + qx, y2 = qy + qy, z2 = qz + qz;
@@ -2903,12 +3245,13 @@ export class Rocks3D {
       const ba = sm.burst.array, ia = sm.imp.array, t = B.age / 1000;
       ba[i * 4] = t; ba[i * 4 + 1] = B.speed; ba[i * 4 + 2] = B.lifeS; ba[i * 4 + 3] = B.heat0 * Math.exp(-B.heatRate * t);
       ia[i * 4] = B.ox; ia[i * 4 + 1] = B.oy; ia[i * 4 + 2] = B.oz; ia[i * 4 + 3] = B.seed;
+      sm.slot.array[i] = B.slot;
     }
     for (let i = 0; i < SM.length; i++) {
       const sm = SM[i], n = sm.n;
       sm.mesh.count = n;
       sm.mesh.visible = n > 0;
-      if (n > 0) { sm.mesh.instanceMatrix.needsUpdate = true; sm.burst.needsUpdate = true; sm.imp.needsUpdate = true; }
+      if (n > 0) { sm.mesh.instanceMatrix.needsUpdate = true; sm.burst.needsUpdate = true; sm.imp.needsUpdate = true; sm.slot.needsUpdate = true; }
     }
 
     // pooled debris
@@ -3039,6 +3382,8 @@ export class Rocks3D {
       vr.shMat = null; vr.scarPool = null;
     }
     for (const m of this._materials) m.dispose();
+    this._btTex.dispose();
+    this._scarred.length = 0;
     this._pools.length = 0;
     this._shMeshes.length = 0;
     this._live.length = 0;

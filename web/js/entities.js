@@ -1315,6 +1315,25 @@ const ENEMY_TINT = {
 const ENEMY_POINTS = { basic: 10, weaver: 15, hunter: 20, tank: 30, sniper: 25, carrier: 35, shieldbearer: 30, strafer: 28, brood: 22 };
 const ENEMY_SIZE = { tank: [66, 40], sniper: [54, 24], carrier: [72, 44], shieldbearer: [52, 32], strafer: [62, 34], brood: [56, 34] };
 
+// Flight model: every hull steers its velocity toward what its pilot wants, inside
+// per-type limits, so nothing snaps or slides on rails (see Enemy.fly).
+//   ay / vy  lateral acceleration (px/step²) and lateral speed (px/step) limits
+//   jink     chance to sidestep a shot that is about to land (rate-limited), dodge = how hard
+//   bank     how far the hull rolls into its turns · turn = how fast the nose follows
+//   light    fighters: fly attack runs, break off, may come round for a second pass
+const FLIGHT = {
+  basic:        { ay: 0.22, vy: 3.0,  jink: 0.22, dodge: 1,    bank: 1,    turn: 0.16, light: true },
+  weaver:       { ay: 0.6,  vy: 9.0,  jink: 0.24, dodge: 1,    bank: 1,    turn: 0.2,  light: true },
+  hunter:       { ay: 0.26, vy: 3.2,  jink: 0.12, dodge: 0.8,  bank: 1,    turn: 0.2,  light: true },
+  tank:         { ay: 0.03, vy: 0.6,  jink: 0.05, dodge: 0.3,  bank: 0.3,  turn: 0.035 },
+  carrier:      { ay: 0.02, vy: 0.45, jink: 0,    dodge: 0,    bank: 0.2,  turn: 0.025 },
+  shieldbearer: { ay: 0.05, vy: 1.1,  jink: 0.06, dodge: 0.35, bank: 0.45, turn: 0.05 },
+  brood:        { ay: 0.05, vy: 1.2,  jink: 0.05, dodge: 0.35, bank: 0.4,  turn: 0.05 },
+  sniper:       { ay: 0.12, vy: 1.1,  jink: 0.1,  dodge: 0.6,  bank: 0.6,  turn: 0.08 },
+  strafer:      { ay: 0.28, vy: 2.4,  jink: 0.1,  dodge: 0.6,  bank: 0.8,  turn: 0.1 },
+};
+const wrapPi = (a) => (a > Math.PI ? a - Math.PI * 2 : a < -Math.PI ? a + Math.PI * 2 : a);
+
 export class Enemy {
   constructor(images, level, type, time, moveRandomly = false) {
     this.type = type;
@@ -1409,6 +1428,277 @@ export class Enemy {
     this.rocketLauncher = type === 'tank' && level >= 4;
     this.rocketDelay = Math.max(4500, 9500 - level * 400);
     this.lastRocketAt = time + randInt(1500, 3500); // no volley right at spawn
+
+    // flight state the renderers read (the rest is set up in initFlight)
+    this.bank = 0;       // −1..1 roll into the turn, positive = toward +y
+    this.heading = 0;    // radians the nose is off its −x course, positive = toward +y (±π = flying back out)
+    this.windup = 0;     // 0..1 hunter coiling before a lunge
+    this.ai = 'run';     // run | loop | exit | retire
+    this.leader = null;  // wingmen keep station on this ship (slot = { dx, dy })
+    this.fireHold = 0;
+  }
+
+  // One-time flight setup on the first update: spawn code retunes vx / vy / size
+  // after the constructor (modifiers, drones, fragments, formations), so read them here.
+  initFlight(world) {
+    this._fl = true;
+    const F = FLIGHT[this.type] || FLIGHT.basic;
+    this.cruise = Math.min(-0.3, this.vx);   // course speed; vx itself now eases around it
+    const sp = -this.cruise;
+    this.drone = this.type === 'basic' && this.w < 40; // carrier drones, brood fragments
+    // wanderers keep their lateral pace (one warping in at an edge starts out heading inward)
+    if ((this.vy < 0 && this.y < this.h / 2 + 40) || (this.vy > 0 && this.y > H - this.h / 2 - 40)) this.vy = -this.vy;
+    this.drift = Math.abs(this.vy);
+    this.driftDir = this.vy < 0 ? -1 : 1;
+    this.age = 0;                            // sim steps on the field (slow-motion stretches it)
+    this.routeT = (this.x + this.w) / sp;    // steps a straight crossing takes
+    this.lane = this.y;
+    this.nextLaneAt = randInt(60, 150);
+    this.flank = rand(-150, 150);            // heavies settle this far off the player's lane
+    this.wob = rand(0, Math.PI * 2);
+    this.passes = 0;
+    this.breakDist = 170 + sp * 26;          // where a fighter ends its run (~half a second out)
+    this.breaker = !!F.light && this.type !== 'hunter' && rand(0, 1) < (this.drone ? 0.4 : 0.6);
+    this.looper = !!F.light && !this.drone && rand(0, 1) < (this.type === 'hunter' ? 0.35 : 0.3);
+    this.nextJinkAt = randInt(30, 70);
+    this.jinkUntil = 0;
+    this.jinkDir = 0;
+    this.windAt = 0;
+    this._bf = 1;                            // eased afterburner factor
+    if (this.type === 'weaver') {
+      this.y = this.baseY + Math.sin(this.phase) * this.amp;
+      this.vy = this.amp * this.freq * 16.67 * Math.cos(this.phase);
+    }
+    if (this.type === 'carrier') this.holdBack = W * rand(0.66, 0.78); // stands off and lets the drones work
+    if (this.leader) {
+      this.leader.wingmen ||= 1;
+    } else if (this.type === 'basic' && !this.drone && !this.wingmen && world.enemies) {
+      // a lone fighter warping in close behind another forms up on it as a wingman
+      let best = null, bg = 300;
+      for (const o of world.enemies) {
+        if (o === this || o.type !== 'basic' || o.dead || o.dying || !o._fl || o.drone
+          || o.leader || o.wingmen || o.ai !== 'run' || o.x < W * 0.5) continue;
+        const gap = this.x - o.x;
+        if (gap > 50 && gap < bg) { bg = gap; best = o; }
+      }
+      if (best && rand(0, 1) < 0.4) {
+        this.leader = best;
+        this.slot = { dx: 64, dy: (this.y >= best.y ? 1 : -1) * 46 };
+        best.wingmen = 1;
+        this.cruise = best.cruise;
+      }
+    }
+    this.vx = this.cruise * 1.45;            // arrives hot and brakes onto the field
+  }
+
+  // Steer. Each ship works out the velocity its pilot wants (tvx, tvy) and the
+  // real one chases it under acceleration limits; roll and nose follow the motion.
+  fly(world, warping) {
+    const F = FLIGHT[this.type] || FLIGHT.basic;
+    const kk = world.speedMul * world.k;
+    this.age += kk;
+    const age = this.age, sp = -this.cruise;
+    const top = this.h / 2 + 4, bot = H - this.h / 2 - 4;
+    const parks = this.type === 'sniper' || this.type === 'strafer';
+    // the pilot's reference: the nearest living player (perched ships judge by lane only)
+    let P = null, md = Infinity;
+    for (const p of world.players()) {
+      if (!p.alive) continue;
+      const d = (parks ? 0 : Math.abs(p.x - this.x)) + Math.abs(p.y - this.y);
+      if (d < md) { md = d; P = p; }
+    }
+    // arrival: in hot, a short brake, then cruise (the dip repays the overspeed, so
+    // the time to cross the field is unchanged)
+    const entry = 1 + 0.9 * Math.exp(-age / 18) - 0.45 * Math.exp(-age / 36);
+    let tvx = this.cruise * entry, tvy = 0;
+    let ax = 0.04 + sp * 0.05, ay = F.ay, vyMax = F.vy;
+
+    // nobody loiters: past its fuel a fighter flies straight out
+    if (F.light && this.ai !== 'exit' && age > this.routeT * 2.4 + 240) { this.ai = 'exit'; this.leader = null; }
+
+    const L = this.leader;
+    if (L && (L.dead || L.dying)) {
+      // leader down: the wingman breaks away onto a lane of its own
+      this.leader = null;
+      const s = this.slot?.dy ? Math.sign(this.slot.dy) : (this.y < H / 2 ? 1 : -1);
+      this.lane = clamp(this.y + s * rand(70, 130), top, bot);
+      this.scatter = age + 30;
+      this.drift = 0;
+    }
+    if (this.leader) {
+      // keep station: match the leader's velocity, close the slot error
+      const ex = L.x + this.slot.dx - this.x;
+      const ey = clamp(L.y + this.slot.dy, top, bot) - this.y;
+      vyMax = 3.5;
+      tvx = L.vx + clamp(ex * 0.06, -sp * 0.8, sp * 0.35);
+      tvy = L.vy + clamp(ey * 0.08, -vyMax, vyMax);
+      ax *= 1.5; ay *= 1.4;
+    } else if (this.ai === 'loop') {
+      // extend back up the far side of the field, then turn in for another run
+      tvx = sp * 1.25; ax = 0.05 + sp * 0.09;
+      vyMax = 4; ay = 0.3;
+      tvy = clamp((this.loopY - this.y) * 0.07, -vyMax, vyMax);
+      if (this.x > this.loopX && this.vx > 0) {
+        this.ai = 'run';
+        this.passes++;
+        this.lane = P ? this.loopY + (P.y - this.loopY) * 0.3 : this.loopY; // lines up, roughly
+        this.swoop = false;
+        if (this.type === 'weaver') {
+          // pick the weave back up from where the ship is now
+          this.baseY = clamp(this.lane, this.amp + 20, Math.max(this.amp + 20, H - this.amp - 20));
+          this.phase = Math.asin(clamp((this.y - this.baseY) / this.amp, -1, 1)) - age * 16.67 * this.freq;
+        }
+        if (this.type === 'hunter') this.nextDashAt = Math.min(this.nextDashAt, world.time + 300);
+        this.fireHold = world.time - this.lastShot; // fresh trigger timer for the new run
+      }
+    } else if (F.light) {
+      // the run itself: ease in from the far side, then open the throttle for the
+      // final approach (the two cancel out: same time to reach the player)
+      if (P && this.ai === 'run' && this.type !== 'hunter') tvx *= this.x - P.x > this.breakDist * 2.2 ? 0.94 : 1.12;
+      // once settled on the field, line up: shade the lane toward the target
+      if (!this.linedUp && age > 40 && this.ai === 'run') {
+        this.linedUp = true;
+        if (P && !this.drift) {
+          const d = clamp((P.y - this.y) * 0.15, -50, 50) + rand(-25, 25);
+          this.lane = clamp(this.lane + d, top, bot);
+          if (this.type === 'weaver') this.baseY = clamp(this.baseY + d, this.amp + 20, Math.max(this.amp + 20, H - this.amp - 20));
+        }
+      }
+      if (this.type === 'weaver') {
+        const ph = this.phase + age * 16.67 * this.freq, wv = this.amp * this.freq * 16.67;
+        tvy = wv * Math.cos(ph) + clamp((this.baseY + Math.sin(ph) * this.amp - this.y) * 0.12, -3, 3);
+        ay = Math.max(ay, wv * this.freq * 16.67 * 1.4);
+      } else if (this.type === 'hunter') {
+        // homes on the player; throttles back to wind up, then commits to the lunge
+        if (P && this.ai === 'run') tvy = clamp((P.y - this.y) * 0.06, -3.2, 3.2) * (this.boosting ? 0.4 : 1);
+        tvx *= 1 - 0.55 * this.windup;
+      } else if (this.drift && !this.swoop && !(this.scatter > age)) {
+        // wanderer: crosses the field on a slant, turning back before the edges
+        if (this.y < top + 26) this.driftDir = 1; else if (this.y > bot - 26) this.driftDir = -1;
+        tvy = this.driftDir * this.drift;
+      } else {
+        // holds a lane with a slight sway; a swoop is the same thing, flown hard
+        if (this.swoop) { vyMax = 4; ay = 0.35; }
+        tvy = clamp((this.lane - this.y) * (this.swoop ? 0.09 : 0.05), -vyMax, vyMax) + 0.35 * Math.cos(this.wob + age * 0.045);
+      }
+      if (this.scatter > age) ay = Math.max(ay, 0.4);
+      // end of the attack run: break out of the player's line, and pass or come round again
+      if (this.ai === 'run' && P && !warping) {
+        const dxp = this.x - P.x, off = Math.abs(this.y - P.y);
+        const hunter = this.type === 'hunter';
+        if (hunter ? (dxp < -10 || (dxp < 60 + sp * 8 && off > 70)) : (dxp > 0 && dxp < this.breakDist)) {
+          let side = this.y >= P.y ? 1 : -1;
+          this.ai = 'exit';
+          if (this.looper && this.passes < 1 && !this.wingmen && age < this.routeT * 1.1) {
+            let ly = clamp(P.y + side * rand(170, 260), top + 10, bot - 10);
+            if (Math.abs(ly - P.y) < 130) { side = -side; ly = clamp(P.y + side * 220, top + 10, bot - 10); }
+            this.loopY = ly;
+            this.loopX = Math.max(W - randInt(150, 260), Math.min(W - 60, P.x + 380));
+            this.ai = 'loop';
+            this.windAt = 0;
+            this.dashUntil = Math.min(this.dashUntil, world.time); // lunge over: pull up
+          } else if (this.breaker && off < 70) {
+            const d = side * rand(85, 125);
+            this.lane = clamp(this.y + d, top, bot);
+            if (this.type === 'weaver') this.baseY = clamp(this.baseY + d, this.amp + 20, Math.max(this.amp + 20, H - this.amp - 20));
+            this.swoop = true;
+          }
+        }
+      }
+    } else {
+      if (parks) {
+        // sniper / strafer: brake onto the perch, then slide along it after the player
+        if (this.x > this.holdX) {
+          tvx = -Math.min(-tvx, (this.x - this.holdX) * 0.08 + 0.2);
+        } else {
+          tvx = 0; ax = 0.3;
+          const tr = this.type === 'strafer' ? 2.4 : 1.1;
+          if (this.aim) ay = 0.6; // steady for the shot
+          else if (P) tvy = clamp((P.y - this.y) * 0.15, -tr, tr);
+        }
+      } else {
+        if (this.type === 'carrier') {
+          // hangs back near the right edge, then withdraws when its patrol time is up
+          if (this.ai === 'retire' || age > this.routeT * 0.85) { this.ai = 'retire'; tvx = sp * 1.3; }
+          else if (this.x > this.holdBack) tvx = -Math.min(-tvx, (this.x - this.holdBack) * 0.05 + 0.1);
+          else tvx = 0;
+        }
+        if (this.drift) {
+          if (this.y < top + 26) this.driftDir = 1; else if (this.y > bot - 26) this.driftDir = -1;
+          tvy = this.driftDir * Math.min(this.drift, vyMax * 1.7);
+          vyMax *= 1.7;
+        } else {
+          // heavies shift lanes slowly, with momentum, to keep the player under their guns
+          if (age > this.nextLaneAt) {
+            this.nextLaneAt = age + randInt(130, 200);
+            if (P) this.lane = clamp(this.y + clamp((P.y + this.flank - this.y) * 0.2, -60, 60), top, bot);
+          }
+          tvy = clamp((this.lane - this.y) * 0.03, -vyMax, vyMax);
+        }
+      }
+    }
+
+    // jink: a shot about to land may be sidestepped. One look per second or two,
+    // a dice roll on top, and heavier hulls barely move, so most fire still lands.
+    if (F.jink && age > this.nextJinkAt && !warping && world.bullets && !this.aim
+        && this.ai !== 'loop' && !(this.type === 'hunter' && this.boosting)) {
+      for (const b of world.bullets) {
+        if (b.dead || !(b.vx > 0)) continue;
+        const dx = this.x - b.x;
+        if (dx < 20 || dx > 230) continue;
+        const by = b.y + b.vy * (dx / b.vx);
+        if (Math.abs(by - this.y) > this.h * 0.55 + 4) continue;
+        this.nextJinkAt = age + randInt(80, 145);
+        if (rand(0, 1) < F.jink + (this.elite ? 0.18 : 0)) {
+          let dir = by > this.y ? -1 : 1;
+          if (this.y + dir * 60 < top || this.y + dir * 60 > bot) dir = -dir;
+          this.jinkDir = dir;
+          this.jinkUntil = age + 15;
+          // and stays off that line afterwards
+          const shift = dir * 30 * F.dodge;
+          this.lane = clamp(this.lane + shift, top, bot);
+          if (this.type === 'weaver') this.baseY = clamp(this.baseY + shift, this.amp + 20, Math.max(this.amp + 20, H - this.amp - 20));
+        }
+        break;
+      }
+    }
+    tvy = clamp(tvy, -vyMax, vyMax);
+    if (age < this.jinkUntil) {
+      tvy += this.jinkDir * 3.4 * F.dodge;
+      ay = Math.max(ay, 0.55 * F.dodge);
+    }
+    // soft walls: never carry more lateral speed toward an edge than can be braked off
+    const room = Math.max(0, this.vy > 0 || (this.vy === 0 && tvy > 0) ? bot - this.y : this.y - top);
+    const vcap = Math.sqrt(2 * ay * room);
+    if (this.vy > 0 || (this.vy === 0 && tvy > 0)) tvy = Math.min(tvy, vcap); else tvy = Math.max(tvy, -vcap);
+    if (Math.abs(this.vy) > vcap) ay = Math.min(0.9, (this.vy * this.vy) / (2 * Math.max(1, room)));
+
+    // integrate: accelerate toward the wanted velocity; the afterburner (forward
+    // thrust only) eases in and out
+    const dvx = clamp(tvx - this.vx, -ax * kk, ax * kk);
+    const dvy = clamp(tvy - this.vy, -ay * kk, ay * kk);
+    this.vx += dvx;
+    this.vy += dvy;
+    this._bf += clamp((this.boosting ? 1.9 : 1) - this._bf, -0.05 * kk, 0.05 * kk);
+    this.x += this.vx * kk * this._bf;
+    this.y += this.vy * kk;
+    if (this.y < this.h / 2) { this.y = this.h / 2; if (this.vy < 0) this.vy = 0; }
+    else if (this.y > H - this.h / 2) { this.y = H - this.h / 2; if (this.vy > 0) this.vy = 0; }
+
+    // nose: fighters point where they fly; heavies and perched ships turn to keep
+    // their weapons bearing on the player
+    let hT = this.heading;
+    if (F.light) {
+      if (Math.abs(this.vx) + Math.abs(this.vy) > 0.3) hT = Math.atan2(this.vy, -this.vx);
+    } else {
+      const lim = this.type === 'strafer' ? 0.5 : this.type === 'sniper' ? 0.4 : 0.3;
+      hT = P && !this.aim ? clamp(Math.atan2(P.y - this.y, Math.max(60, this.x - P.x)), -lim, lim) : 0;
+    }
+    const dh = wrapPi(hT - this.heading) * Math.min(1, F.turn * kk);
+    this.heading = wrapPi(this.heading + dh);
+    // roll: into the lateral acceleration, the slide and the turn itself
+    const bT = clamp((kk > 0 ? dvy / kk : 0) * 3.2 + this.vy * 0.11 + (kk > 0 ? dh / kk : 0) * 6, -1, 1) * F.bank;
+    this.bank += (bT - this.bank) * Math.min(1, 0.16 * kk);
   }
 
   takeDamage(dmg) {
@@ -1484,56 +1774,39 @@ export class Enemy {
       return;
     }
 
-    // afterburner dash — mirrors the player's boost (flame stretches in draw)
+    const warping = this.warpUntil && world.time < this.warpUntil;
+    const stormOut = world.ionStorm?.phase === 'active'; // ion storm: all guns down
+    if (!this._fl) this.initFlight(world);
+
+    // afterburner dash — mirrors the player's boost (flame stretches in draw).
+    // Wingmen light up with their leader; hunters wind up before they lunge.
     this.boosting = world.time < this.dashUntil;
-    if (this.canDash && !this.boosting && world.time > this.nextDashAt
-        && !(this.warpUntil && world.time < this.warpUntil)) {
-      this.boosting = true;
-      this.dashUntil = world.time + randInt(500, 900);
-      this.nextDashAt = world.time + randInt(3500, 7500);
+    if (this.leader) {
+      this.boosting = !!this.leader.boosting;
+    } else if (this.canDash && !this.boosting && world.time > this.nextDashAt && !warping && this.ai !== 'loop') {
+      if (this.type === 'hunter' && !this.windAt) this.windAt = world.time; // throttle back, line up…
+      if (this.type !== 'hunter' || world.time - this.windAt > 320) {       // …and commit
+        this.windAt = 0;
+        this.boosting = true;
+        this.dashUntil = world.time + randInt(500, 900);
+        this.nextDashAt = world.time + randInt(3500, 7500);
+      }
     }
-    if (this.boosting && world.effects && world.time - (this.lastTrail || 0) > 30) {
+    this.windup = this.windAt ? Math.min(1, (world.time - this.windAt) / 320) : Math.max(0, this.windup - 0.12 * world.k);
+    const burner = this.boosting || (this.ai === 'loop' && this.vx > 0); // extending for another run
+    if (burner && world.effects && world.time - (this.lastTrail || 0) > 30) {
       this.lastTrail = world.time;
       world.effects.push(new BoostParticle(this.x + this.w / 2 + 6, this.y, world.time, 'rgb(255,180,90)', 1));
     }
 
-    const m = world.speedMul * world.k * (this.boosting ? 1.9 : 1);
     this._t = world.time;
-    // snipers and strafers stop at their perch instead of flying across
-    if ((this.type === 'sniper' || this.type === 'strafer') && this.x <= this.holdX) {
-      // hold position; drift toward the nearest player's y (strafers track hard)
-      let tgt = null, md = Infinity;
-      for (const p of world.players()) {
-        if (!p.alive) continue;
-        const d = Math.abs(p.y - this.y);
-        if (d < md) { md = d; tgt = p; }
-      }
-      const trackSp = this.type === 'strafer' ? 2.4 : 1.1;
-      if (tgt && !this.aim) this.y += clamp(tgt.y - this.y, -trackSp, trackSp) * m;
-    } else {
-      this.x += this.vx * m;
-    }
+    this.fly(world, warping);
+    this.boosting = burner;
 
-    if (this.type === 'weaver') {
-      this.y = this.baseY + Math.sin(world.time * this.freq + this.phase) * this.amp;
-    } else if (this.type === 'hunter') {
-      // home vertically on the nearest living player
-      let target = null, minD = Infinity;
-      for (const p of world.players()) {
-        if (!p.alive) continue;
-        const d = Math.abs(p.x - this.x) + Math.abs(p.y - this.y);
-        if (d < minD) { minD = d; target = p; }
-      }
-      if (target) this.y += clamp((target.y - this.y) * 0.06, -3.2, 3.2) * m;
-    } else {
-      this.y += this.vy * m;
-      if (this.y - this.h / 2 < 0 || this.y + this.h / 2 > H) this.vy *= -1;
-    }
-
-    if (this.x + this.w / 2 < 0) { this.dead = true; return; }
-
-    const warping = this.warpUntil && world.time < this.warpUntil;
-    const stormOut = world.ionStorm?.phase === 'active'; // ion storm: all guns down
+    // off the left edge: gone (a ship turning back for another pass gets some slack);
+    // a retiring carrier leaves the way it came
+    if (this.x + this.w * (this.ai === 'loop' ? 1.5 : 0.5) < 0) { this.dead = true; return; }
+    if (this.ai === 'retire' && this.x - this.w * 1.6 > W) { this.dead = true; return; }
 
     // sniper telegraph → high-velocity bolt
     if (this.type === 'sniper' && !warping && !stormOut && this.x <= this.holdX + 4) {
@@ -1555,6 +1828,7 @@ export class Enemy {
       for (const dy of [-30, 30]) {
         const d = new Enemy(this.images, Math.max(1, this.level - 1), 'basic', world.time);
         d.w = 34; d.h = 20;
+        d.img = this.images.enemy_drone || d.img; // (sprite baked from the 3D drone, when available)
         d.health = 1;
         d.points = 5;
         d.x = this.x - this.w / 2 - 12;
@@ -1588,7 +1862,10 @@ export class Enemy {
       audio.play('gun', 0.16, this.x);
     }
 
-    if (!warping && !stormOut && world.time - this.lastShot > this.shootDelay) {
+    // fighters only shoot on an attack run: the timer waits while they are turned away
+    if (this.ai === 'loop' || Math.abs(this.heading) > 1.2) this.fireHold += world.k * 16.67;
+    if (!warping && !stormOut && world.time - this.lastShot - this.fireHold > this.shootDelay) {
+      this.fireHold = 0;
       const bx = this.x - this.w / 2;
       if (this.twinShot) {
         world.enemyBullets.push(new EnemyBullet(bx, this.y - 5, this.bulletImg));
@@ -1649,12 +1926,12 @@ export class Enemy {
         { flip: true, sputter: { t: dt0, states: this._sputter } });
       g.drawImage(this.img, -vw / 2, -vh / 2, vw, vh);
       g.globalAlpha = 0.45;
-      g.drawImage(tinted(this.img, 'rgba(0,0,0,1)', `black_enemy_${this.type}`),
+      g.drawImage(tinted(this.img, 'rgba(0,0,0,1)', `black_enemy_${this.img.tintKey || this.type}`),
         -vw / 2, -vh / 2, vw, vh);
       g.globalAlpha = 1;
       if (this.flash > 0.05) {
         g.globalAlpha = this.flash * 0.85;
-        g.drawImage(tinted(this.img, 'rgba(255,255,255,1)', `white_enemy_${this.type}`),
+        g.drawImage(tinted(this.img, 'rgba(255,255,255,1)', `white_enemy_${this.img.tintKey || this.type}`),
           -vw / 2, -vh / 2, vw, vh);
         g.globalAlpha = 1;
       }
@@ -1691,12 +1968,22 @@ export class Enemy {
       g.globalCompositeOperation = prev;
     }
 
+    // flight attitude: the hull yaws onto its heading and narrows as it rolls
+    const posed = Math.abs(this.heading) > 0.02 || Math.abs(this.bank) > 0.04;
+    if (posed) {
+      g.save();
+      g.translate(this.x, this.y);
+      g.rotate(-this.heading);
+      g.scale(1, 1 - 0.2 * Math.abs(this.bank));
+      g.translate(-this.x, -this.y);
+    }
+
     // elite: pulsing golden aura + oversized gold copy peeking out as an outline
     if (this.elite) {
       const pulse = 0.85 + 0.25 * Math.sin(t / 130);
       drawGlow(g, glowElite, this.x, this.y, 2.1 * pulse);
       g.globalAlpha = 0.9;
-      g.drawImage(tinted(this.img, 'rgba(255,205,80,1)', `gold_enemy_${this.type}`),
+      g.drawImage(tinted(this.img, 'rgba(255,205,80,1)', `gold_enemy_${this.img.tintKey || this.type}`),
         this.x - (vw * 1.12) / 2, this.y - (vh * 1.12) / 2, vw * 1.12, vh * 1.12);
       g.globalAlpha = 1;
     }
@@ -1715,10 +2002,11 @@ export class Enemy {
     g.drawImage(this.img, this.x - vw / 2, this.y - vh / 2, vw, vh);
     if (this.flash > 0.05) {
       g.globalAlpha = warp ? 0.6 : this.flash * 0.85;
-      g.drawImage(tinted(this.img, 'rgba(255,255,255,1)', `white_enemy_${this.type}`),
+      g.drawImage(tinted(this.img, 'rgba(255,255,255,1)', `white_enemy_${this.img.tintKey || this.type}`),
         this.x - vw / 2, this.y - vh / 2, vw, vh);
       g.globalAlpha = 1;
     }
+    if (posed) g.restore();
     if (warp) {
       g.globalAlpha = 1;
       g.restore();
@@ -2221,18 +2509,34 @@ export class Boss {
     const pulse = this.phase2 ? 1 + 0.045 * Math.sin(t / 160) : 1;
     const body = this.phase2 ? this.coreGen : this.gen.core;
     const base = { ...BOSS_VIEW, scale: this.fit.scale * pulse, x: bx + this.fit.x, y: by + this.fit.y, ry: BOSS_VIEW.ry + (this.phase2 ? t / 900 : 0) };
-    renderMesh(g, body, base);
-    if (!this.phase2) {
-      for (const tr of this.gen.turrets) {
-        if (tr.dead) continue;
-        const p = projectPoint(BOSS_VIEW, this.fit, tr.pivot);
-        renderMesh(g, tr.mesh, { rx: BOSS_VIEW.rx, ry: tr.yaw, scale: this.fit.scale, x: bx + p.x, y: by + p.y });
+    // sprites baked from the 3D capital ship when they are ready; the live low-poly mesh otherwise
+    const bb = !this.phase2 ? this.images.bakedBoss?.(this.level) : null;
+    if (bb?.ready) {
+      g.drawImage(bb.hull, bx + bb.hullX, by + bb.hullY, bb.hullW, bb.hullH);
+      this.gen.turrets.forEach((tr, i) => {
+        const tt = bb.turrets[i];
+        if (tr.dead || !tt) return;
+        g.drawImage(tt.frame(tr.yaw), bx + tt.pivotX - tt.w / 2, by + tt.pivotY - tt.h / 2, tt.w, tt.h);
+      });
+      if (this.flash > 0.05 && bb.white) {
+        g.globalAlpha = this.flash * 0.6;
+        g.drawImage(bb.white, bx + bb.hullX, by + bb.hullY, bb.hullW, bb.hullH);
+        g.globalAlpha = 1;
       }
-    }
-    if (this.flash > 0.05) {
-      g.globalAlpha = this.flash * 0.6;
-      renderMesh(g, body, { ...base, flat: [255, 255, 255] });
-      g.globalAlpha = 1;
+    } else {
+      renderMesh(g, body, base);
+      if (!this.phase2) {
+        for (const tr of this.gen.turrets) {
+          if (tr.dead) continue;
+          const p = projectPoint(BOSS_VIEW, this.fit, tr.pivot);
+          renderMesh(g, tr.mesh, { rx: BOSS_VIEW.rx, ry: tr.yaw, scale: this.fit.scale, x: bx + p.x, y: by + p.y });
+        }
+      }
+      if (this.flash > 0.05) {
+        g.globalAlpha = this.flash * 0.6;
+        renderMesh(g, body, { ...base, flat: [255, 255, 255] });
+        g.globalAlpha = 1;
+      }
     }
 
     // hex shield bubble while invulnerable (ripples where bullets splash)

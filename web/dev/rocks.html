@@ -22,7 +22,11 @@
      contact sheet ?sheet=1[&rot=deg]            all 8 + 3 variants at 150, 60 and 30
      game line-up  ?lineup=1&view=top|tilt|chase  sizes 30/60/110/200 of every variant at game scale
      break         ?break=1&variant=N&size=140&t=<ms>[&chip=1][&volcanic=1][&fx=0][&view=...][&zoom=2]   deterministic timeline
-                   ?break=1&strip=1&variant=N&size=140   six ages (40/100/200/400/800/1400 ms) side by side
+                   &view=cockpit[&cd=<distance in diameters, 1.5>] first-person framing: the rock breaks right in front of the camera
+                   &chip=1&hits=N[&kill=<ms>] hits every 120 ms (damage builds up), then the scarred rock breaks at <ms>
+                   &at=<ms> the moment of the break (default: the first frame)  &rate=<deg per frame> the rock spins until then (the debris inherits it)
+                   &noimpact=1 a break without a shot (collision, blast)  &intensity=<n>  &dmg=<0..1> pass chip({damage})
+                   ?break=1&strip=1&variant=N&size=140   six ages (30/100/250/500/1000/1700 ms, or &ages=a,b,…) side by side
      common        &zoom=<n>&cx=<x>&cz=<z> (game cameras) &bloom=0 &bg=0 &bright=0.82 &fx=0 &info=0 &seed=<n> &live=1 &tune=key:val,key:val &warm=1 (rocks.warmup) &async=1 (time-sliced builds, use with &live=1) */
   const errBox = document.getElementById('err');
   function showErr(m) { errBox.style.display = 'block'; errBox.textContent += m + '\n'; }
@@ -94,7 +98,12 @@ const zoom = num('zoom', 1), cx = num('cx', 0), cz = num('cz', 0);
 const PLAYER = { x: -420, z: 0 };
 function gameCam(view) {
   cam.up.set(0, 1, 0); cam.fov = FOV;
-  if (view === 'top') {
+  if (view === 'cockpit') {
+    // first person: eye a little above the play plane, the rock dead ahead
+    const d = num('cd', 1.5) * num('size', 120) * MESH;
+    cam.fov = 62; cam.near = 1;
+    cam.position.set(cx - d, d * 0.1, cz + d * 0.12); cam.lookAt(cx, 0, cz);
+  } else if (view === 'top') {
     cam.position.set(cx, hTop / zoom, cz + 0.01); cam.up.set(0, 0, -1); cam.lookAt(cx, 0, cz);
   } else if (view === 'chase') {
     cam.fov = CHASE_FOV / zoom;
@@ -158,7 +167,7 @@ const ALL = [];
 for (let i = 0; i < rocks.variantCount; i++) ALL.push([i, false]);
 for (let i = 0; i < rocks.volcanicVariantCount; i++) ALL.push([i, true]);
 
-let frame = 0, TEND = num('t', 0);
+let frame = 0, TEND = num('t', 0) + (Q.get('break') && !Q.get('strip') ? num('at', 0) + (Q.get('chip') === '1' && Q.has('kill') ? num('kill', 0) : 0) : 0);
 const each = [];
 const variant = num('variant', 0), volcanic = Q.get('volcanic') === '1', size = num('size', 120), rot = num('rot', 30);
 
@@ -220,43 +229,58 @@ if (MODE === 'single') {
 } else if (MODE === 'break') {
   gameCam(VIEW);
   const q = new THREE.Quaternion();
-  const boom = (v, vol, s, x, z, delayMs, chip) => {
-    const r = addRock(v, vol, s, x, z, rot);
-    q.copy(r.quaternion);
-    let done = false, chips = 0;
+  const boom = (v, vol, s, x, z, delayMs, chip, y = 0) => {
+    const r = addRock(v, vol, s, x, z, rot, y);
+    let done = false, chips = 0, ang = rot;
+    const rate = num('rate', 0), kill = chip ? num('kill', 1e9) : delayMs;
     each.push((T) => {
+      if (done) return;
+      if (rate) { ang += rate; r.quaternion.setFromAxisAngle(r.userData.axis, (ang * Math.PI) / 180); }
       if (chip) {
         // a giant soaking hits every 120 ms
-        while (chips * 120 + delayMs <= T) {
+        while (chips * 120 + delayMs <= T && T < kill) {
           // the rock keeps turning between hits, so each one lands on a different face (hits=N limits their number)
           if (chips >= num('hits', 99)) break;
-          r.quaternion.setFromAxisAngle(r.userData.axis, ((rot + chips * num('turn', 34)) * Math.PI) / 180);
+          if (!rate) r.quaternion.setFromAxisAngle(r.userData.axis, ((rot + chips * num('turn', 34)) * Math.PI) / 180);
           chips++;
-          const o = { x: x - s * 0.45, y: 0, z, size: s, dirX: 1, dirZ: 0, volcanic: vol, variant: v };
+          const o = { x: x - s * 0.45, y, z, size: s, dirX: 1, dirZ: 0, volcanic: vol, variant: v, object: r, nx: -1, ny: 0, nz: 0 };
+          if (Q.has('dmg')) o.damage = num('dmg', 0.5);
           // &face=1: say exactly where the hit landed (a world direction from the rock's centre) — here: towards the camera
-          if (Q.get('face') === '1') { const d = cam.position.clone().sub(r.position).normalize(); o.object = r; o.nx = d.x + (chips - 2) * 0.45; o.ny = d.y; o.nz = d.z + ((chips * 7) % 3 - 1) * 0.4; }
+          if (Q.get('face') === '1') { const d = cam.position.clone().sub(r.position).normalize(); o.nx = d.x + (chips - 2) * 0.45; o.ny = d.y; o.nz = d.z + ((chips * 7) % 3 - 1) * 0.4; }
           rocks.chip(o);
         }
-        return;
       }
-      if (done || T < delayMs) return;
+      if (T < kill) return;
       done = true;
-      scene.remove(r);
-      rocks.shatter({ x, y: 0, z, size: s, variant: v, volcanic: vol, quaternion: q.clone(), vx: -0.06, vz: 0.01, byImpact: { dirX: 1, dirZ: 0 } });
+      // as the game does it: shatter() gets the mesh's own quaternion, then the mesh is released
+      const t0 = performance.now();
+      rocks.shatter({ x, y, z, size: s, variant: v, volcanic: vol, quaternion: r.quaternion, vx: -0.06, vz: 0.01,
+        byImpact: Q.get('noimpact') === '1' ? null : { dirX: 1, dirZ: 0 }, intensity: num('intensity', 1) });
+      window.shatterMs = Math.max(window.shatterMs || 0, performance.now() - t0);
+      rocks.release(r);
     });
   };
   if (Q.get('strip')) {
     // one rock, six ages: every copy is shattered so that at the end it is exactly that old
-    const ages = [40, 100, 200, 400, 800, 1400];
-    TEND = 1400 + DT;
+    const ages = (Q.get('ages') || '30,100,250,500,1000,1700').split(',').map(Number);
+    TEND = ages[ages.length - 1] + DT;
     ages.forEach((a, i) => {
       const x = -560 + i * 224 + cx, z = (i & 1 ? 90 : -90) + cz;
       boom(variant, volcanic, size, x, z, TEND - a, false);
       label(a + ' ms', x, 0, z + size * 1.1);
     });
+  } else if (Q.get('vs')) {
+    // &vs=2,4,V0,… several families breaking side by side (3 columns); in the cockpit view the grid stands upright, facing the camera
+    const list = Q.get('vs').split(','), cols = Math.min(3, list.length), rows = Math.ceil(list.length / cols), sp = size * num('sp', 2.1);
+    if (VIEW === 'cockpit') { const d = num('cd', 1.5) * size * MESH * Math.max(cols * 0.72, rows * 1.25); cam.position.set(cx - d, 0, cz); cam.lookAt(cx, 0, cz); cam.updateMatrixWorld(); }
+    list.forEach((t, i) => {
+      const vol = t[0] === 'V', v = +(vol ? t.slice(1) : t), c = (i % cols) - (cols - 1) / 2, r = Math.floor(i / cols) - (rows - 1) / 2;
+      if (VIEW === 'cockpit') boom(v, vol, size, cx, cz + c * sp, num('at', DT), Q.get('chip') === '1', -r * sp);
+      else boom(v, vol, size, cx + c * sp, cz + r * sp, num('at', DT), Q.get('chip') === '1');
+    });
   } else if (Q.get('multi')) {
     ALL.forEach(([v, vol], i) => boom(v, vol, [140, 60, 200, 100][i % 4], -560 + (i % 6) * 220 + (i >= 6 ? 110 : 0), i >= 6 ? 150 : -150, DT, false));
-  } else boom(variant, volcanic, size, cx, cz, DT, Q.get('chip') === '1');
+  } else boom(variant, volcanic, size, cx, cz, num('at', DT), Q.get('chip') === '1');
 }
 
 function step() {
@@ -268,13 +292,40 @@ function step() {
   if (fx) fx.commit();
 }
 const info = document.getElementById('info');
+let benchTxt = '';
+if (Q.has('bench')) {
+  // &bench=N: N breaks of mixed families and sizes, a few frames apart — the cost of shatter() itself and of the update() that follows
+  const n = num('bench', 100), q = new THREE.Quaternion(), sizes = [40, 70, 110, 140, 160];
+  for (const s of sizes) ALL.forEach(([v, vol]) => rocks.release(rocks.create(v, vol, s)));
+  rocks.flushBuilds();
+  let sMax = 0, sSum = 0, uMax = 0, uSum = 0, k = 0;
+  for (let i = 0; i < n; i++) {
+    const [v, vol] = ALL[i % ALL.length], s = sizes[i % sizes.length];
+    const r = rocks.create(v, vol, s); r.scale.setScalar(s * MESH); r.position.set((i % 7) * 150 - 450, 0, (i % 5) * 120 - 240); scene.add(r);
+    if (i % 3 === 0) rocks.chip({ x: r.position.x - s * 0.45, y: 0, z: r.position.z, size: s, dirX: 1, dirZ: 0, volcanic: vol, variant: v, object: r, nx: -1, ny: 0, nz: 0 });
+    q.setFromAxisAngle(AX.set(0.3, 0.9, 0.2).normalize(), i);
+    r.quaternion.copy(q);
+    let t0 = performance.now();
+    rocks.shatter({ x: r.position.x, y: 0, z: r.position.z, size: s, variant: v, volcanic: vol, quaternion: r.quaternion, vx: -0.05, vz: 0, byImpact: { dirX: 1, dirZ: 0 } });
+    let d = performance.now() - t0;
+    rocks.release(r);
+    if (i >= 22) { sSum += d; k++; if (d > sMax) sMax = d; }
+    for (let f = 0; f < 4; f++) {
+      if (fx) fx.update(DT, cam, gl.domElement.height);
+      t0 = performance.now(); rocks.update(DT); d = performance.now() - t0;
+      if (i >= 22) { uSum += d; if (d > uMax) uMax = d; }
+      if (fx) fx.commit();
+    }
+  }
+  benchTxt = ` | BENCH ${n}: shatter avg ${(sSum / k).toFixed(3)} max ${sMax.toFixed(3)} ms, update avg ${(uSum / k / 4).toFixed(3)} max ${uMax.toFixed(3)} ms, slice max ${rocks.buildMaxSliceMs.toFixed(2)}`;
+}
 function draw() {
   composer.render();
   const s = rocks.stats();
   let tris = 0;
   for (const r of live) if (r.parent) tris += r.geometry.index.count / 3;
-  info.textContent = `${MODE} view=${VIEW} t=${Math.round(frame * DT)}ms | rocks ${live.filter((r) => r.parent).length} (${tris} tris) | debris ${s.fragments} bursts ${s.bursts} draws ${s.drawCalls} tris ${s.tris} | build ${rocks.buildMs.toFixed(0)}ms pending ${s.pendingBuilds} | gl calls ${gl.info.render.calls} tris ${gl.info.render.triangles}`
-    + (MODE === 'single' ? ` | ${(volcanic ? 'V' : '') + variant} ${NAMES(volcanic)[variant % NAMES(volcanic).length]} size ${size} lod ${live[0].userData.rock.lod}` : '');
+  info.textContent = `${MODE} view=${VIEW} t=${Math.round(frame * DT)}ms | rocks ${live.filter((r) => r.parent).length} (${tris} tris) | debris ${s.fragments} bursts ${s.bursts} draws ${s.drawCalls} tris ${s.tris} | shatter ${(window.shatterMs || 0).toFixed(2)}ms build ${rocks.buildMs.toFixed(0)}ms pending ${s.pendingBuilds} | gl calls ${gl.info.render.calls} tris ${gl.info.render.triangles}`
+    + benchTxt + (MODE === 'single' ? ` | ${(volcanic ? 'V' : '') + variant} ${NAMES(volcanic)[variant % NAMES(volcanic).length]} size ${size} lod ${live[0].userData.rock.lod}` : '');
   if (Q.get('info') === '0') info.style.display = 'none';
 }
 rocks.flushBuilds();

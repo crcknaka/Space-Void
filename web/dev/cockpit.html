@@ -32,11 +32,14 @@
   &hits=3                 N hits from varied directions, or an explicit list  hits=side:front:power,side:front:power
   &hitAt=250              the last hit lands this many ms before the frame (sparks / flash / flicker visible)
   &shield=1 &shieldhit=1  energy dome, and a shielded hit just before the frame
-  &dead=600               the ship died this many ms before the frame
+  &dead=600               the ship died this many ms before the frame   &revive=300  …and was reset() this long before it
   &warp=0..1 &boost=1 &ion=0..1 &boss=0..1 &warning=1 &od=0..1 &odon=1
   &steer=-1..1 &throttle=-1..1 &bank=rad &fire=1 (shot on the last frame) &tier=1..3 &laser=0..1 &ext=0..1 (explosion light) &extside=-1..1
   &sun=x,y,z              sun direction in cockpit space
   &t=ms                   freeze: simulate 0..t in 60 Hz steps and render once (default: run live)
+  &flyby=0..1             a large body passing close (t of the pass)  &flyside=-1..1 &flysize=0..1 &flyabove=1
+  &look=yaw,pitch         head look in radians (with &dbg=1 the same parameter is the orbit target)
+  &warpend=ms             a hyperspace jump ended this long before the frame (frost on the canopy)
   &sunspin=1              live mode: the sun circles the ship (frame shadows sweep the cabin)
   &q=0.5                  low quality   &fov=58   &noworld=1   &nopost=1
   &dbg=1                  look at the cockpit from outside (orbit with &yaw=deg &pitch=deg &dist=m)
@@ -75,6 +78,7 @@ wcam.position.set(0, EYE_H, 0);
 wcam.up.set(0, 1, 0);
 wcam.lookAt(Math.cos(PITCH) * 1000, EYE_H - Math.sin(PITCH) * 1000, 0);
 wcam.rotateZ(-P.bank * 0.5);
+if (Q.has('look') && !P.dbg) { const lk = Q.get('look').split(',').map(Number); wcam.rotateY(-(lk[0] || 0)); wcam.rotateX(lk[1] || 0); }      // the game turns the world camera with the head
 const sunDirW = new THREE.Vector3(...(Q.get('sun') ? Q.get('sun').split(',').map(Number) : [0.5, 0.55, 0.55])).normalize();
 const enemies = [];
 if (!Q.get('noworld')) {
@@ -158,6 +162,8 @@ const S = {
   sunDir, sunColor: new THREE.Color(1.0, 0.94, 0.84), ambient: new THREE.Color(0.2, 0.25, 0.34),
   extLight: { r: 1, g: 0.6, b: 0.25, i: 0, side: P.extside },
   blips, blipCount: enemies.length, laneL: -0.33, laneR: 0.23,
+  flyby: Q.has('flyby') ? { side: num('flyside', -1), above: !!num('flyabove', 0), size: num('flysize', 0.9), t: num('flyby', 0.5) } : null,
+  look: Q.has('look') && !P.dbg ? { yaw: +Q.get('look').split(',')[0] || 0, pitch: +Q.get('look').split(',')[1] || 0 } : null,
 };
 // hit script
 let hitList = [];
@@ -172,15 +178,18 @@ const events = [];
 hitList.forEach((h, i) => events.push({ at: T_END - P.hitAt - (hitList.length - 1 - i) * 180, fn: () => cp.hit({ side: h[0], front: h[1] ?? 1, power: h[2] ?? 0.7 }) }));
 if (P.shieldhit) events.push({ at: T_END - 220, fn: () => cp.hit({ side: 0.6, front: 1, power: 0.9, shielded: true }) });
 events.sort((a, b) => a.at - b.at);
-let simT = 0, evI = 0;
+let simT = 0, evI = 0, revived = false;
+const revive = num('revive', -1);      // &revive=ms: respawn (reset()) this long before the frame, after a death
 function step(dt) {
   simT += dt;
   while (evI < events.length && events[evI].at <= simT) events[evI++].fn();
-  S.dead = P.dead >= 0 && simT >= T_END - P.dead;
+  S.dead = P.dead >= 0 && simT >= T_END - P.dead && !(revive >= 0 && simT >= T_END - revive);
+  if (revive >= 0 && !revived && simT >= T_END - revive) { revived = true; S.hp = S.hpMax; cp.reset(); }
   S.extLight.i = P.ext * (simT >= T_END - 120 ? 1 : 0);
   if (P.fire) S.fireStamp = Math.floor(simT / 140) + (simT >= T_END - 20 ? 1000 : 0);      // a steady burst, one shot on the frame itself
   if (!P.dbg) { cp.camera.fov = wcam.fov; cp.camera.aspect = wcam.aspect; }
   if (Q.get('sunspin')) sunDir.set(Math.cos(simT * 0.0006), 0.55, Math.sin(simT * 0.0006)).normalize();
+  if (Q.has('warpend')) S.warp = simT < T_END - num('warpend', 0) - 400 ? 1 : Math.max(0, (T_END - num('warpend', 0) - simT) / 400);
   cp.update(dt, simT, S);
 }
 const hud = document.getElementById('hud');

@@ -174,6 +174,17 @@ export class View3D {
     this.sun.position.set(-0.45, 1, 0.55);
     this.hemi = new THREE.HemisphereLight(0x8fb8ff, 0x1a1420, 0.9);
     this.scene.add(this.sun, this.hemi);
+    // one shadow map over the whole field: hulls shade themselves and each other
+    if (!lite) {
+      this.gl.shadowMap.enabled = true;
+      this.gl.shadowMap.type = THREE.PCFSoftShadowMap;
+      const sh = this.sun.shadow, sc = sh.camera;
+      this.sun.castShadow = true;
+      sh.mapSize.set(2048, 2048);
+      sc.left = -1150; sc.right = 1150; sc.top = 760; sc.bottom = -760; sc.near = 200; sc.far = 4200;
+      sc.updateProjectionMatrix();
+      sh.bias = -0.0012; sh.normalBias = 0.6; sh.radius = 2.2;
+    }
     // sky, sun, planets, lit fog, dust, the lane, weather — everything that is not gameplay
     this.env = new ADD.Env3D(THREE, this.scene, { quality: lite ? 0.5 : 1, fogLayers: lite ? 1 : undefined, fieldDim: 0.32, renderer: this.gl });
     this.envState = { time: 0, W, H, mode: 'top', speedMul: 1, warpMul: 1, paused: false, ion: 0, eclipse: 0, lights: new Float32Array(16 * 8), lightCount: 0, playerX: 0, playerZ: 0, viewH: 720 };
@@ -303,7 +314,19 @@ export class View3D {
       this.bossKit?.warmup(gl, this.cam, this.scene);
       this.cockpit?.warmup(gl);
       const jobs = [gl.compileAsync(this.scene, this.cam), gl.compileAsync(tmp, this.cam, this.scene)];
-      this.warming = Promise.all(jobs).catch(() => {}).then(() => { this.warming = null; });
+      this.warming = Promise.all(jobs).catch(() => {}).then(() => {
+        this.warming = null;
+        // the shadow pass has its own depth programs, and they only link when a caster is
+        // really drawn: do that once now (everything else is already linked, so it is cheap)
+        if (!gl.shadowMap.enabled) return;
+        try {
+          this.scene.add(tmp);
+          gl.setRenderTarget(rt);
+          gl.render(this.scene, this.cam);
+          gl.setRenderTarget(null);
+        } catch (e) { console.warn('3D warm-up: shadow pass skipped', e); }
+        this.scene.remove(tmp);
+      });
     } catch (e) { console.warn('3D warm-up skipped:', e); }
     gl.setRenderTarget(null);
     for (const o of hidden) o.visible = false;
@@ -577,7 +600,7 @@ export class View3D {
     es.speedMul = 0.6; es.warpMul = 1; es.paused = false; es.ion = 0; es.eclipse = 0; es.intense = false;
     es.lights = fx.lightData; es.lightCount = fx.lightCount; es.playerX = 0; es.playerZ = 0;
     this.env.update(real, cam, es);
-    this.sun.position.copy(this.env.sunDirection);
+    this.sun.position.copy(this.env.sunDirection).multiplyScalar(2200);
     this.sun.color.copy(this.env.sunColor);
     this.hemi.color.copy(this.env.ambientColor);
     this.grade.uniforms.uPunch.value = 0;
@@ -665,7 +688,7 @@ export class View3D {
     const p1 = world.player1, fp = this.mode === 'cockpit';
     this.fwd = fp || this.mode === 'chase';
     if (p1.alive) this._pitDead = 0; else if (!this._pitDead) this._pitDead = now;
-    this.pitShown = fp && !!this.cockpit && (p1.alive || now - this._pitDead < 1500);
+    this.pitShown = fp && !!this.cockpit && (p1.alive || now - this._pitDead < 2200);
     for (const p of world.players()) {
       if (!p.alive) continue;
       const o = this.obj(p, () => {
@@ -681,7 +704,8 @@ export class View3D {
       const L = p.w * 1.34; // hull length in world units (the model is 1 long)
       const px = p.x - ox, pz = p.y - oz;
       o.scale.setScalar(L);
-      o.position.set(px, Math.sin(t / 480 + (p.slot || 0) * 2) * 1.5, pz);
+      const kick = t - p.lastLaser < 260 ? (1 - (t - p.lastLaser) / 260) ** 2 : 0; // the beam shoves the ship back
+      o.position.set(px - kick * L * 0.07, Math.sin(t / 480 + (p.slot || 0) * 2) * 1.5, pz);
       // bank into the strafe, nose into the turn, and pitch with fore/aft thrust
       const pvx = (p.x - (ud.lx ?? p.x)) / Math.max(1, dt || 16.7);
       ud.lx = p.x;
@@ -715,6 +739,7 @@ export class View3D {
         fx.exhaust(px + (n.x - n.r) * L, n.y * L, pz + n.z * L, -1, 0, n.r * L * 1.7, this.exhOpt(thrust >= 2, 0.6));
       }
       this.wounds(o, ud, k);
+      this.mark(p, o, ud);
       if (p.shield) this.bubble(p, px, pz, 36, 0x50dcff, t);
       this.ripple(p, px, pz, 36, CYAN);
       if (world.overUntil && t < world.overUntil) fx.aura(px, 0, pz, 52, GOLD, 0.65); // OVERDRIVE
@@ -767,11 +792,13 @@ export class View3D {
         // jolt back when struck
         const evz = (e.y - (ud.lz ?? e.y)) / Math.max(1, dt || 16.7);
         ud.lz = e.y;
-        ud.roll = (ud.roll || 0) + (Math.max(-0.75, Math.min(0.75, evz * 3.2)) - (ud.roll || 0)) * 0.15;
+        // the sim flies them now (bank into turns, nose along the flight path)
+        const wantRoll = e.bank != null ? Math.max(-1, Math.min(1, e.bank)) * 0.8 : Math.max(-0.75, Math.min(0.75, evz * 3.2));
+        ud.roll = (ud.roll || 0) + (wantRoll - (ud.roll || 0)) * 0.15;
         o.rotation.order = 'YXZ';
-        o.rotation.set(-ud.roll, Math.PI + ud.roll * 0.35, 0);
+        o.rotation.set(-ud.roll, Math.PI + (e.heading != null ? e.heading : ud.roll * 0.35), 0);
         // weapons telegraph on the hull itself: rail charging, battery winding up, bays opening
-        let charge = 0;
+        let charge = e.windup || 0; // a lunge gathering itself
         if (e.type === 'sniper') charge = e.aim ? 1 - Math.max(0, e.aim.until - t) / 800 : 0;
         else if (e.type === 'strafer') charge = e.x <= e.holdX + 4 ? Math.min(1, (t - e.lastShot) / e.strafeDelay) : 0;
         else if (e.type === 'carrier') charge = 1 - Math.min(1, Math.max(0, e.nextDroneAt - t) / 1500);
@@ -793,6 +820,7 @@ export class View3D {
         }
       }
       this.wounds(o, ud, k);
+      this.mark(e, o, ud);
       if (e.elite && !e.dying) fx.aura(ex, 0, ez, e.w * 0.85, GOLD, 0.55);
       if (e.shieldHp > 0) this.bubble(e, ex, ez, e.w * 0.62, 0x5ae6ff, t);
       this.ripple(e, ex, ez, e.w * 0.62, CYAN);
@@ -842,7 +870,9 @@ export class View3D {
         o.position.set(rx, 0, rz);
         o.rotation.order = 'YXZ';
         o.rotation.set(t / 110, -rad, 0); // spins around its own axis as it flies
-        fx.rocketTrail(rx - cx * r.w * 0.8, 0, rz - cz * r.w * 0.8, -cx, -cz, r.enemyFire ? RK_ENEMY : RK_PLAYER);
+        const born = t - (o.userData.born ??= t);
+        if (born < 170 && !r.enemyFire) o.position.y = -11 * (1 - born / 170) * (born / 170 + 0.4); // …it falls clear first
+        else fx.rocketTrail(rx - cx * r.w * 0.8, 0, rz - cz * r.w * 0.8, -cx, -cz, r.enemyFire ? RK_ENEMY : RK_PLAYER);
       }
     }
 
@@ -891,7 +921,11 @@ export class View3D {
         g.add(glow, shell, cage, icon);
         g.userData.spin = [shell, cage];
         g.userData.onDrop = (x) => { // grabbed (not drifted off the left edge)
-          if (pu.dead && pu.x > 0) fx.pickup(x.position.x, 6, x.position.z, col);
+          if (!pu.dead || pu.x <= 0) return;
+          fx.pickup(x.position.x, 6, x.position.z, col);
+          let near = null, nd = 1e9; // the charge leaps to whoever took it
+          for (const q of world.players()) { const d = Math.hypot(q.x - pu.x, q.y - pu.y); if (q.alive && d < nd) { nd = d; near = q; } }
+          if (near && nd < 160) fx.lightningBolt(x.position.x, 6, x.position.z, near.x - ox, 2, near.y - oz, { color: [this.col.set(col).r * 2, this.col.g * 2, this.col.b * 2] });
         };
         g.userData.ownMats = [shell.material, cage.material, glow.material, icon.material];
         return g;
@@ -941,6 +975,10 @@ export class View3D {
       if (e.dead) continue;
       if (e instanceof MeshDebris) {
         const age = t - e.spawn, p = age / e.life;
+        const bl = this._bossLast;
+        if (e._noDraw || (e._noDraw === undefined && bl?.wreck && t - bl.t < 400 && age < 400 && Math.hypot(e.x - bl.x, e.y - bl.y) < 260
+          && !world.enemies.some((b) => b.isBoss && !b.dead))) { e._noDraw = true; continue; }
+        e._noDraw = false;
         const o = this.obj(e, () => {
           const d = this.model(e.sub, { own: true, kind: 'debris', scale: e.scale });
           d.userData.vy = (Math.random() - 0.5) * 0.16; // tumble out of the plane too
@@ -996,6 +1034,7 @@ export class View3D {
 
     this.sweep();
     this.shards(dt);
+    this.wrecksUpdate(dt, t, world);
 
     // environment: gets the frame's light list so the mist glows around fire and gunfire
     const es = this.envState, ion = world.ionStorm, ec = world.eclipse;
@@ -1012,7 +1051,7 @@ export class View3D {
     // run start: the ship is catapulted out of its carrier
     if (t < LAUNCH_MS && !world.over && this.env.launch) this.env.launch(t / LAUNCH_MS, es.playerX, es.playerZ);
     this.env.update(dt, this.cam, es);
-    this.sun.position.copy(this.env.sunDirection);
+    this.sun.position.copy(this.env.sunDirection).multiplyScalar(2200);
     this.sun.color.copy(this.env.sunColor);
     this.hemi.color.copy(this.env.ambientColor);
 
@@ -1025,6 +1064,42 @@ export class View3D {
     this.grade.uniforms.uPunch.value = settings.motionFx ? Math.min(1, (world.impactFx || 0) + (world.dmgFlash || 0) * 0.6) : 0;
     this.grade.uniforms.uTime.value = (t % 1000) / 1000;
     this.composer.render();
+  }
+
+  // a shot the sim has just landed on this entity → a scorch on the model, right there
+  mark(ent, o, ud) {
+    const h = ent.hitAt;
+    if (!h || h === ud._hit) return;
+    ud._hit = h;
+    if (!ud.hit) return;
+    o.updateMatrixWorld();
+    const v = this._hv || (this._hv = new THREE.Vector3());
+    o.worldToLocal(v.set(this.mapX(h.x), 0, h.y - H / 2));
+    ud.hit(v.x, v.y, v.z, h.power);
+    this.fx.sparks(this.mapX(h.x), 2, h.y - H / 2, h.power > 0.7 ? 7 : 3, -1, 0, { speed: 170, spread: 1.4 });
+  }
+
+  // HUD name of a boss: its ship class
+  bossName(b) {
+    const cls = ADD?.Bosses3D?.classOf?.(b.level, !!b.mega);
+    return cls ? `${b.mega ? 'MEGA ' : ''}${String(cls).toUpperCase()}` : null;
+  }
+
+  // the broken halves of a dead capital ship drift on, burning, long after the kill
+  wrecksUpdate(dt, t, world) {
+    const L = this.wreckList;
+    if (!L || !L.length) return;
+    for (let i = L.length - 1; i >= 0; i--) {
+      const w = L[i], u = w.userData;
+      u.scroll = 60 * Math.min(12, world.warpMul || 1);
+      u.update?.(dt, t);
+      if (u.done) { this.scene.remove(w); u.dispose?.(); L.splice(i, 1); }
+    }
+  }
+
+  dropWrecks() {
+    for (const w of this.wreckList || []) { this.scene.remove(w); w.userData.dispose?.(); }
+    if (this.wreckList) this.wreckList.length = 0;
   }
 
   // smoke and flame from the holes a hull's damage state has opened
@@ -1076,6 +1151,7 @@ export class View3D {
   }
 
   dropShards() {
+    this.dropWrecks();
     for (const d of this.shardList || []) { this.scene.remove(d.o); d.o.userData.dispose?.(); }
     if (this.shardList) this.shardList.length = 0;
   }
@@ -1135,6 +1211,7 @@ export class View3D {
     s.warning = !!world.bossWarnStart;
     s.ion = this.envState.ion;
     s.dead = !p.alive;
+    s.deadMs = p.alive ? 0 : performance.now() - this._pitDead; // real time: the sim is in slow motion by then
     s.paused = !!(world.paused || world.over);
     s.shake = this.trauma || 0;
 
@@ -1156,8 +1233,13 @@ export class View3D {
     // tactical display: everything on the field, relative to the ship, in field lengths
     const B = s.blips, max = B.length / 4;
     let n = 0, nd = 1e9, nx = 1, nz = 0;
+    const fb = this._fb || (this._fb = { side: 0, above: false, size: 0, t: 0 });
+    fb.size = 0;
     const put = (x, y, kind, size, threat) => {
       const dx = x - p.x, dy = y - p.y;
+      if (threat && size > 44 && Math.abs(dx) < 110 && Math.abs(dy) < 170 && size / 130 > fb.size) {
+        fb.size = Math.min(1, size / 130); fb.side = dy < 0 ? -1 : 1; fb.t = (110 - dx) / 220;
+      }
       if (threat) { const d2 = dx * dx + dy * dy; if (d2 < nd) { nd = d2; nx = dx; nz = dy; } }
       if (n >= max) return;
       const i = n++ * 4;
@@ -1171,6 +1253,11 @@ export class View3D {
     for (const q of world.players()) if (q !== p && q.alive) put(q.x, q.y, 6, q.w, false);
     for (const b of world.enemyBullets) if (!b.dead) put(b.x, b.y, 1, 8, true);
     s.blipCount = n;
+    // head: glance toward the nearest threat ahead; a big body sweeping past shadows the cabin
+    const want = nd < 1e8 && nx > 40 ? Math.max(-0.2, Math.min(0.2, Math.atan2(nz, nx) * 0.4)) : 0;
+    this.lookYaw = (this.lookYaw || 0) + (want - (this.lookYaw || 0)) * 0.04;
+    (s.look || (s.look = { yaw: 0, pitch: 0 })).yaw = this.lookYaw;
+    s.flyby = fb.size > 0 ? fb : null;
     s.laneL = -p.y / W; s.laneR = (H - p.y) / W;
 
     // hits: a lost life cracks the canopy from the side the nearest threat was on
@@ -1283,6 +1370,11 @@ export class View3D {
       const g = this.bossKit.build(b.level, b.gen, { mega: !!b.mega });
       const u = g.userData;
       u.release = (x) => x.userData.dispose?.();
+      u.onDrop = (x) => { // killed: its sections stay behind as wreckage
+        if (!b.dead || !x.userData.detachWreck) return;
+        const w = x.userData.detachWreck();
+        if (w) { this.scene.add(w); (this.wreckList || (this.wreckList = [])).push(w); }
+      };
       u.blown = b.gen.turrets.map((tr, i) => { if (tr.dead) u.blowTurret(i, { silent: true }); return !!tr.dead; });
       return g;
     });
@@ -1304,6 +1396,10 @@ export class View3D {
     ud.setFlash(Math.max(0, b.flash || 0) > 0.04 ? Math.round(b.flash * 12) / 20 : 0);
     ud.setDamage(Math.round(Math.max(0, 1 - b.health / b.maxHealth) * 40) / 40);
     ud.setShield(b.shieldUntil > t);
+    const hf = b.health / b.maxHealth, stage = hf <= 0.33 ? 2 : hf <= 0.66 ? 1 : 0;
+    if (stage !== ud.stage) { ud.setStage?.(stage, { instant: ud.stage === undefined }); ud.stage = stage; }
+    this.mark(b, o, ud);
+    (this._bossLast || (this._bossLast = {})).t = t; this._bossLast.x = b.x; this._bossLast.y = b.y; this._bossLast.wreck = !!ud.detachWreck;
     ud.setArrive(Math.min(1, (t - b.spawnTime) / 1500));
     const tele = (L, ms) => (!L ? 0 : L.phase === 'telegraph' ? Math.max(0, 1 - (L.until - t) / ms) : 1);
     ud.setCharge('laser', tele(b.laser, 900));
@@ -1496,7 +1592,8 @@ export class View3D {
       // the pilot's eyes: high over the lane, looking down it and into the turn
       const cp = Math.cos(EYE_PITCH) * 600, sp = Math.sin(EYE_PITCH) * 600;
       pos = [px + 10, EYE_Y, pz];
-      tgt = [px + 10 + cp, EYE_Y - sp, pz + (p.tilt || 0) * 260];
+      const lk = motion ? this.lookYaw || 0 : 0; // the pilot's head follows the nearest threat
+      tgt = [px + 10 + cp, EYE_Y - sp, pz + (p.tilt || 0) * 260 + Math.tan(lk) * 600];
       roll = -(p.tilt || 0) * 0.8;
       fov = COCKPIT_FOV + (p.boosting ? 6 : 0);
     } else if (mode === 'tilt') {
@@ -1539,6 +1636,19 @@ export class View3D {
         else if (mode === 'cockpit') { tgt[1] += 50; fov -= 3; }
         else { pos[0] += W * 0.07; tgt[0] += W * 0.07; pos[1] *= 0.94; pos[2] *= 0.94; }
         ease = 0.965;
+      }
+      if (boss && !boss.deathSeq && t - boss.spawnTime < 3200 && t - boss.spawnTime > 250) { // the reveal: every camera turns to the new arrival
+        const q = (t - boss.spawnTime - 250) / 2950, g = Math.pow(Math.sin(Math.PI * q), 0.6);
+        const bx = this.mapX(boss.x), bz = boss.y - H / 2;
+        if (mode === 'chase') { tgt[0] += (bx - tgt[0]) * 0.75 * g; tgt[2] += (bz - tgt[2]) * 0.75 * g; pos[1] -= 110 * g; pos[0] += 120 * g; fov -= 13 * g; }
+        else if (mode === 'cockpit') { tgt[0] += (bx - tgt[0]) * 0.8 * g; tgt[2] += (bz - tgt[2]) * 0.8 * g; tgt[1] += (10 - tgt[1]) * 0.6 * g; fov -= 17 * g; }
+        else {
+          const z = 0.2 * g, cx = Math.min(bx, W * 0.34);
+          pos[0] += (cx - pos[0]) * z * 1.5; tgt[0] += (cx - tgt[0]) * z * 1.5;
+          pos[2] += (bz - tgt[2]) * z; tgt[2] += (bz - tgt[2]) * z;
+          pos[1] *= 1 - z * 0.8;
+        }
+        ease = 0.955;
       }
       if (boss?.deathSeq) { // the kill: push in on the dying hull and drift around it
         const bx = this.mapX(boss.x), bz = boss.y - H / 2, q = Math.min(1, (t - boss.deathSeq.start) / 1700);
