@@ -17,6 +17,10 @@
 <script>
   // fx3d dev harness. Deterministic: ?scene=explosions|bolts|beams|engines|lights|misc|all &t=<ms> &cam=top|tilt|chase
   //   (also scene=bossdeath|volley|impacts)
+  //   scene=jet     engine close-ups on stand-in hulls: &boost=0|1 &strafe=1 (the player weaves) &ign=<ms before the end
+  //                 the afterburner lights> &who=player|enemy|boss (what the camera frames) — try cam=chase|cockpit|tilt|top
+  //   scene=close   what the cockpit sees at 100-300 units: &fxk=explosion|fire|smoke|hits|muzzle|shield|pickup|warp|dust|exhaust &d=<distance>
+  //   cam=cockpit   the pilot's eye; any camera: &px &py &pz (eye) &lx &ly &lz (look-at) &fov
   //   &q=<quality> &zoom=<n>&cx=<x>&cz=<z> (close-up) &floor=1 &bloom=0 &bg=0 &live=1 (run in real time) &seed=<n>
   const errBox = document.getElementById('err');
   function showErr(m) { errBox.style.display = 'block'; errBox.textContent += m + '\n'; }
@@ -89,6 +93,10 @@ const zoom = +Q.get('zoom') || 1, cx = +Q.get('cx') || 0, cz = +Q.get('cz') || 0
 const PLAYER = { x: -420, z: 0 };
 if (CAM === 'top') {
   cam.position.set(cx, hTop / zoom, cz + 0.01); cam.up.set(0, 0, -1); cam.lookAt(cx, 0, cz);
+} else if (CAM === 'cockpit') {
+  cam.fov = 70 / zoom;
+  cam.position.set(PLAYER.x + 6, 9, PLAYER.z);
+  cam.lookAt(PLAYER.x + 400, 6 + cx * 0, PLAYER.z + cz);
 } else if (CAM === 'chase') {
   cam.fov = CHASE_FOV / zoom;
   cam.position.set(PLAYER.x - 540, 330, PLAYER.z * 0.84);
@@ -97,6 +105,13 @@ if (CAM === 'top') {
   cam.position.set(cx - W * 0.04 / zoom, hTop * 0.74 / zoom, cz + hTop * 0.74 / zoom);
   cam.lookAt(cx, 0, cz + H * 0.07 / zoom);
 }
+if (Q.has('px') || Q.has('lx')) {
+  const g = (k, d) => (Q.has(k) ? +Q.get(k) : d);
+  cam.up.set(0, 1, 0);
+  cam.position.set(g('px', cam.position.x), g('py', cam.position.y), g('pz', cam.position.z));
+  cam.lookAt(g('lx', 0), g('ly', 0), g('lz', 0));
+}
+if (Q.has('fov')) cam.fov = +Q.get('fov');
 cam.updateProjectionMatrix(); cam.updateMatrixWorld();
 
 const composer = new EffectComposer(gl);
@@ -348,7 +363,60 @@ function sVolley() {
     fx.exhaust(PLAYER.x - 34, 0, PLAYER.z + 7, -1, 0, 9, { color: 'player', intensity: 0.7 });
   });
 }
-({ bossdeath: sBossDeath, volley: sVolley, impacts: sImpacts, explosions: sExplosions, bolts: sBolts, beams: sBeams, engines: sEngines, lights: sLights, misc: sMisc, all: sAll }[SCENE] || sAll)();
+// Engines on stand-in hulls. The player (twin nozzles) cruises, weaves and lights its afterburner; a row of enemy
+// fighters and a capital ship with three big engines fly the other way.
+function sJet() {
+  const who = Q.get('who') || 'player', boost = Q.get('boost') === '1', strafe = Q.get('strafe') === '1';
+  const ign = Q.has('ign') ? TEND - +Q.get('ign') : -1;
+  const pl = CAM === 'cockpit' ? null : ship(PLAYER.x, PLAYER.z, 2);
+  const en = [[-140, -150], [-60, 120], [140, -40]].map((e) => [ship(e[0], e[1], 0), e[0], e[1]]);
+  const boss = ship(430, 40, 0, 4.2);
+  const PO = { color: 'player', boost: false, intensity: 0.55 }, EO = { color: 'enemy', boost: false }, BO = { color: 'enemy', boost: false };
+  if (who !== 'player' && !Q.has('px')) {
+    const t = who === 'boss' ? [430 + 150, 40] : [-60 + 40, 120];
+    if (CAM === 'cockpit') { cam.position.set(t[0] - 330, 9, t[1] - 60); cam.lookAt(t[0], 0, t[1]); }
+    else if (CAM === 'chase') { cam.position.set(t[0] + 420, 260, t[1] + 30); cam.lookAt(t[0] - 60, 0, t[1]); }
+    cam.updateMatrixWorld();
+  }
+  each.push((T) => {
+    const pz = PLAYER.z + (strafe ? Math.sin(T * 0.0052) * 130 : 0);
+    const b = ign >= 0 ? T >= ign : boost;
+    if (pl) pl.position.z = pz;
+    PO.boost = b;
+    fx.exhaust(PLAYER.x - 32, 0, pz - 7, -1, 0, 11, PO);
+    fx.exhaust(PLAYER.x - 32, 0, pz + 7, -1, 0, 11, PO);
+    for (const e of en) {
+      const ez = e[2] + Math.sin(T * 0.004 + e[1]) * (strafe ? 70 : 0);
+      e[0].position.z = ez;
+      EO.boost = b && e[1] > 0;
+      fx.exhaust(e[1] + 32, 0, ez, 1, 0, 13, EO);
+    }
+    BO.boost = b;
+    const bz = 40 + (strafe ? Math.sin(T * 0.0021) * 60 : 0);
+    boss.position.z = bz;
+    for (const k of [-1, 0, 1]) fx.exhaust(430 + 128, 4, bz + k * 46, 1, 0, k ? 40 : 52, BO);
+    for (let i = 0; i < 6; i++) fx.bolt(PLAYER.x + 60 + ((i * 110 + T * 0.7) % 660), 0, pz, 1, 0, B.player);
+    for (let i = 0; i < 5; i++) fx.bolt(PLAYER.x + 300 - ((i * 130 + T * 0.4) % 650), 0, pz + 22, -1, 0, B.enemy);
+  });
+}
+// One effect at short range, as the cockpit camera meets it: default eye at the pilot, the effect &d= units ahead.
+function sClose() {
+  const k = Q.get('fxk') || 'explosion', d = +Q.get('d') || 200;
+  const x = PLAYER.x + d, z = PLAYER.z + (+Q.get('oz') || 0);
+  if (k !== 'explosion') ship(x + 34, z, 0);
+  const one = { explosion: () => fx.explosion(x, 0, z, +Q.get('s') || 1), muzzle: () => fx.muzzle(x, 0, z, -1, 0, { color: 'enemy' }),
+    shield: () => fx.shieldHit(x + 34, 0, z, -1, 0.3, 50), pickup: () => fx.pickup(x, 0, z, 'rgb(110,255,120)'),
+    warp: () => fx.warpIn(x + 34, 0, z, 60), dust: () => fx.dust(x, 0, z, 90, { count: 12, chips: 5 }),
+    hits: () => { fx.impact(x, 0, z, -1, 0); for (let i = 0; i < 4; i++) fx.sparks(x, 0, z + 14, 2, -1, (Math.random() - 0.5), { speed: 260, spread: 0.5 }); } }[k];
+  if (one) at(-(+Q.get('age') || 120), one);
+  each.push((T) => {
+    if (k === 'fire') fx.fireTrail(x, 0, z, { scale: +Q.get('s') || 1 });
+    else if (k === 'smoke') { if (Math.random() < 0.3) fx.smokePuff(x + 20, 6, z, 9, { dark: 0.75 }); if (Math.random() < 0.2) fx.smokePuff(x, 0, z + 20, 40, { dark: 0.7 }); }
+    else if (k === 'exhaust') { fx.exhaust(x + 66, 0, z, 1, 0, 13, { color: 'enemy', boost: Q.get('boost') === '1' }); }
+    if (k !== 'exhaust') fx.exhaust(x + 66, 0, z, 1, 0, 13, { color: 'enemy' });
+  });
+}
+({ jet: sJet, close: sClose, bossdeath: sBossDeath, volley: sVolley, impacts: sImpacts, explosions: sExplosions, bolts: sBolts, beams: sBeams, engines: sEngines, lights: sLights, misc: sMisc, all: sAll }[SCENE] || sAll)();
 events.sort((a, b) => a[0] - b[0]);
 
 let frame = 0, ev = 0;

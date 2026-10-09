@@ -4,7 +4,9 @@
 import { W, H, STEP, randInt, rand } from './const.js';
 import * as input from './input.js';
 import * as audio from './audio.js';
-import { Button, ButtonGroup, drawText } from './ui.js';
+import { Button, ButtonGroup } from './ui.js';
+import * as ui from './ui.js';
+import { OV } from './lb.js';
 import { Star } from './entities.js';
 import { Net, CoopHub, CoopLink } from './net.js';
 import { VersusOnline } from './versus_online.js';
@@ -15,16 +17,15 @@ let codeOverlay = null;
 function askCode() {
   if (!codeOverlay) {
     codeOverlay = document.createElement('div');
-    codeOverlay.style.cssText =
-      'position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.65);z-index:10;font-family:Orbitron,sans-serif;';
+    codeOverlay.style.cssText = OV.WRAP;
     codeOverlay.innerHTML = `
-      <div style="background:#111;border:2px solid #09f;border-radius:10px;padding:26px 30px;text-align:center;max-width:90vw">
-        <div style="color:#fff;font-size:19px;font-weight:700;margin-bottom:14px">ENTER ROOM CODE</div>
+      <div style="${OV.BOX}">
+        <div style="${OV.TITLE}">ENTER ROOM CODE</div>
         <input id="codeov-input" maxlength="6" placeholder="ABCD" autocomplete="off" spellcheck="false"
-          style="width:200px;max-width:70vw;background:#000;color:#4cf;border:1px solid #333;border-radius:6px;padding:10px 12px;font:700 24px Orbitron,sans-serif;text-align:center;letter-spacing:6px;outline:none;text-transform:uppercase">
-        <div style="margin-top:16px;display:flex;gap:10px;justify-content:center">
-          <button id="codeov-ok" style="background:#09f;color:#000;border:0;border-radius:6px;padding:10px 22px;font:700 15px Orbitron,sans-serif;cursor:pointer">JOIN</button>
-          <button id="codeov-cancel" style="background:#444;color:#fff;border:0;border-radius:6px;padding:10px 22px;font:700 15px Orbitron,sans-serif;cursor:pointer">CANCEL</button>
+          style='${OV.INPUT};font-size:24px;letter-spacing:.3em'>
+        <div style="margin-top:18px;display:flex;gap:10px;justify-content:center">
+          <button id="codeov-ok" style='${OV.OK}'>JOIN</button>
+          <button id="codeov-cancel" style='${OV.ALT}'>CANCEL</button>
         </div>
       </div>`;
     document.body.appendChild(codeOverlay);
@@ -170,52 +171,69 @@ export class OnlineState {
   }
 
   draw(g) {
-    g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
+    const { C, rgba } = ui;
+    ui.begin(g);
+    ui.spaceBackdrop(g);
     for (const s of this.stars) s.draw(g);
-    drawText(g, 'ONLINE', W / 2, 110, 42, 'rgb(0,200,255)');
+    ui.title(g, W / 2, 96, 'ONLINE', { size: 34, align: 'center', sub: this.mode === 'coop' ? 'CO-OP · UP TO 4 PLAYERS' : 'VERSUS · 1 ON 1' });
+    const dots = '.'.repeat(1 + (Math.floor(performance.now() / 400) % 3));
+    const status = (str, y, color = C.gold) => ui.text(g, str, W / 2, y, { size: 12, weight: 700, track: 0.22, align: 'center', color: rgba(color), maxW: W - 40 });
 
     if (this.phase === 'menu') {
-      drawText(g, 'MODE', W / 2, H / 2 - 195, 18, 'rgb(160,160,160)');
-      this.modeVs.draw(g); this.modeCo.draw(g);
+      const last = this.menu.buttons[this.menu.buttons.length - 1];
+      const pw = Math.min(360, W - 32), top = this.modeVs.cy - 74, bottom = last.cy + last.h / 2 + 24;
+      ui.panel(g, W / 2 - pw / 2, top, pw, bottom - top, { title: 'MODE' });
+      // mode switch: two tabs
+      for (const b of [this.modeVs, this.modeCo]) {
+        b.glow = (b.glow || 0) + ((b.selected ? 1 : 0) - (b.glow || 0)) * 0.25;
+        ui.tab(g, b.cx - b.w / 2, b.cy - b.h / 2 + 4, b.w, b.h - 8, b.text, { on: b.glow, a: b.hovered ? 1 : 0, color: b === this.modeVs ? C.gold : C.cyan });
+      }
       this.menu.draw(g);
-      drawText(g, this.mode === 'coop' ? 'Up to 4 players over the internet' : 'Play 1-on-1 over the internet', W / 2, H - 60, 14, 'rgb(140,140,140)');
+      ui.text(g, this.mode === 'coop' ? 'Up to 4 players over the internet' : 'Play 1-on-1 over the internet', W / 2, H - 60, { size: 13, align: 'center', color: rgba(C.mid, 0.8), maxW: W - 40 });
     } else if (this.phase === 'hosting') {
-      this.drawCode(g, 'Waiting for player…');
+      this.drawCode(g, 'Waiting for player');
       this.cancelBtn.draw(g);
     } else if (this.phase === 'lobby') {
       // host co-op waiting room
-      drawText(g, 'ROOM CODE', W / 2, H / 2 - 150, 20, 'rgb(160,160,160)');
-      drawText(g, this.hub?.code || '…', W / 2, H / 2 - 92, 72, 'rgb(0,255,140)');
+      const pw = Math.min(360, W - 32), top = H / 2 - 190;
+      ui.panel(g, W / 2 - pw / 2, top, pw, 312, { title: 'ROOM CODE' });
+      ui.text(g, this.hub?.code || '…', W / 2, H / 2 - 92, { size: 60, weight: 300, track: 0.3, align: 'center', color: rgba(C.cyan), maxW: pw - 40 });
       const total = 1 + (this.hub?.count || 0);
-      drawText(g, `PLAYERS: ${total} / 4`, W / 2, H / 2 - 28, 24, '#fff');
+      ui.text(g, 'PLAYERS', W / 2 - pw / 2 + 22, H / 2 - 28, { size: 10, weight: 700, track: 0.24, color: rgba(C.low) });
+      ui.text(g, `${total} / 4`, W / 2 + pw / 2 - 22, H / 2 - 28, { size: 13, weight: 700, track: 0.1, align: 'right' });
       for (let i = 0; i < 4; i++) {
-        const on = i < total;
-        drawText(g, i === 0 ? 'HOST (YOU)' : (on ? `PLAYER ${i + 1}` : 'OPEN'), W / 2, H / 2 + 12 + i * 26, 16, on ? PLAYER_COLORS[i % 4] : 'rgb(90,90,90)');
+        const on = i < total, y = H / 2 + 12 + i * 26;
+        g.fillStyle = rgba(C.mid, 0.1); g.fillRect(W / 2 - pw / 2 + 22, y - 13, pw - 44, ui.hair());
+        ui.hudIconPips(g, W / 2 - pw / 2 + 24, y, on ? 1 : 0, 1, { size: 8, color: C.ok });
+        ui.text(g, i === 0 ? 'HOST (YOU)' : (on ? `PLAYER ${i + 1}` : 'OPEN'), W / 2 - pw / 2 + 44, y + 0.5,
+          { size: 13, weight: 600, track: 0.14, color: on ? PLAYER_COLORS[i % 4] : rgba(C.low, 0.7) });
       }
-      drawText(g, 'Share the code · press START when ready', W / 2, H - 250, 14, 'rgb(150,150,150)');
-      if (total < 2) drawText(g, 'need at least one more player', W / 2, H - 230, 13, 'rgb(255,150,80)');
+      status('SHARE THE CODE · PRESS START WHEN READY', H - 250, C.mid);
+      if (total < 2) status('NEED AT LEAST ONE MORE PLAYER', H - 230, C.gold);
       this.startBtn.draw(g);
     } else if (this.phase === 'joining') {
-      const dots = '.'.repeat(1 + (Math.floor(performance.now() / 400) % 3));
-      drawText(g, `Connecting${dots}`, W / 2, H / 2, 22, 'rgb(255,210,80)');
+      status(`CONNECTING${dots}`, H / 2);
       this.cancelBtn.draw(g);
     } else if (this.phase === 'lobby-guest') {
-      drawText(g, 'CONNECTED', W / 2, H / 2 - 40, 30, 'rgb(0,255,140)');
-      const dots = '.'.repeat(1 + (Math.floor(performance.now() / 400) % 3));
-      drawText(g, `Waiting for host to start${dots}`, W / 2, H / 2 + 10, 18, 'rgb(255,210,80)');
+      ui.text(g, 'CONNECTED', W / 2, H / 2 - 40, { size: 28, weight: 300, track: 0.3, align: 'center', color: rgba(C.ok) });
+      status(`WAITING FOR HOST TO START${dots}`, H / 2 + 10);
       this.cancelBtn.draw(g);
     } else if (this.phase === 'error') {
-      drawText(g, 'CONNECTION FAILED', W / 2, H / 2 - 60, 30, 'rgb(255,80,80)');
-      drawText(g, this.errorText, W / 2, H / 2 - 15, 15, 'rgb(200,200,200)');
+      const pw = Math.min(400, W - 32);
+      ui.panel(g, W / 2 - pw / 2, H / 2 - 110, pw, 270, { accent: C.danger });
+      ui.text(g, 'CONNECTION FAILED', W / 2, H / 2 - 62, { size: 22, weight: 300, track: 0.26, align: 'center', color: rgba(C.danger), maxW: pw - 40 });
+      ui.text(g, this.errorText, W / 2, H / 2 - 22, { size: 13, align: 'center', color: rgba(C.mid), maxW: pw - 40 });
       this.errorMenu.draw(g);
     }
   }
 
   drawCode(g, waitMsg) {
-    drawText(g, 'ROOM CODE', W / 2, H / 2 - 90, 20, 'rgb(160,160,160)');
-    drawText(g, this.net?.code || '…', W / 2, H / 2 - 30, 72, 'rgb(0,255,140)');
-    drawText(g, 'Share this code with your friend', W / 2, H / 2 + 30, 16, 'rgb(200,200,200)');
+    const { C, rgba } = ui;
+    const pw = Math.min(360, W - 32);
+    ui.panel(g, W / 2 - pw / 2, H / 2 - 130, pw, 230, { title: 'ROOM CODE' });
+    ui.text(g, this.net?.code || '…', W / 2, H / 2 - 30, { size: 60, weight: 300, track: 0.3, align: 'center', color: rgba(C.cyan), maxW: pw - 40 });
+    ui.text(g, 'Share this code with your friend', W / 2, H / 2 + 30, { size: 13, align: 'center', color: rgba(C.mid), maxW: pw - 40 });
     const dots = '.'.repeat(1 + (Math.floor(performance.now() / 400) % 3));
-    drawText(g, `${waitMsg}${dots}`, W / 2, H / 2 + 70, 18, 'rgb(255,210,80)');
+    ui.text(g, `${waitMsg.toUpperCase()}${dots}`, W / 2, H / 2 + 70, { size: 12, weight: 700, track: 0.22, align: 'center', color: rgba(C.gold) });
   }
 }

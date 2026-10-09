@@ -252,14 +252,18 @@ export class GameState extends BaseWorld {
   }
 
   pauseBtn() {
-    return { x: W - 34, y: 72, r: 24 }; // touch pause, under the Level text
+    return { x: W - 34, y: 80, r: 24 }; // touch pause, under the level plate
   }
 
   camBtn() {
-    return { x: W - 88, y: 72, r: 22 }; // touch: next 3D camera (left of pause)
+    return { x: W - 88, y: 80, r: 22 }; // touch: next 3D camera (left of pause)
   }
 
   overdriveBtn() {
+    // cockpit view: the bottom of the screen is the dashboard — the button
+    // moves up under the compact meter in the top-right corner
+    const v3 = this.app.view3d;
+    if (!this.online && v3?.active && v3.mode === 'cockpit') return { x: W - 56, y: 204, r: 40 };
     return { x: W / 2, y: H - 56, r: 44 }; // appears bottom-centre only when ready
   }
 
@@ -360,7 +364,7 @@ export class GameState extends BaseWorld {
     const pit = this._hudPit, m = this.overdrive || 0;
     const bw = pit ? 150 : 240;
     const bx = pit ? W - 14 - bw : W / 2 - bw / 2;
-    const by = pit ? (input.isTouch ? 134 : this.daily ? 108 : 84) : H - 30;
+    const by = pit ? (input.isTouch ? (this.daily ? 152 : 128) : this.daily ? 108 : 84) : H - 30;
     const lx = pit ? W - 14 : W / 2, al = pit ? 'right' : 'center';
     if (active) {
       const rem = (this.overUntil - this.time) / 5000;
@@ -770,6 +774,8 @@ export class GameState extends BaseWorld {
     const chase = !!(v3?.active && (v3.mode === 'chase' || v3.mode === 'cockpit')); // both look down +x
     this.player1.controls = chase ? P1_CHASE_CONTROLS : P1_CONTROLS;
     this.player1.chase = chase;
+    this.pitView = !!(v3?.active && v3.mode === 'cockpit');
+    for (const pl of this.players()) pl.xLimit = this.pitView ? 0.34 : 0;
     if (this.player2 && !this.online) {
       this.player2.controls = chase ? P2_CHASE_CONTROLS : P2_CONTROLS;
       this.player2.chase = chase;
@@ -1186,7 +1192,7 @@ export class GameState extends BaseWorld {
         // chase camera: dragging up flies forward (+x), dragging right strafes (+y)
         const ddx = p.chase ? -(pt.y - this.drag.py) : pt.x - this.drag.px;
         const ddy = p.chase ? pt.x - this.drag.px : pt.y - this.drag.py;
-        p.x = clamp(this.drag.ox + ddx * 1.25, p.w / 2, W - p.w / 2);
+        p.x = clamp(this.drag.ox + ddx * 1.25, p.w / 2, Math.min(W - p.w / 2, p._xr ?? W));
         p.y = clamp(this.drag.oy + ddy * 1.25, p.h / 2, H - p.h / 2);
       } else {
         this.drag = null; // finger lifted
@@ -1222,7 +1228,7 @@ export class GameState extends BaseWorld {
       if (enemy.dead || enemy.dying) continue;
       for (const [group, dmg, isRocket] of [[this.bullets, 1, false], [this.rockets, 4, true]]) {
         for (const b of group) {
-          if (b.dead || !overlap(enemy, b, enemy.isBoss ? 0.78 : 0.9)) continue;
+          if (b.dead || !overlap(enemy, b, enemy.isBoss ? 0.78 : this.pitView ? 1.3 : 0.9)) continue; // from the cockpit hostiles are drawn larger up close: the guns agree
           b.dead = true;
           this.spawnSparks(b.x, b.y, isRocket ? 16 : 8);
           if (enemy.isBoss && enemy.deathSeq) { b.dead = true; continue; } // going down — hull soaks shots
@@ -2049,7 +2055,7 @@ export class GameState extends BaseWorld {
     });
     // on touch the pause button sits top-right at y~72, so drop the DAILY tag below it
     if (this.daily) {
-      const dy = input.isTouch ? 112 : 74, label = `DAILY · ${this.mod.name}`;
+      const dy = input.isTouch ? 120 : 74, label = `DAILY · ${this.mod.name}`;
       const dw = ui.measure(g, label, { size: 10.5, weight: 700, track: 0.14 }) + 16;
       g.fillStyle = rgba(C.ink, 0.5); g.fillRect(W - 8 - dw, dy - 10, dw, 20);
       ui.chip(g, W - 8, dy, label, { color: C.gold, align: 'right' });
@@ -2061,7 +2067,7 @@ export class GameState extends BaseWorld {
     if (!boss) { this._bossGhost = 1; return; }
     const narrow = W < 760;
     const bw = narrow ? W - 40 : Math.min(440, W * 0.34), bx = W / 2 - bw / 2;
-    const by = narrow ? (this.daily && input.isTouch ? 150 : ly + lh + 26) : 60;
+    const by = narrow ? (this.daily && input.isTouch ? 158 : ly + lh + 26) : 60;
     const v = Math.max(0, boss.health) / boss.maxHealth;
     // trailing "recent damage" level eases down behind the real one
     this._bossGhost = Math.max(v, (this._bossGhost ?? 1) - 0.004 * (this.k || 1));
@@ -2279,29 +2285,12 @@ export class GameState extends BaseWorld {
     g.globalCompositeOperation = prev;
   }
 
-  // pause overlay: the base world owns the menu (buttons, navigation, hit
-  // tests) — this only draws it in the kit style with the run's stats on top
+  // pause overlay: the base world draws the panel + menu, this adds the run's stats
   drawPauseOverlay(g) {
     if (!this.paused) return;
-    g.fillStyle = 'rgba(2,5,10,0.62)';
-    g.fillRect(0, 0, W, H);
-    const bs = this.pauseMenu.buttons, first = bs[0], last = bs[bs.length - 1];
-    const pw = Math.min(340, W - 32), top = first.cy - first.h / 2 - 138, bottom = last.cy + last.h / 2 + 26;
-    ui.panel(g, W / 2 - pw / 2, top, pw, bottom - top, { fill: 0.76 });
-    ui.text(g, 'PAUSED', W / 2, top + 40, { size: 28, weight: 300, track: 0.42, align: 'center', color: '#fff' });
-    g.fillStyle = rgba(C.cyan); g.fillRect(W / 2 - 18, top + 64, 36, 2);
     const secs = Math.floor(this.time / 1000);
-    const stats = [['SCORE', ui.fmt(this.score)], ['LEVEL', String(this.level)], ['TIME', `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`]];
-    stats.forEach(([label, v], i) => {
-      const x = W / 2 + (i - 1) * (pw / 3 - 8);
-      ui.text(g, v, x, top + 92, { size: 17, weight: 600, align: 'center', color: '#fff' });
-      ui.text(g, label, x, top + 112, { size: 9, weight: 700, track: 0.26, align: 'center', color: rgba(C.low) });
-    });
-    for (const b of bs) {
-      b.glow = (b.glow || 0) + ((b.hovered || b.selected ? 1 : 0) - (b.glow || 0)) * 0.25;
-      ui.button(g, b.cx - b.w / 2, b.cy - b.h / 2 + 4, b.w, b.h - 8, b.text, { a: b.glow, size: 14 });
-    }
-    if (!input.isTouch) ui.keyHints(g, W / 2, bottom + 26, [['W S', 'NAVIGATE'], ['ENTER', 'SELECT'], ['ESC', 'RESUME']], { align: 'center', size: 10 });
+    super.drawPauseOverlay(g, [['SCORE', ui.fmt(this.score)], ['LEVEL', String(this.level)],
+      ['TIME', `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`]]);
   }
 
   drawToasts(g) {

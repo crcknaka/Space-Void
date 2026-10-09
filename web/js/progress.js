@@ -113,9 +113,9 @@ export function buyUpgrade(id) {
 }
 
 export function awardRun({ score = 0, bossKills = 0, newBest = false } = {}) {
-  const base = Math.max(0, Math.floor(score / 100));
-  const boss = Math.max(0, bossKills) * 15;
-  const best = newBest ? 50 : 0;
+  const base = Math.max(0, Math.floor(score / 40));
+  const boss = Math.max(0, bossKills) * 40;
+  const best = newBest ? 100 : 0;
   const total = base + boss + best;
   progress.credits += total;
   saveProgress();

@@ -10,8 +10,9 @@
 //   leviathan     asymmetric living hull: carapace, scythe arm, maw
 //   citadel       MEGA (level % 5): armoured shell around a reactor core
 //
-// The level seeds everything else: palette (the same hue walk as bossgen.js),
-// livery, towers, engine count, greebles. A boss is built in bossgen's model
+// The level seeds everything else. The n-th ship of a class takes the n-th of its silhouettes (three per class,
+// four for the carrier: different prows, wings, booms, limbs — a different outline from above); the palette walks
+// bossgen's hue; and ornament grows in tiers every four levels (more guns and barrels, spires, gilding, lit detail). A boss is built in bossgen's model
 // units around the same bounding box, with a mount exactly on every
 // gen.turrets[i].pivot, so the integrator keeps bossgen's fit and aim maths.
 //
@@ -79,6 +80,7 @@ const AN = { BAY: 1, RAM: 2, PEEL: 3, LASER: 4, DEPLOY: 5, N: 8 };
 
 const PITCH = lin(0x060709), DARK = lin(0x191b20), GUN = lin(0x33373f), STEEL = lin(0x6b717b), HEAT = lin(0x4a3d34);
 const ENG = { hot: [5.2, 3.9, 2.3], mid: [4.2, 1.4, 0.28], rim: [2.2, 0.45, 0.07] };
+const GILT = lin(0xa07c34);
 const LAMP_RED = [5.5, 0.4, 0.12], LAMP_WHITE = [3.2, 3.0, 2.6], LAMP_AMBER = [4.5, 1.9, 0.22];
 const WINDOW_GLASS = [1.6, 2.3, 2.8];
 
@@ -289,12 +291,13 @@ class Kit {
     this.cur = null; this.sec = -1;
     this.nozzles = []; this.wounds = []; this.rot = []; this.blasts = [];
     this.emitter = [60, 0, 0]; this.bays = []; this.cuts = [];
+    this.tier = 0; // 0..3: how baroque this boss is (later levels carry more of everything)
     this.use('hull');
   }
   use(name) { let b = this.bufs.get(name); if (!b) this.bufs.set(name, (b = newBuf())); this.cur = b; return this; }
   seg(n) { return this.q >= 1 ? n : Math.max(4, Math.round(n * 0.6)); }
   // detail count scaled by quality
-  cnt(n) { return this.q >= 1 ? n : Math.max(1, Math.round(n * 0.5)); }
+  cnt(n) { return Math.max(1, Math.round(n * (this.q >= 1 ? 1 : 0.5) * (1 + 0.22 * this.tier))); }
   rr(a, b) { return a + this.R() * (b - a); }
   pick(l) { return l[Math.floor(this.R() * l.length) % l.length]; }
 
@@ -480,13 +483,16 @@ class Kit {
   }
   // sensor tower: stacked tiers with window bands, a glazed bridge, mast and yards. Returns the top y.
   tower(x, y, z, o = {}) {
-    const l = o.l ?? 12, w = o.w ?? 7, h = o.h ?? 12, tiers = o.tiers ?? 3, C = o.col, C2 = o.col2 || DARK;
+    const T = this.tier, l = o.l ?? 12, w = o.w ?? 7, h = (o.h ?? 12) * (1 + 0.1 * T), tiers = (o.tiers ?? 3) + (T >= 2 ? 1 : 0), C = o.col, C2 = o.col2 || DARK;
     let y0 = y, cl = l, cw = w, cx = x;
     for (let i = 0; i < tiers; i++) {
       const th = (h / tiers) * (i === 0 ? 1.25 : i === tiers - 1 ? 0.75 : 1), nl = cl * 0.86, nw = cw * 0.88, rake = (o.rake ?? 0.7) * (i + 1) * 0.4;
       this.add(tbox(cx - cl / 2, cx + cl / 2, [y0, y0 + th, z - cw / 2, z + cw / 2], [y0, y0 + th * (i === tiers - 1 ? 0.7 : 0.9), z - cw * 0.42, z + cw * 0.42], 0.25), i % 2 ? C2 : C, { win: 210, whole: true });
       // gallery ledge
-      this.metal(box(cx - cl / 2 - 0.4, cx + cl / 2 + 0.3, y0 + th - 0.25, y0 + th, z - cw / 2 - 0.4, z + cw / 2 + 0.4), GUN, { whole: true });
+      this.metal(box(cx - cl / 2 - 0.4, cx + cl / 2 + 0.3, y0 + th - 0.25, y0 + th, z - cw / 2 - 0.4, z + cw / 2 + 0.4), T >= 3 ? GILT : GUN, { whole: true });
+      // later ships: finials on every gallery corner, a lit frieze under it
+      if (T >= 2 && cl > 3) for (const sx of [1, -1]) for (const sz of [1, -1]) this.metal(rod([cx + sx * cl * 0.5, y0 + th, z + sz * cw * 0.5], [cx + sx * cl * 0.5, y0 + th + 1.2 + T * 0.4, z + sz * cw * 0.5], 0.2, 3, 0.03), T >= 3 ? GILT : GUN, { whole: true });
+      if (T >= 1 && cl > 3) this.em(box(cx + cl / 2 + 0.31, cx + cl / 2 + 0.36, y0 + th - 0.22, y0 + th - 0.06, z - cw * 0.44, z + cw * 0.44), [3.2, 0.5, 0.12], CH.NAV);
       y0 += th; cx -= rake * 0.5; cl = nl * 0.82; cw = nw * 0.86;
     }
     // bridge: wrap-around glazing looking forward
@@ -495,7 +501,7 @@ class Kit {
     this.em(tbox(cx + bl * 0.1, cx + bl / 2 + 0.08, [y0 + bh * 0.3, y0 + bh * 0.7, z - bw / 2 - 0.06, z + bw / 2 + 0.06], [y0 + bh * 0.32, y0 + bh * 0.56, z - bw * 0.37, z + bw * 0.37]), mul(WINDOW_GLASS, o.glass ?? 1), CH.NAV);
     y0 += bh;
     // mast
-    const mh = o.mast ?? h * 0.55;
+    const mh = (o.mast ?? h * 0.55) * (1 + 0.15 * T);
     this.metal(rod([cx - bl * 0.2, y0, z], [cx - bl * 0.3, y0 + mh, z], 0.34, 4, 0.12), GUN, { whole: true });
     this.metal(box(cx - bl * 0.3 - 0.14, cx - bl * 0.3 + 0.14, y0 + mh * 0.55, y0 + mh * 0.55 + 0.2, z - bw * 0.7, z + bw * 0.7), GUN);
     this.metal(box(cx - bl * 0.3 - 0.14, cx - bl * 0.3 + 0.14, y0 + mh * 0.8, y0 + mh * 0.8 + 0.16, z - bw * 0.4, z + bw * 0.4), GUN);
@@ -530,6 +536,16 @@ class Kit {
     }
     this.halo(x + r, y, z, r * 3.4, mul(col, 0.34), ch, 0.5);
     this.glowCone(x + 0.4, r * 0.8, mul(col, 0.22), x + r * 3.0, r * 0.1, [0, 0, 0], y, z, 10, ch, 1, 1, 1);
+  }
+  // a moving part in its own buffer, modelled about its pivot. o: axis, speed (rad/ms; a steady turn), or
+  // swing (rad) + speed + ph for a sway about `base`; parent = index of the limb it hangs from (pivot is then in that limb's space)
+  limb(pivot, o, build) {
+    const name = 'rot' + this.rot.length, prev = this.cur, sec = this.sec;
+    this.use(name); this.sec = -1;
+    build();
+    this.rot.push({ name, pivot, axis: o.axis || 'y', speed: o.speed ?? 0.001, swing: o.swing || 0, ph: o.ph || 0, base: o.base || 0, parent: o.parent, flex: o.flex || 0 });
+    this.cur = prev; this.sec = sec;
+    return this.rot.length - 1;
   }
   // record a place where battle damage opens (first listed opens first)
   wound(x, y, z, r) { this.wounds.push([x, y, z, r]); }
@@ -650,6 +666,7 @@ const HULL_FRAG_COLOR = /* glsl */`
     // bioluminescent pores: a soft dot in the middle of one scale in eight
     float lit = step(0.9, ch) * dark * (1.0 - smoothstep(0.004, 0.035 + bAA * 0.1, d1)) * clamp(0.9 / bAA, 0.4, 1.0);
     bEmis += uBAcc * lit * (0.25 + 0.75 * pulse) * 0.6 * uBLv[18];
+    bEmis += uBAcc * groove * dark * uBS.x * (0.02 + 0.07 * pulse) * uBLv[18];   // the veins between the scales light as it is hurt
     bRough = 0.26 + 0.3 * edge; bMetal = 0.55;
   } else {
     float wn = bvn(vBP * 0.6 + uBK.z);
@@ -778,7 +795,7 @@ function dressHull(k, F, x0, x1, P, o = {}) {
     let prev = null;
     for (let x = x0; x >= x1 - 0.01; x -= 4) {
       const d = F.ring(x)[s > 0 ? 1 : 11], p = [x, d[1] + 0.2, d[2] * 0.985];
-      if (prev) k.metal(rod(prev, p, 0.24, 4), GUN, { whole: true });
+      if (prev) k.metal(rod(prev, p, 0.24, 4), k.tier >= 3 ? GILT : GUN, { whole: true });
       prev = p;
     }
     if (o.hatches !== false) for (let x = x0 - 2, i = 0; x > x1 + 2; x -= 2.4, i++) {
@@ -787,9 +804,33 @@ function dressHull(k, F, x0, x1, P, o = {}) {
       k.dark(box(x - 0.8, x + 0.8, y - 0.1, y + 0.12, z - 0.5, z + 0.5), i % 3 ? PITCH : P.hull2);
       if (i % 4 === 1) k.em(box(x - 0.2, x + 0.2, y + 0.12, y + 0.2, z - 0.16, z + 0.16), [1.6, 1.5, 1.2], CH.STATIC);
     }
-    if (o.flak !== false) for (let x = x0 - 6; x > x1 + 4; x -= o.flakStep ?? 7) {
+    if (o.flak !== false) for (let x = x0 - 6; x > x1 + 4; x -= (o.flakStep ?? 7) - k.tier) {
       const z = s * (F.hw(x) * 0.9 + 0.2), y = F.top(x) * 0.55 + 0.5;
       flak(k, x, y, z, s);
+    }
+    const T = k.tier;
+    // tier 1+: broadside guns low on the flank, muzzles that ripple on 'volley'
+    if (T >= 1 && o.guns !== false) for (let x = x0 - 8, i = 0; x > x1 + 6; x -= 11 - T * 1.5, i++) {
+      const r = F.ring(x), b = r[s > 0 ? 4 : 8], a = [x, b[1] + 0.6, b[2] * 0.98], e = [x + 3.2, b[1] + 0.2, b[2] + s * 3.4];
+      k.metal(ball(a[0], a[1], a[2], 1.1, 6, 3), GUN, { whole: true });
+      k.metal(rod(a, e, 0.34, 4), GUN, { whole: true });
+      k.em(rod([e[0] - 0.05, e[1], e[2] - s * 0.05], [e[0] + 0.14, e[1], e[2] + s * 0.14], 0.38, 4), [4, 1.5, 0.3], CH.VOLLEY, 0.1 + 0.1 * (i % 8));
+    }
+    // tier 2+: lamp spires along the deck edge, a lit keel line
+    if (T >= 2) {
+      for (let x = x0 - 4; x > x1 + 4; x -= 9) {
+        if (o.keep && o.keep(x, 0)) continue;
+        const d = F.ring(x)[s > 0 ? 1 : 11], h = 3 + T + (Math.round(x) % 3);
+        k.metal(rod([x, d[1], d[2] * 0.97], [x - 0.6, d[1] + h, d[2] * 0.97], 0.26, 3, 0.04), T >= 3 ? GILT : GUN, { whole: true });
+        k.lamp(x - 0.6, d[1] + h + 0.2, d[2] * 0.97, 0.2, T >= 3 ? LAMP_AMBER : LAMP_RED, CH.BEACON, 0.01 + ((Math.round(x) % 4) + 4) % 4 * 0.2);
+      }
+      for (let x = x0 - 6; x > x1 + 6; x -= 5) { const c = F.ring(x)[s > 0 ? 5 : 7]; k.em(box(x - 1.2, x + 1.2, c[1] - 0.12, c[1], c[2] - 0.15, c[2] + 0.15), mul(P.glow, 0.6), CH.ACCENT); }
+    }
+    // tier 3: raked blade fins down the flank and a gilded sheer strake
+    if (T >= 3) for (let x = x0 - 10; x > x1 + 10; x -= 12) {
+      const r = F.ring(x), a = r[s > 0 ? 3 : 9], a2 = F.ring(x - 7)[s > 0 ? 3 : 9];
+      k.add(loft([[[x, a[1] + 1.4, a[2] * 0.96], [x - 7, a2[1] + 1.4, a2[2] * 0.96], [x - 7, a2[1] - 1.4, a2[2] * 0.96], [x, a[1] - 1.4, a[2] * 0.96]], [[x - 6, a[1] + 0.3, a[2] + s * 3.6], [x - 10, a2[1] + 0.2, a2[2] + s * 4.2], [x - 10, a2[1] - 0.2, a2[2] + s * 4.2], [x - 6, a[1] - 0.3, a[2] + s * 3.6]]]), P.paint, { whole: true, anim: [-4, 2, s * 12, AN.PEEL, 0.2] });
+      k.metal(rod([x - 6, a[1], a[2] + s * 3.7], [x - 10, a2[1], a2[2] + s * 4.3], 0.22, 3), GILT, { whole: true });
     }
   }
 }
@@ -828,6 +869,24 @@ function pod(x0, x1, y0, y1, z, hw, c = 1.2) {
     ringRect(x0, lerp(y0, y1, 0.3), lerp(y0, y1, 0.78), z - hw * 0.3, z + hw * 0.3, c * 0.3), ringRect(x0 - 5, y0, y1, z - hw, z + hw, c),
     ringRect(x1 + 6, y0, y1, z - hw, z + hw, c), ringRect(x1, y0 + 1, y1 - 1, z - hw * 0.82, z + hw * 0.82, c * 0.8),
   ]);
+}
+// An outline-making wing: a thick plate (convex poly [[x,z]…], first edge = the root) with a painted leading band,
+// spars, a lit trailing strip and a tip lamp. s = side (for the lamp colour); o: y, th, col, lamp [x,z], peel
+function wing(k, P, poly, s, o = {}) {
+  const y = o.y ?? -0.4, th = o.th ?? 1.4, n = poly.length;
+  k.add(prismY(poly, y, y + th, 0.96, poly[0][0], poly[0][1]), o.col || P.hull2, { whole: false });
+  // leading band: inset copy of the poly's outboard half
+  const c = centroid(poly.map((p) => [p[0], 0, p[1]])), ins = (p, f) => [lerp(p[0], c[0], f), lerp(p[1], c[2], f)];
+  k.add(prismY([ins(poly[0], 0.08), ins(poly[n - 1], 0.08), ins(poly[n - 1], 0.3), ins(poly[0], 0.3)], y + th, y + th + 0.14), o.band || P.paint);
+  for (const f of [0.3, 0.55, 0.8]) {
+    const a = [lerp(poly[0][0], poly[n - 1][0], f), lerp(poly[0][1], poly[n - 1][1], f)], b = [lerp(poly[1][0], poly[n - 2][0], f), lerp(poly[1][1], poly[n - 2][1], f)];
+    k.metal(rod([lerp(a[0], b[0], 0.1), y + th + 0.1, lerp(a[1], b[1], 0.1)], [lerp(a[0], b[0], 0.9), y + th + 0.1, lerp(a[1], b[1], 0.9)], 0.22, 3), k.tier >= 3 ? GILT : GUN, { whole: true });
+  }
+  { const a = ins(poly[1], 0.12), b = ins(poly[2 % n], 0.12); k.em(prismY([a, b, ins(poly[2 % n], 0.2), ins(poly[1], 0.2)], y + th, y + th + 0.1), mul(P.glow, 0.7), CH.ACCENT); }
+  const lp = o.lamp || poly[n > 3 ? n - 2 : n - 1];
+  k.lamp(lp[0], y + th + 0.4, lp[1], 0.34, s > 0 ? [0.4, 4.6, 1.0] : LAMP_RED, CH.NAV);
+  if (k.tier >= 1) flak(k, c[0], y + th, c[2], s);
+  if (k.tier >= 2) k.antennas(lp[0] + 2, y + th, lp[1] - s * 2, 3, 1.5, 5);
 }
 // swept plate fin lying in the XZ plane (poly [[x,z]…]), bottom at y
 const fin = (poly, y, th) => prismY(poly, y, y + th, 0.94, poly[0][0], poly[0][1]);
@@ -885,7 +944,7 @@ function turret(k, G, i) {
   k.add(box(-4.4 * s, -1.6 * s, hh * 0.86, hh + 0.3 * s, -hw * 0.42, hw * 0.42, 0.15), cls === 'ram' ? P.hull2 : P.paint);
   k.metal(box(0.2 * s, 2.4 * s, hh * 0.9, hh + 0.5 * s, -0.9 * s, 0.9 * s, 0.2), GUN);
   k.metal(box(4.2 * s, 6.8 * s, 1.5 * s, 3.7 * s, -hw * 0.8, hw * 0.8, 0.4 * s), GUN);
-  const nb = cls === 'lance' ? 1 : cls === 'ram' || cls === 'carrier' ? 2 : i < 2 ? 3 : 2;
+  const T = k.tier, nb = Math.min(4, (cls === 'lance' ? 1 : cls === 'ram' || cls === 'carrier' ? 2 : i < 2 ? 3 : 2) + (T >= 2 && cls !== 'lance' ? 1 : 0));
   const br = (cls === 'ram' ? 1.0 : cls === 'lance' ? 1.15 : 0.72) * s, L = (cls === 'lance' ? 21 : cls === 'ram' ? 15 : 17.5) * s;
   for (let b = 0; b < nb; b++) {
     const z = (b - (nb - 1) / 2) * (cls === 'ram' ? 3.6 : 2.6) * s, y = 2.6 * s;
@@ -902,6 +961,11 @@ function turret(k, G, i) {
   }
   k.em(tbox(4.9 * s, 5.0 * s, [hh * 0.7, hh * 0.76, -hw * 0.5, hw * 0.5], [hh * 0.68, hh * 0.74, -hw * 0.5, hw * 0.5]), [3.6, 0.5, 0.14], CH.NAV);
   k.metal(rod([-4.6 * s, hh * 0.8, hw * 0.5], [-5.8 * s, hh + 5 * s, hw * 0.5], 0.13, 3, 0.04), GUN);
+  if (T >= 1) { // roof-top secondary: a light twin mount
+    k.metal(latheY([[hh + 1.5 * s, 0.5 * s], [hh + 1.1 * s, 1.1 * s], [hh, 1.2 * s]], 6, -3 * s, 0), GUN);
+    for (const e of [0.4, -0.4]) { k.metal(rod([-2.6 * s, hh + 1 * s, e * s], [1.6 * s, hh + 1.5 * s, e * s], 0.16 * s, 4), GUN); k.em(ball(1.7 * s, hh + 1.5 * s, e * s, 0.2 * s, 4, 2), [4, 1.5, 0.3], CH.VOLLEY, 0.6); }
+  }
+  if (T >= 3) k.metal(box(-5.3 * s, 3.2 * s, 1.25 * s, 1.75 * s, -hw * 1.02, hw * 1.02, 0.3 * s), GILT);
 }
 // living turret: a chitin bulb that throws spines
 function bioTurret(k, G, i, s) {
@@ -924,9 +988,12 @@ function bioTurret(k, G, i, s) {
 /* ------------------------------ DREADNOUGHT ------------------------------ */
 // Line-of-battle ship: stepped decks, a citadel tower, armoured belt, batteries on outrigger sponsons.
 function* dreadnought(k, G) {
-  const P = G.pal, { yA, yB, yC, pz, piv } = G, v = Math.floor(G.level / 2) % 2;
+  const P = G.pal, { yA, yB, yC, pz, piv } = G, v = Math.floor(G.level / 2) % 2, V = G.V % 3;
+  // silhouettes: 0 broadside (pointed bow, swept stabilisers) · 1 hammerhead (blunt bow with a transverse battery block,
+  // forward-swept stern wings) · 2 trident (short bow between sponsons run forward as prongs, a low stern plane)
+  const bo = [0, -4, -12][V], B = (x) => (x <= 45 ? x : 45 + (x - 45) * (21 + bo) / 21), hh = V === 1;
   const F = hullLoft([
-    { x: 66, w: 1.4, t: 1.2, b: 2.6, dk: 0.4 }, { x: 60, w: 5, t: yA * 0.5, b: 5.4 }, { x: 50, w: 9.5, t: yA * 0.84, b: 8 },
+    { x: B(66), w: hh ? 9 : 1.4, t: hh ? yA * 0.62 : 1.2, b: hh ? 6 : 2.6, dk: hh ? 0.6 : 0.4 }, { x: B(60), w: hh ? 11.4 : 5, t: hh ? yA * 0.82 : yA * 0.5, b: hh ? 7.6 : 5.4 }, { x: B(50), w: hh ? 12 : 9.5, t: hh ? yA * 0.92 : yA * 0.84, b: hh ? 8.6 : 8 },
     { x: 45, w: 12, t: yA - 0.3, b: 9, dk: 0.62 }, { x: 30, w: 15.5, t: yA - 0.3, b: 10, dk: 0.64 }, { x: 28.6, w: 16, t: lerp(yA, yB, 0.5) - 0.3, b: 10.2, dk: 0.64 },
     { x: 9, w: 18.5, t: lerp(yA, yB, 0.5) - 0.3, b: 11, dk: 0.64 }, { x: 7.6, w: 18.6, t: yB - 0.3, b: 11, dk: 0.62 }, { x: -28, w: 19.5, t: yB - 0.3, b: 11, dk: 0.6 },
     { x: -45, w: 17.5, t: yB * 0.8, b: 9.4, dk: 0.56 }, { x: -56, w: 14.5, t: yB * 0.62, b: 7.4 }, { x: -59, w: 12, t: yB * 0.52, b: 6 },
@@ -936,7 +1003,7 @@ function* dreadnought(k, G) {
   k.decks(F.inner(0.86));
   bulkheads(k, F);
   belt(k, F, 44, -44, -3.4, 2.6, 1.0, [P.hull2, P.hull2, P.paint]);
-  dressHull(k, F, 58, -57, P, { keep: (x) => Math.abs(x - 38) < 7 });
+  dressHull(k, F, B(58), -57, P, { keep: (x) => Math.abs(x - 38) < 7 });
   yield;
   // --- foredeck, forward battery, deckhouse ---
   const yM = lerp(yA, yB, 0.5) - 0.3;
@@ -946,23 +1013,34 @@ function* dreadnought(k, G) {
   k.em(box(21, 21.1, yM + 3.9, yM + 4.7, -2.4, 2.4), mul(WINDOW_GLASS, 0.8), CH.NAV);
   k.antennas(16, yM + 5.2, 0, 4, 2, 5);
   k.metal(box(10.6, 27.4, yM + 3.0, yM + 3.3, -5, 5), GUN);
-  for (const s of [1, -1]) { city(k, 10, 27, s * 8.3, s * 10.4, yM, P); city(k, -43, -9.5, s * 9.6, s * 11.2, yB - 0.3, P); city(k, 46, 56, s * 0.8, s * 4.6, F.top(51) + 0.2, P, 0.7); }
+  for (const s of [1, -1]) { city(k, 10, 27, s * 8.3, s * 10.4, yM, P); city(k, -43, -9.5, s * 9.6, s * 11.2, yB - 0.3, P); city(k, 46, B(56), s * 0.8, s * 4.6, F.top(B(51)) + 0.2, P, 0.7); }
   // bow cheek armour and hawse lights
-  for (const s of [1, -1]) {
+  if (V === 1) for (const s of [1, -1]) { // hammerhead: a battery block across the bow, gun ports and an intake on its face
+    k.add(loft([ringRect(B(65), -3.4, yA * 0.5, s * 7, s * 30, 1), ringRect(47, -6, yA * 0.74, s * 9, s * 33, 1.6)]), P.hull, { win: 170 });
+    k.add(box(47.4, B(64), yA * 0.5, yA * 0.74 + 0.5, s * 12, s * 29, 0.4), P.hull2, { win: 200 });
+    k.add(box(47, B(65.3), -1, 0.6, s * 31.2, s * 33.4), P.paint);
+    k.dark(box(B(65) - 0.3, B(65) + 0.12, -2.4, yA * 0.5 - 1.4, s * 13, s * 27), PITCH);
+    for (let i = 0; i < 5; i++) { k.metal(rod([B(65) - 1, -0.8, s * (14.5 + i * 2.8)], [B(65) + 2.6, -0.8, s * (14.5 + i * 2.8)], 0.42, 5), GUN, { whole: true }); k.em(ball(B(65) + 2.7, -0.8, s * (14.5 + i * 2.8), 0.4, 5, 2), [4, 1.5, 0.3], CH.VOLLEY, 0.1 + i * 0.15); }
+    k.em(box(B(65) + 0.12, B(65) + 0.18, 0.9, 1.5, s * 13.5, s * 26.5), [3.4, 0.5, 0.12], CH.NAV);
+    city(k, 49, B(63), s * 14, s * 27, yA * 0.74 + 0.5, P, 0.6);
+    for (const z of [16, 24]) flak(k, 54, yA * 0.74 + 0.6, s * z, s);
+    k.lamp(B(64), yA * 0.5, s * 31.5, 0.34, s > 0 ? [0.4, 4.6, 1.0] : LAMP_RED, CH.NAV);
+  }
+  if (V === 0) for (const s of [1, -1]) {
     k.add(loft([[[62, -1, s * 3.6], [62, 1.4, s * 3.4], [62, 1.2, s * 4.4], [62, -1.2, s * 4.6]], [[46, -4, s * 11.4], [46, 3.4, s * 11], [46, 3, s * 12.6], [46, -4.4, s * 12.8]]]), P.paint, { whole: true, anim: [6, 3, s * 10, AN.PEEL, 0.3] });
     k.em(box(50, 53, -0.5, 0.1, s * 10.9 - 0.1, s * 10.9 + 0.1), [1.4, 1.3, 1.0], CH.NAV);
   }
   for (const s of [1, -1]) {
     k.trench(11, 27, yM, s * 7.2, 0.7, mul(P.glow, 0.7));
     k.gallery(-2, 26, -1.2, s * (F.hw(12) + 0.9), 5, s, P.hull2);
-    k.mark([[47, s * 2], [47, s * 6.6], [57, s * 2.6], [57, s * 0.6]], F.top(52) + 0.3, P.paint);
+    k.mark([[47, s * 2], [47, s * 6.6], [B(57), s * 2.6], [B(57), s * 0.6]], F.top(B(52)) + 0.3, P.paint);
   }
-  k.greebles(45, 57, -4, 4, yA * 0.8, 6, 1.6, [P.hull2, DARK, P.hull]);
-  k.lamp(64.5, 1.6, 0, 0.3, LAMP_WHITE, CH.STROBE);
+  k.greebles(45, B(57), -4, 4, yA * 0.8, 6, 1.6, [P.hull2, DARK, P.hull]);
+  k.lamp(B(64.5), F.top(B(64.5)) + 0.5, 0, 0.3, LAMP_WHITE, CH.STROBE);
   // chin lance under the bow
-  k.metal(tbox(44, 60, [-11.5, -6, -3, 3], [-8, -4.6, -1.6, 1.6], 0.5), P.hull2, { whole: true });
-  k.lens(60.5, -6.6, 0, 1.9, P.lens);
-  k.emitter = [63, -6.6, 0];
+  k.metal(tbox(40, B(60), [-11.5, -6, -3, 3], [-8, -4.6, -1.6, 1.6], 0.5), P.hull2, { whole: true });
+  k.lens(B(60) + 0.5, -6.6, 0, 1.9, P.lens);
+  k.emitter = [B(60) + 3, -6.6, 0];
   yield;
   // --- citadel ---
   const yD = yB - 0.3;
@@ -985,25 +1063,34 @@ function* dreadnought(k, G) {
   yield;
   // --- sponsons with the wing batteries ---
   for (const s of [1, -1]) {
-    const z = s * pz;
-    k.add(pod(36 - v * 4, -44, -4.2, yC - 0.3, z, 6.6), P.hull, { win: 150 });
+    const z = s * pz, sx = [36 - v * 4, 27, 65][V];
+    k.add(pod(sx, -44, -4.2, yC - 0.3, z, 6.6), P.hull, { win: 150 });
     k.add(box(-32, 4, yC - 0.3, yC + 2, z - 3.6, z + 3.6, 0.5), P.hull2, { win: 220 });
     k.dark(box(-28, 24, -2.2, 2.0, s * 14, s * (pz - 5)), P.deck);
     for (const x of [-18, 6]) k.metal(tube([[x, 4, s * 13, 1.2], [x, 2.2, s * (pz - 5), 1.2]], 6), GUN);
-    k.add(box(-40, 30 - v * 4, 0.4, 1.6, z + s * 6.4, z + s * 7.4), P.paint);
+    k.add(box(-40, sx - 6, 0.4, 1.6, z + s * 6.4, z + s * 7.4), P.paint);
     city(k, -40, -33, z - 4.6, z + 4.6, yC - 0.3, P); city(k, 5, 9, z - 4.6, z + 4.6, yC - 0.3, P);
-    for (let x = 26 - v * 4; x > -44; x -= 6) k.metal(box(x - 0.3, x + 0.3, -4.5, yC - 0.1, z - 6.9, z + 6.9, 1.3), GUN, { whole: true });
+    for (let x = sx - 10; x > -44; x -= 6) k.metal(box(x - 0.3, x + 0.3, -4.5, yC - 0.1, z - 6.9, z + 6.9, 1.3), GUN, { whole: true });
     for (const x of [-26, -12, 1]) flak(k, x, yC + 2.2, z, s);
     k.antennas(-30, yC + 2, z, 3, 2, 5);
     k.gallery(-36, -6, -1, z + s * 6.7, 4, s, P.hull2);
     // intake mouth with a deep glow
-    k.em(box(31.2 - v * 4, 31.4 - v * 4, -2.4, 2.2, z - 3.6, z + 3.6), mul(P.glow, 0.4), CH.ACCENT);
-    k.metal(box(30.6 - v * 4, 31.9 - v * 4, -0.3, 0.2, z - 4.4, z + 4.4), GUN); k.metal(box(30.6 - v * 4, 31.9 - v * 4, -3, 2.8, z - 0.3, z + 0.3), GUN);
+    k.em(box(sx - 4.8, sx - 4.6, -2.4, 2.2, z - 3.6, z + 3.6), mul(P.glow, 0.4), CH.ACCENT);
+    k.metal(box(sx - 5.4, sx - 4.1, -0.3, 0.2, z - 4.4, z + 4.4), GUN); k.metal(box(sx - 5.4, sx - 4.1, -3, 2.8, z - 0.3, z + 0.3), GUN);
+    if (V === 2) { // prong: an armoured ram cap and a lit rail down its inner face
+      k.metal(tbox(sx - 5, sx + 1.5, [-3, 2.6, z - 5, z + 5], [-0.8, 0.8, z - 0.8, z + 0.8]), STEEL, { whole: true });
+      for (let i = 0; i < 6; i++) k.em(box(26 + i * 5, 29 + i * 5, -0.4, 0.4, z - s * 6.75, z - s * 6.6), mul(P.lens, 0.8), CH.LASER, 0.05 + i * 0.13);
+      city(k, 26, sx - 9, z - 4.4, z + 4.4, yC - 0.3, P, 0.7);
+      k.gallery(28, sx - 10, -1, z + s * 6.7, 4, s, P.hull2);
+    }
     // swept stabiliser
     const wz = Math.min(49, pz + 19);
-    k.add(fin([[-8, z + s * 6], [-36, z + s * 6], [-47, s * wz], [-37, s * wz]], -0.2, 1.3), P.hull2);
-    k.add(fin([[-14, z + s * 6.2], [-20, z + s * 6.2], [-39.5, s * (wz - 0.4)], [-36, s * (wz - 0.4)]], 1.1, 0.14), P.paint);
-    k.lamp(-41, 1.4, s * wz, 0.34, s > 0 ? [0.4, 4.6, 1.0] : LAMP_RED, CH.NAV);
+    if (V === 0) {
+      k.add(fin([[-8, z + s * 6], [-36, z + s * 6], [-47, s * wz], [-37, s * wz]], -0.2, 1.3), P.hull2);
+      k.add(fin([[-14, z + s * 6.2], [-20, z + s * 6.2], [-39.5, s * (wz - 0.4)], [-36, s * (wz - 0.4)]], 1.1, 0.14), P.paint);
+      k.lamp(-41, 1.4, s * wz, 0.34, s > 0 ? [0.4, 4.6, 1.0] : LAMP_RED, CH.NAV);
+    } else if (V === 1) wing(k, P, [[-24, z + s * 6], [-44, z + s * 6], [-24, s * wz], [-10, s * wz]], s, { y: -0.4 });
+    else wing(k, P, [[-44, s * 10], [-58, s * 8], [-62, s * 47], [-51, s * 47]], s, { y: -7.4, th: 1.6 });
     k.engine(-50, -0.6, z, 4.6, 8, { petals: 6 });
     if (piv[s > 0 ? 2 : 3]) k.barbette(s > 0 ? 2 : 3, piv[s > 0 ? 2 : 3], 5.4);
     else { k.add(box(10, 22, yC - 0.3, yC + 1.6, z - 4, z + 4, 0.5), P.hull2, { win: 200 }); k.antennas(16, yC + 1.6, z, 3, 2.5, 5); }
@@ -1031,7 +1118,10 @@ function* dreadnought(k, G) {
 /* --------------------------------- LANCE --------------------------------- */
 // A gun with a ship round it: forked prow, spinal barrel ringed with capacitors, heat radiators.
 function* lance(k, G) {
-  const P = G.pal, { yA, yB, yC, pz, piv } = G, v = G.level % 2;
+  const P = G.pal, { yA, yB, yC, pz, piv } = G, v = G.level % 2, V = G.V % 3;
+  // silhouettes: 0 fork (twin prongs, an X of swept radiators) · 1 needle (short prongs, the bare barrel run out to the bow,
+  // forward-swept radiators) · 2 outrigger (one prong cut short, radiator arrays carried outboard on booms)
+  const tip = [[66, 66], [47, 47], [66, 50]][V], bx = [52, 64, 52][V];
   const F = hullLoft([
     { x: 9, w: 9, t: yB * 0.6, b: 6.5 }, { x: 6.5, w: 12.5, t: yB - 0.3, b: 8.6, dk: 0.62 }, { x: -30, w: 15, t: yB - 0.3, b: 10, dk: 0.6 },
     { x: -48, w: 14, t: yB * 0.82, b: 9, dk: 0.55 }, { x: -57, w: 10.5, t: yB * 0.6, b: 6.4 }, { x: -59, w: 9, t: yB * 0.5, b: 5.4 },
@@ -1045,36 +1135,38 @@ function* lance(k, G) {
   yield;
   // --- forked prow ---
   for (const s of [1, -1]) {
+    const tx = tip[s > 0 ? 0 : 1];
     k.add(loft([
-      ringRect(66, -1.2, 1.4, s * 7, s * 8.8, 0.3), ringRect(52, -3.6, 4.2, s * 5, s * 10.6, 0.8),
+      ringRect(tx, -1.2, 1.4, s * 7, s * 8.8, 0.3), ringRect(tx - 14, -3.6, 4.2, s * 5, s * 10.6, 0.8),
       ringRect(30, -5, yA - 0.3, s * 4.6, s * 11.8, 0.9), ringRect(5, -6.4, yA - 0.3, s * 4.2, s * 12.2, 0.9),
     ]), P.hull, { win: 110 });
-    k.decks(loft([ringRect(50, -2.6, 3, s * 5.6, s * 9.8), ringRect(8, -5, yA - 1.4, s * 5.2, s * 11.2)]));
-    k.add(box(8, 50, 1.4, 2.6, s * 11.6, s * 12.5), P.paint);
+    k.decks(loft([ringRect(tx - 16, -2.6, 3, s * 5.6, s * 9.8), ringRect(8, -5, yA - 1.4, s * 5.2, s * 11.2)]));
+    k.add(box(8, tx - 16, 1.4, 2.6, s * 11.6, s * 12.5), P.paint);
     // inner rail: lights run down it as the lance spools
-    for (let i = 0; i < 9; i++) k.em(box(10 + i * 5, 13 + i * 5, -0.6, 0.6, s * 4.3, s * 4.45), mul(P.lens, 0.8), CH.LASER, 0.05 + i * 0.09);
-    for (let i = 0; i < 9; i++) k.em(box(10 + i * 5, 13 + i * 5, -1.2, -0.9, s * 4.3, s * 4.45), mul(P.glow, 0.34), CH.ACCENT);
-    k.lamp(65.6, 1.8, s * 7.9, 0.3, LAMP_WHITE, CH.STROBE);
+    for (let i = 0; i < 9 && 13 + i * 5 < tx - 12; i++) k.em(box(10 + i * 5, 13 + i * 5, -0.6, 0.6, s * 4.3, s * 4.45), mul(P.lens, 0.8), CH.LASER, 0.05 + i * 0.09);
+    for (let i = 0; i < 9 && 13 + i * 5 < tx - 12; i++) k.em(box(10 + i * 5, 13 + i * 5, -1.2, -0.9, s * 4.3, s * 4.45), mul(P.glow, 0.34), CH.ACCENT);
+    k.lamp(tx - 0.4, 1.8, s * 7.9, 0.3, LAMP_WHITE, CH.STROBE);
     k.trench(8, 28, yA - 0.3, s * 8.2, 0.6, mul(P.glow, 0.7));
-    k.greebles(46, 58, s * 6.4, s * 9.6, 3.4, 3, 1.2, [P.hull2, DARK]);
+    if (tx > 60) k.greebles(46, 58, s * 6.4, s * 9.6, 3.4, 3, 1.2, [P.hull2, DARK]);
     city(k, 9, 30, s * 5.4, s * 7.4, yA - 0.3, P); city(k, 9, 30, s * 9, s * 11, yA - 0.3, P);
-    for (let x = 48; x > 8; x -= 5) k.metal(box(x - 0.3, x + 0.3, -5.2, lerp(4, yA - 0.2, sat((52 - x) / 22)), s * 11.7, s * 12.2), GUN, { whole: true });
-    for (const x of [46, 24, 12]) flak(k, x, 2, s * 12.4, s);
+    for (let x = tx - 18; x > 8; x -= 5) k.metal(box(x - 0.3, x + 0.3, -5.2, lerp(4, yA - 0.2, sat((tx - 14 - x) / 22)), s * 11.7, s * 12.2), GUN, { whole: true });
+    for (const x of [tx - 20, 24, 12]) flak(k, x, 2, s * 12.4, s);
   }
   k.add(box(31.5, 44.5, yA - 2.3, yA - 0.3, -12, 12, 0.5), P.hull2, { win: 0 });
   k.mark([[31.5, -12], [31.5, 12], [33, 12], [33, -12]], yA - 0.28, P.paint);
   k.barbette(0, piv[0], 6); if (piv[1]) k.barbette(1, piv[1], 6.2);
   yield;
   // --- the barrel ---
-  k.metal(lathe([[52, 2.0], [51, 3.1], [6, 3.3]], k.seg(12), { y: -0.6 }), GUN, { crease: 40 });
-  for (let i = 0; i < 6; i++) {
+  k.metal(lathe([[bx, 2.0], [bx - 1, 3.1], [6, 3.3]], k.seg(12), { y: -0.6 }), GUN, { crease: 40 });
+  if (V === 1) for (const a of [0.6, 2.54, 4.19, 5.24]) k.metal(rod([44, -0.6 + Math.sin(a) * 4.4, Math.cos(a) * 4.4], [bx - 2, -0.6 + Math.sin(a) * 3.3, Math.cos(a) * 3.3], 0.5, 4), STEEL, { whole: false }); // stay rods bracing the bare barrel
+  for (let i = 0; i < (V === 1 ? 8 : 6); i++) {
     const x = 12 + i * 7;
     k.metal(lathe([[x + 1, 3.3], [x + 0.7, 4.5], [x - 0.7, 4.5], [x - 1, 3.3]], k.seg(12), { y: -0.6 }), STEEL);
     k.em(lathe([[x + 0.3, 4.56], [x - 0.3, 4.56]], k.seg(12), { y: -0.6 }), mul(P.lens, 1.1), CH.LASER, 0.08 + i * 0.13);
     k.em(lathe([[x + 0.62, 4.52], [x + 0.42, 4.52]], k.seg(12), { y: -0.6 }), mul(P.glow, 0.3), CH.ACCENT);
   }
-  k.lens(52, -0.6, 0, 2.5, P.lens);
-  k.emitter = [56, -0.6, 0];
+  k.lens(bx, -0.6, 0, 2.5, P.lens);
+  k.emitter = [bx + 4, -0.6, 0];
   yield;
   // --- outrigger pods ---
   for (const s of [1, -1]) {
@@ -1089,14 +1181,21 @@ function* lance(k, G) {
     k.gallery(-14, 8, -0.6, z + s * 5.3, 3, s, P.hull2);
     city(k, -20, 9, z - 3.4, z + 3.4, yC - 0.3, P);
     for (let x = 22; x > -22; x -= 5.5) k.metal(box(x - 0.3, x + 0.3, -3.9, yC - 0.1, z - 5.5, z + 5.5, 1.2), GUN, { whole: true });
-    // radiators: an X of glowing slatted fins
-    for (const up of [1, -1]) {
-      const wz = 47, a = up * (0.34 + v * 0.1);
+    // radiators: glowing slatted fins — an X swept back, a pair swept forward, or arrays carried outboard on booms
+    const wz = 47, rads = V === 0 ? [[[[-10, 14], [-44, 14], [-58, wz], [-40, wz]], 0.34 + v * 0.1, 1], [[[-10, 14], [-44, 14], [-58, wz], [-40, wz]], -0.34 - v * 0.1, -1]]
+      : V === 1 ? [[[[-30, 14], [-57, 14], [-30, wz], [-10, wz]], 0.1, 1], [[[-40, 14], [-58, 14], [-62, 32], [-52, 32]], -0.5, -1]]
+        : [[[[12, 38], [-52, 38], [-52, 48.5], [12, 48.5]], 0, 0]];
+    for (const [pl, a, up] of rads) {
       const place = (t) => move(rotX(move(t, 0, 0, -s * 14), -a * s), 0, up * 1.5, s * 14);
-      k.dark(place(fin([[-10, s * 14], [-44, s * 14], [-58, s * wz], [-40, s * wz]], -0.4, 0.8)), P.hull2, { whole: false });
+      const z0 = pl[0][1], z1 = pl[3][1];
+      k.dark(place(fin(pl.map(([x, z]) => [x, s * z]), -0.4, 0.8)), P.hull2, { whole: false });
       for (let i = 0; i < 7; i++) {
-        const f0 = 0.08 + i * 0.125, f1 = f0 + 0.07, zz = (f) => s * lerp(14, wz, f), xa = (f) => lerp(-13, -41, f), xb = (f) => lerp(-42, -56, f);
+        const f0 = 0.08 + i * 0.125, f1 = f0 + 0.07, zz = (f) => s * lerp(z0, z1, f), xa = (f) => lerp(pl[0][0], pl[3][0], f) - 2.5, xb = (f) => lerp(pl[1][0], pl[2][0], f) + 2;
         for (const yy of [0.42, -0.42]) k.em(place(prismY([[xa(f0), zz(f0)], [xb(f0), zz(f0)], [xb(f1), zz(f1)], [xa(f1), zz(f1)]], yy - 0.03, yy + 0.03)), [0.85, 0.2, 0.035], CH.SEAM, 0, { whole: true });
+      }
+      if (V === 2) { // booms out from the pod, a marker lamp on each corner
+        for (const x of [4, -20, -44]) k.metal(rod([x, 0.4, z + s * 4], [x, 0.4, s * 38.4], 0.6, 4), GUN, { whole: true });
+        for (const x of [11, -51]) k.lamp(x, 0.9, s * 48, 0.3, s > 0 ? [0.4, 4.6, 1.0] : LAMP_RED, CH.NAV);
       }
     }
   }
@@ -1128,10 +1227,12 @@ function* lance(k, G) {
 /* -------------------------------- CARRIER -------------------------------- */
 // Flat-top: hangar mouths across the bow, a lit flight deck, an island offset to starboard.
 function* carrier(k, G) {
-  const P = G.pal, { yA, yB, yC, pz, piv } = G, v = Math.floor(G.level / 3) % 2, w = Math.floor(G.level / 6) % 2;
-  const hw = pz - 7.2;
+  const P = G.pal, { yA, yB, yC, pz, piv } = G, V = G.V % 4, v = V === 0 || V === 3 ? 1 : 0, w = V >= 2 ? 1 : 0;
+  // silhouettes: 0 slab (swept sponson wings) · 1 angled deck (a landing deck cantilevered off one side) ·
+  // 2 arrowhead (tapered bow, canards, engine nacelles out on stern wings) · 3 twin boom (galleries run forward past a recessed bow)
+  const hw = pz - 7.2, xb = V === 3 ? 45 : 57, bk = V === 2 ? 0.46 : 0.84, wx = xb + 5;
   const F = hullLoft([
-    { x: 57, w: hw * 0.84, t: yA - 0.3, b: 7, dk: 0.88, ws: 0.97, sh: 0.8, ks: 0.6 }, { x: 28, w: hw * 0.96, t: yA - 0.3, b: 8.6, dk: 0.9, ws: 0.98, sh: 0.8, ks: 0.6 },
+    { x: xb, w: hw * bk, t: yA - 0.3, b: 7, dk: 0.88, ws: 0.97, sh: 0.8, ks: 0.6 }, { x: 28, w: hw * 0.96, t: yA - 0.3, b: 8.6, dk: 0.9, ws: 0.98, sh: 0.8, ks: 0.6 },
     { x: 27, w: hw * 0.97, t: yB - 0.3, b: 8.8, dk: 0.9, ws: 0.98, sh: 0.82, ks: 0.6 }, { x: -44, w: hw, t: yB - 0.3, b: 9, dk: 0.9, ws: 0.98, sh: 0.82, ks: 0.6 },
     { x: -56, w: hw * 0.92, t: yB * 0.86, b: 8, dk: 0.84, ws: 0.96, sh: 0.8, ks: 0.6 }, { x: -59, w: hw * 0.84, t: yB * 0.7, b: 6.4, dk: 0.8, ws: 0.95, sh: 0.8, ks: 0.6 },
   ]);
@@ -1142,20 +1243,20 @@ function* carrier(k, G) {
   dressHull(k, F, 26, -57, P, { hatches: false, flak: false });
   yield;
   // --- bow: three hangar mouths under the foredeck ---
-  const bw = hw * 0.84;
-  hangarWall(k, 62, 5.2, -6.4, yA - 0.3, -bw, bw, w ? [
+  const bw = hw * bk;
+  hangarWall(k, wx, 5.2, -6.4, yA - 0.3, -bw, bw, V === 2 ? [{ y0: -5.2, y1: yA - 2.2, z0: -bw + 1.4, z1: bw - 1.4 }] : w ? [
     { y0: -5, y1: yA - 2.3, z0: -bw + 1.4, z1: -1.6 }, { y0: -5, y1: yA - 2.3, z0: 1.6, z1: bw - 1.4 },
   ] : [
     { y0: -4.6, y1: yA - 2.6, z0: -bw + 1.2, z1: -bw * 0.32 }, { y0: -5.2, y1: yA - 2.2, z0: -bw * 0.24, z1: bw * 0.24 }, { y0: -4.6, y1: yA - 2.6, z0: bw * 0.32, z1: bw - 1.2 },
   ], P.hull2);
-  k.add(box(56.6, 62.6, yA - 0.3, yA + 0.3, -bw - 0.5, bw + 0.5), P.paint);
-  k.metal(tbox(50, 62, [-9.6, -6.4, -bw * 0.9, bw * 0.9], [-8, -6.4, -bw * 0.7, bw * 0.7], 0.5), P.hull2);
-  k.lens(62.4, -7.8, 0, 1.3, P.lens);
-  k.emitter = [64, -7.8, 0];
-  for (const s of [1, -1]) k.lamp(62.4, yA + 0.6, s * bw, 0.3, LAMP_WHITE, CH.STROBE);
+  k.add(box(xb - 0.4, wx + 0.6, yA - 0.3, yA + 0.3, -bw - 0.5, bw + 0.5), P.paint);
+  k.metal(tbox(wx - 12, wx, [-9.6, -6.4, -bw * 0.9, bw * 0.9], [-8, -6.4, -bw * 0.7, bw * 0.7], 0.5), P.hull2);
+  k.lens(wx + 0.4, -7.8, 0, 1.3, P.lens);
+  k.emitter = [wx + 2, -7.8, 0];
+  for (const s of [1, -1]) k.lamp(wx + 0.4, yA + 0.6, s * bw, 0.3, LAMP_WHITE, CH.STROBE);
   k.barbette(0, piv[0], 6); if (piv[1]) k.barbette(1, piv[1], 6);
   // foredeck: catapult tracks
-  for (const s of [1, -1]) { k.trench(44.5, 61, yA - 0.3, s * bw * 0.55, 0.5, [0.6, 1.9, 2.6], CH.STROBE); k.mark([[30, s * 9], [30, s * 11], [36, s * 11], [36, s * 9]], yA - 0.28, P.pale); }
+  for (const s of [1, -1]) { k.trench(44.5, wx - 1, yA - 0.3, s * bw * 0.55, 0.5, [0.6, 1.9, 2.6], CH.STROBE); k.mark([[30, s * 9], [30, s * 11], [36, s * 11], [36, s * 9]], yA - 0.28, P.pale); }
   yield;
   // --- flight deck ---
   const yD = yB - 0.3, dw = hw * 0.9 - 1.2;
@@ -1184,7 +1285,7 @@ function* carrier(k, G) {
   for (const s of [1, -1]) {
     const z = s * pz, ti = s > 0 ? 2 : 3, zo = Math.min(48, pz + 9.5);
     k.add(loft([
-      ringRect(44, -2, yC - 1.6, s * (hw * 0.8), s * (pz + 3), 0.6), ringRect(36, -4.4, yC - 0.3, s * (hw * 0.8), s * (pz + 7.6), 1), ringRect(-44, -4.4, yC - 0.3, s * (hw * 0.8), s * (pz + 7.6), 1), ringRect(-54, -3, yC - 1.4, s * (hw * 0.8), s * (pz + 4), 0.8),
+      ringRect(V === 3 ? 66 : 44, -2, yC - 1.6, s * (hw * 0.8 + (V === 3 ? 3 : 0)), s * (pz + (V === 3 ? 6.4 : 3)), 0.6), ringRect(V === 3 ? 61 : 36, -4.4, yC - 0.3, s * (hw * 0.8), s * (pz + 7.6), 1), ringRect(V === 3 ? -26 : -44, -4.4, yC - 0.3, s * (hw * 0.8), s * (pz + 7.6), 1), ringRect(V === 3 ? -36 : -54, -3, yC - 1.4, s * (hw * 0.8), s * (pz + 4), 0.8),
     ]), P.hull2, { win: 170 });
     k.add(box(-40, 34, yC - 0.3, yC + 0.5, z + s * 7.2, z + s * 7.9), P.paint);
     if (piv[ti]) k.barbette(ti, piv[ti], 5.4);
@@ -1198,9 +1299,35 @@ function* carrier(k, G) {
       k.em(box(x - 2.8, x + 2.8, yC + 0.5, yC + 0.8, zz + s * 0.13 - 0.02, zz + s * 0.13 + 0.02), [1.8, 1.1, 0.4], CH.STATIC);
     }
     k.gallery(-34, 30, -1.6, z + s * 7.7, 7, s, P.hull2);
-    // sponson wing
-    k.add(fin([[4, z + s * 7], [-34, z + s * 7], [-46, s * zo], [-30, s * zo]], -2.6, 1.4), P.hull2);
-    k.lamp(-38, -1, s * zo, 0.34, s > 0 ? [0.4, 4.6, 1.0] : LAMP_RED, CH.NAV);
+    const isl = s === (v ? 1 : -1);
+    if (V === 0 || (V === 1 && isl)) { // sponson wing
+      k.add(fin([[4, z + s * 7], [-34, z + s * 7], [-46, s * zo], [-30, s * zo]], -2.6, 1.4), P.hull2);
+      k.lamp(-38, -1, s * zo, 0.34, s > 0 ? [0.4, 4.6, 1.0] : LAMP_RED, CH.NAV);
+    }
+    if (V === 1 && !isl) { // the angled deck: a second runway cantilevered outboard, lit down its centreline
+      const dy = yC + 0.4;
+      k.add(prismY([[26, z + s * 5], [-46, z + s * 5], [-38, s * 49.5], [12, s * 49.5]], dy - 1.6, dy, 0.97, -10, z), P.hull2, { whole: false });
+      k.mark([[23, z + s * 7], [-42, z + s * 7], [-35, s * 47.5], [10, s * 47.5]], dy + 0.01, P.deck, { whole: false });
+      for (let i = 0; i < 9; i++) k.em(box(16 - i * 6, 19 - i * 6, dy + 0.14, dy + 0.22, s * (pz + 15.5) - 0.3, s * (pz + 15.5) + 0.3), [1.5, 1.4, 1.1], CH.STATIC);
+      for (let i = 0; i < 9; i++) k.em(box(10 - i * 5.5, 10.8 - i * 5.5, dy + 0.14, dy + 0.3, s * 48.6 - 0.25, s * 48.6 + 0.25), i % 2 ? [0.5, 1.7, 2.6] : [2.6, 1.6, 0.3], CH.NAV);
+      for (const x of [14, -16, -40]) k.metal(tube([[x, dy - 1.6, z + s * 9, 1.1], [x, -3.6, z + s * 6, 1.1]], 5), GUN, { whole: true });
+      chevrons(k, -30, s * (pz + 15.5), dy + 0.14, 3.6, 2, 3.2, P.paint);
+      k.lamp(12, dy + 0.5, s * 49.5, 0.3, LAMP_AMBER, CH.STROBE); k.lamp(-38, dy + 0.5, s * 49.5, 0.3, LAMP_AMBER, CH.STROBE);
+    }
+    if (V === 2) { // canard forward, and a stern wing carrying an engine nacelle
+      wing(k, P, [[46, s * bw], [36, s * (hw * 0.9)], [30, s * 33], [38, s * 33]], s, { y: -1.5, th: 1.2 });
+      wing(k, P, [[-22, z + s * 7], [-48, z + s * 7], [-58, s * 47], [-38, s * 47]], s, { y: -2.6 });
+      k.add(pod(-34, -60, -4.6, 2.4, s * 44, 4.4), P.hull, { win: 150 });
+      k.engine(-63, -1, s * 44, 3.6, 7, { petals: 6 });
+    }
+    if (V === 3) { // boom heads: a hangar mouth in each, facing forward
+      k.dark(box(65.6, 66.1, -1.2, yC - 2.2, s * (hw * 0.8 + 4), s * (pz + 5.6)), PITCH);
+      k.em(box(66.1, 66.16, -0.9, yC - 2.5, s * (hw * 0.8 + 4.4), s * (pz + 5.2)), [2.0, 1.25, 0.5], CH.BAY, 0.2);
+      k.em(box(66.1, 66.18, -1.1, -0.9, s * (hw * 0.8 + 4.4), s * (pz + 5.2)), [1.8, 1.1, 0.4], CH.STATIC);
+      k.add(box(60, 66.3, yC - 1.5, yC - 0.9, s * (hw * 0.8 + 2), s * (pz + 7.8)), P.paint);
+      city(k, 40, 56, z - 4, z + 6, yC - 0.3, P, 0.6); k.gallery(38, 56, -1.6, z + s * 7.7, 3, s, P.hull2);
+      k.lamp(66.4, yC - 1.2, z + s * 2, 0.3, LAMP_WHITE, CH.STROBE);
+    }
     k.greebles(22, 34, z - 4, z + 6, yC - 0.3, 5, 1.8, [P.hull, DARK, P.hull2]);
     city(k, 24, 35, z - 5, z + 6.6, yC - 0.3, P, 0.6); city(k, -4, 8, z - 5, z + 6.6, yC - 0.3, P, 0.6);
     for (let x = 30; x > -42; x -= 6) k.metal(box(x - 0.3, x + 0.3, -4.7, yC - 0.1, z + s * 7.5 - 0.5, z + s * 7.5 + 0.5), GUN, { whole: true });
@@ -1241,7 +1368,7 @@ function* carrier(k, G) {
 /* ---------------------------------- RAM ---------------------------------- */
 // The brute: a plough of layered armour, tusks, and more engine than ship.
 function* ram(k, G) {
-  const P = G.pal, { yA, yB, yC, pz, piv } = G, v = Math.floor(G.level / 4) % 2;
+  const P = G.pal, { yA, yB, yC, pz, piv } = G, v = Math.floor(G.level / 4) % 2, V = G.V % 3;
   const mw = Math.min(22, pz - 3);
   const F = hullLoft([
     { x: 66, w: 0.7, t: yA * 0.86, b: 9.5, dk: 0.5, ks: 0.6, ws: 1, wb: 1 }, { x: 57, w: 4.6, t: yA * 0.94, b: 12, dk: 0.5, ks: 0.5 }, { x: 45, w: 11.5, t: yA - 0.3, b: 12.6, dk: 0.6 },
@@ -1287,18 +1414,48 @@ function* ram(k, G) {
     k.add(box(2, 28, yC - 0.3, yC + 0.4, z + s * 8.4 - 0.5, z + s * 8.4 + 0.5), P.paint);
     if (piv[ti]) k.barbette(ti, piv[ti], 5.4);
     else { k.add(tbox(10, 22, [yC - 0.3, yC + 2.4, z - 4, z + 4], [yC - 0.3, yC + 1.6, z - 3, z + 3], 0.5), P.hull, { whole: true }); }
-    // tusk: a forged horn reaching past the bow
-    k.metal(tube([[20, -1.5, z + s * 5, 3.6], [36, -2, z + s * 7, 3.2], [52, -1.6, z + s * 4, 2.2], [64, -0.6, z - s * 3, 0.9], [66.5, -0.4, z - s * 5, 0.05]], 6, { sy: 1.25 }), STEEL, { crease: 30, whole: false });
-    k.add(tube([[30, -1.8, z + s * 6.4, 3.9], [34, -1.9, z + s * 6.8, 3.8]], 6, { sy: 1.25 }), P.paint);
-    k.add(tube([[44, -1.8, z + s * 5.8, 3.1], [47, -1.8, z + s * 5.2, 2.9]], 6, { sy: 1.25 }), P.paint);
-    k.em(tube([[58, -1.2, z + s * 0.6, 1.72], [59, -1.1, z - s * 0.1, 1.6]], 6, { sy: 1.25 }), [4, 1.2, 0.2], CH.RAM, 0.4);
+    // silhouettes: 0 tusks hooking in past the bow · 1 hammer: a transverse blade carried ahead on beams · 2 trident: straight spears
+    if (V === 0) {
+      k.metal(tube([[20, -1.5, z + s * 5, 3.6], [36, -2, z + s * 7, 3.2], [52, -1.6, z + s * 4, 2.2], [64, -0.6, z - s * 3, 0.9], [66.5, -0.4, z - s * 5, 0.05]], 6, { sy: 1.25 }), STEEL, { crease: 30, whole: false });
+      k.add(tube([[30, -1.8, z + s * 6.4, 3.9], [34, -1.9, z + s * 6.8, 3.8]], 6, { sy: 1.25 }), P.paint);
+      k.add(tube([[44, -1.8, z + s * 5.8, 3.1], [47, -1.8, z + s * 5.2, 2.9]], 6, { sy: 1.25 }), P.paint);
+      k.em(tube([[58, -1.2, z + s * 0.6, 1.72], [59, -1.1, z - s * 0.1, 1.6]], 6, { sy: 1.25 }), [4, 1.2, 0.2], CH.RAM, 0.4);
+    } else if (V === 1) {
+      const zb = Math.min(40, pz + 11);
+      k.metal(tube([[24, -2, z + s * 2, 3.6], [44, -2.4, z + s * 3, 3.2], [58, -2.4, z + s * 3, 3]], 6, { sy: 1.2 }), STEEL, { crease: 30, whole: false });
+      k.add(tube([[34, -2.2, z + s * 2.5, 3.9], [38, -2.3, z + s * 2.7, 3.8]], 6, { sy: 1.2 }), P.paint);
+      k.add(loft([[[65, -6, s * 4.6], [65, 1.5, s * 4.6], [66.5, -2.2, s * (zb * 0.5)], [65, 1.5, s * zb], [65, -6, s * zb]], [[56, -8.5, s * 3.4], [56, 4, s * 3.4], [56, 5, s * (zb * 0.5)], [56, 4, s * (zb + 2)], [56, -8.5, s * (zb + 2)]]]), P.hull2, { whole: false });
+      k.em(box(65.6, 65.9, -2.5, -1.9, s * 6, s * (zb - 1.5)), [3.2, 0.95, 0.15], CH.RAM, 0.3);
+      k.em(box(65.55, 65.7, -2.6, -1.8, s * 6, s * (zb - 1.5)), [0.5, 0.12, 0.02], CH.STATIC);
+      for (let i = 0; i < 5; i++) k.add(box(56.2, 64.8, 4.3, 4.6, s * (7 + i * (zb - 9) / 4) - 0.8, s * (7 + i * (zb - 9) / 4) + 0.8), i % 2 ? PITCH : P.pale, { whole: true });
+      k.halo(66, -2.2, s * zb * 0.55, 8, [1.2, 0.32, 0.05], CH.RAM, 0.5);
+      for (let i = 0; i < 7; i++) {
+        const zz = s * lerp(6, zb - 1, i / 6), xf = 65.2 + 1.2 * (1 - Math.abs(i - 3) / 3) * 0.5;
+        k.metal(tbox(xf - 1.5, xf + 0.9, [-6.4, -3.4, zz - 1.5, zz + 1.5], [-5.6, -4.4, zz - 1.1, zz + 1.1], 0.2), i % 2 ? GUN : STEEL, { whole: true, anim: [1.6, 0, 0, AN.RAM, i * 0.08] });
+        k.metal(tube([[xf - 0.6, -6.2, zz, 1.0], [xf + 1.2, -8.6, zz, 0.5], [xf + 2.6, -10, zz, 0.04]], 4), STEEL, { whole: true });
+        k.metal(tbox(xf - 1.5, xf + 0.9, [-1, 1.6, zz - 1.5, zz + 1.5], [-0.4, 1, zz - 1.1, zz + 1.1], 0.2), i % 2 ? P.paint : P.hull2, { whole: true, anim: [1.6, 0, 0, AN.RAM, i * 0.08] });
+        if (i % 2) k.em(box(xf + 0.9, xf + 0.98, -0.1, 0.7, zz - 0.8, zz + 0.8), [3.4, 0.5, 0.12], CH.NAV);
+      }
+    } else {
+      k.metal(tube([[18, -1.5, z + s * 4, 3.8], [40, -2, z + s * 4, 3.2], [56, -1.6, z + s * 3, 2], [67, -0.8, z + s * 2, 0.05]], 6, { sy: 1.25 }), STEEL, { crease: 30, whole: false });
+      for (const x of [28, 40, 50]) k.add(tube([[x, -1.9, z + s * 4, 4.1 - (x - 28) * 0.06], [x + 3, -1.9, z + s * 3.9, 4 - (x - 28) * 0.06]], 6, { sy: 1.25 }), P.paint);
+      k.em(tube([[59, -1.3, z + s * 2.8, 1.75], [60, -1.2, z + s * 2.7, 1.62]], 6, { sy: 1.25 }), [4, 1.2, 0.2], CH.RAM, 0.4);
+      for (const d of [1, -1]) k.metal(tube([[44, -1.8, z + s * 3.6 + d * 2.6, 1.3], [52, -1.6, z + s * 3.2 + d * 5.4, 0.8], [58, -1.4, z + s * 3 + d * 5, 0.05]], 4), STEEL, { whole: true });
+    }
     k.gallery(4, 24, -2, z + s * 8.6, 4, s, P.hull2);
     k.lamp(26, yC, z + s * 6, 0.3, s > 0 ? [0.4, 4.6, 1.0] : LAMP_RED, CH.NAV);
     // stern skid
     const wz = Math.min(48, mw + 22);
-    k.add(fin([[-24, s * (mw + 3)], [-50, s * (mw + 4)], [-60, s * wz], [-46, s * wz]], -3, 2), P.hull2);
-    k.add(fin([[-30, s * (mw + 4)], [-36, s * (mw + 4)], [-52, s * (wz - 0.5)], [-48, s * (wz - 0.5)]], -1.1, 0.16), P.pale);
-    k.lamp(-53, -1.6, s * wz, 0.34, LAMP_AMBER, CH.STROBE);
+    if (V === 0) {
+      k.add(fin([[-24, s * (mw + 3)], [-50, s * (mw + 4)], [-60, s * wz], [-46, s * wz]], -3, 2), P.hull2);
+      k.add(fin([[-30, s * (mw + 4)], [-36, s * (mw + 4)], [-52, s * (wz - 0.5)], [-48, s * (wz - 0.5)]], -1.1, 0.16), P.pale);
+      k.lamp(-53, -1.6, s * wz, 0.34, LAMP_AMBER, CH.STROBE);
+    } else if (V === 1) wing(k, P, [[-30, s * (mw + 4)], [-54, s * (mw + 4)], [-40, s * wz], [-22, s * wz]], s, { y: -3, th: 2, band: P.pale });
+    else { // engine outriggers
+      wing(k, P, [[-26, s * (mw + 3)], [-50, s * (mw + 4)], [-50, s * 42], [-34, s * 42]], s, { y: -2.4, th: 1.8, band: P.pale });
+      k.add(pod(-22, -58, -5, 3.4, s * 44, 5), P.hull2, { win: 90 });
+      k.engine(-62, -0.8, s * 44, 4.4, 8, { petals: 6 });
+    }
   }
   yield;
   // --- bridge hood, engine block ---
@@ -1337,130 +1494,211 @@ function* ram(k, G) {
 /* ------------------------------- LEVIATHAN ------------------------------- */
 // Not built — grown. A lopsided carapace with one great scythe arm, a ring of teeth and a throat full of light.
 function* leviathan(k, G) {
-  const P = G.pal, { yA, yB, yC, pz, piv } = G, bio = { mat: M.BIO, crease: 55 }, R = k.R;
-  const N = k.seg(22);
-  // body: super-elliptic rings, bellied to port
-  const st = [
-    [61, 3, 2.4, 2.4, 2], [54, 8, yA * 0.62, 5.4, 1.6], [46, 12.5, yA * 0.92, 7.4, 1.2], [38, 16, yA + 0.5, 8.6, 0.8], [27, pz - 2, lerp(yA, yB, 0.5), 9.4, 0.2],
+  const P = G.pal, { yA, yB, pz, piv } = G, V = G.V % 3, T = k.tier, R = k.R, bio = { mat: M.BIO, crease: 55 };
+  const N = k.seg(24), yM = lerp(yA, yB, 0.5);
+  // body stations [x, half-width, top, belly, z offset]: 0 reaper (lopsided), 1 mantis (wasp waist, big abdomen), 2 kraken (blunt head, broad mantle)
+  const st = [[
+    [61, 3, 2.4, 2.4, 2], [54, 8, yA * 0.62, 5.4, 1.6], [46, 12.5, yA * 0.92, 7.4, 1.2], [38, 16, yA + 0.5, 8.6, 0.8], [27, pz - 2, yM, 9.4, 0.2],
     [16, pz + 6.5, yB + 0.4, 10, -0.4], [0, pz + 6, yB + 0.6, 10.4, -1], [-16, pz + 1, yB * 1.22, 10.6, -1], [-32, 17, yB * 0.9, 8.6, 0], [-46, 10, 5, 5, 1], [-56, 5, 2.8, 2.6, 1.6], [-60, 2, 1.2, 1.2, 1.8],
-  ];
-  const ring = ([x, w, t, b, zo], kk = 1) => {
-    const r = [];
-    for (let j = 0; j < N; j++) { const a = (j / N) * TAU, c = Math.cos(a), s = Math.sin(a), e = 0.78, pw = (v) => Math.sign(v) * Math.pow(Math.abs(v), e); r.push([x, pw(s) * (s > 0 ? t : b) * kk, zo + pw(c) * w * kk]); }
-    return r;
-  };
+  ], [
+    [60, 3, 2.4, 2.4, 0], [52, 7, yA * 0.6, 5, 0], [44, 10, yA * 0.9, 7, 0], [38, 13, yA + 0.5, 8, 0], [27, pz - 4, yM, 9, 0], [16, pz + 6, yB + 0.4, 9.6, 0], [5, pz + 5, yB + 0.6, 10, 0],
+    [-8, 15, yB, 8, 0], [-17, 10.5, yB * 0.8, 6.5, 0], [-30, 19, yB * 1.25, 10.5, 0], [-44, 15, yB * 0.9, 8, 0], [-54, 7, 4, 4, 0], [-60, 2, 1.2, 1.2, 0],
+  ], [
+    [50, 6, yA * 0.5, 5, 0], [46, 12, yA * 0.9, 8, 0], [38, 17, yA + 0.5, 9.5, 0], [27, pz, yM, 10, 0], [16, pz + 6.5, yB + 0.4, 10.4, 0], [0, pz + 7, yB + 0.8, 10.6, 0],
+    [-20, pz + 3, yB * 1.3, 11, 0], [-40, 20, yB * 1.1, 9, 0], [-54, 11, 6, 5, 0], [-60, 4, 2, 2, 0],
+  ]][V];
+  const pw = (v) => Math.sign(v) * Math.pow(Math.abs(v), 0.78);
+  const ring = ([x, w, t, b, zo], kk = 1) => { const r = []; for (let j = 0; j < N; j++) { const a = (j / N) * TAU, c = Math.cos(a), s = Math.sin(a); r.push([x, pw(s) * (s > 0 ? t : b) * kk, zo + pw(c) * w * kk]); } return r; };
   const dense = [];
-  for (let i = 0; i < st.length - 1; i++) { const n = Math.ceil((st[i][0] - st[i + 1][0]) / 4.5); for (let j = 0; j < n; j++) dense.push(st[i].map((v, q) => lerp(v, st[i + 1][q], j / n))); }
+  for (let i = 0; i < st.length - 1; i++) { const n = Math.ceil((st[i][0] - st[i + 1][0]) / 3.4); for (let j = 0; j < n; j++) dense.push(st[i].map((v, q) => lerp(v, st[i + 1][q], j / n))); }
   dense.push(st[st.length - 1]);
+  const at = (x) => {
+    if (x >= dense[0][0]) return dense[0];
+    for (let i = 0; i < dense.length - 1; i++) if (x >= dense[i + 1][0]) { const f = (dense[i][0] - x) / (dense[i][0] - dense[i + 1][0]); return dense[i].map((v, q) => lerp(v, dense[i + 1][q], f)); }
+    return dense[dense.length - 1];
+  };
+  // point on the skin at station x, angle a (0 = starboard waist, π/2 = spine, π = port waist, -π/2 = keel), raised by lift
+  const surf = (x, a, lift = 0) => { const s = at(x), c = Math.cos(a), sn = Math.sin(a); return [x, pw(sn) * ((sn > 0 ? s[2] : s[3]) + lift), s[4] + pw(c) * (s[1] + lift)]; };
+  const x0 = st[0][0];
   k.cuts = [-24, 26];
   k.add(loft(dense.map((s) => ring(s))), P.hull, bio);
   k.decks(loft(dense.slice(1, -1).map((s) => ring(s, 0.86))));
-  const at = (x) => { for (let i = 0; i < dense.length - 1; i++) if (x <= dense[i][0] && x >= dense[i + 1][0]) return dense[i]; return dense[x > 0 ? 0 : dense.length - 1]; };
   k.cuts.forEach((x, i) => { k.decks(fanX(ring(at(x - 0.7), 0.95)), { sec: i, whole: true }); k.decks(fanX(ring(at(x + 0.7), 0.95)), { sec: i + 1, whole: true }); });
   yield;
-  // --- carapace: overlapping dorsal shields with a spine ridge ---
-  for (let i = 0; i < 7; i++) {
-    const xa = 44 - i * 14.5, xb = xa - 17, rs = [];
-    for (const [x, lift] of [[xa, 0.5], [(xa + xb) / 2, 1.3], [xb, 2.6]]) {
-      const s = at(clamp(x, -58, 60)), w = s[1] * 0.74, t = s[2] + lift, r = [];
-      for (let j = 0; j <= 8; j++) { const a = lerp(0.12, Math.PI - 0.12, j / 8); r.push([x, Math.pow(Math.sin(a), 0.7) * t, s[4] + Math.cos(a) * w]); }
-      for (let j = 8; j >= 0; j--) { const a = lerp(0.12, Math.PI - 0.12, j / 8); r.push([x, Math.pow(Math.sin(a), 0.7) * (t - 1.1) - 0.2, s[4] + Math.cos(a) * (w - 0.8)]); }
-      rs.push(r);
-    }
-    if (xa < -52) break;
-    // the shields make way for the mounts
-    const clash = piv.some((p) => p[2] === 0 && p[0] < xa + 5 && p[0] > xb - 5);
-    if (!clash) {
-      k.add(loft(rs), i % 2 ? P.paint : P.hull2, { ...bio, whole: true, anim: [(R() - 0.5) * 6, 10 + R() * 8, (R() - 0.5) * 16, AN.PEEL, R() * 0.5] });
-      const s = at(clamp(xb, -58, 60));
-      k.add(tube([[xb + 6, s[2] + 1.6, s[4], 1.5], [xb + 1, s[2] + 4.5 + (i % 3), s[4], 0.8], [xb - 4, s[2] + 7 + (i % 3) * 1.5, s[4], 0.05]], 5), P.pale, { ...bio, whole: true });
-    }
+  // --- carapace: overlapping segments, each with a bone rim and a dorsal spine; scutes down the flanks ---
+  const arc = (x, lift, a0 = 0.22, n = 9) => { const r = []; for (let j = 0; j <= n; j++) r.push(surf(x, lerp(a0, Math.PI - a0, j / n), lift)); return r; };
+  for (let i = 0; i < 10; i++) {
+    const xa = Math.min(x0 - 6, 46) - i * 10.5, xb = xa - 13.5;
+    if (xb < -57) break;
+    if (piv.some((p) => p[2] === 0 && p[0] < xa + 5.5 && p[0] > xb - 5.5)) continue; // the shields make way for the mounts
+    const rs = [[xa, 0.5], [(xa + xb) / 2, 1.4], [xb, 2.7]].map(([x, lift]) => arc(x, lift).concat(arc(x, lift - 1.1, 0.26).reverse()));
+    k.add(loft(rs), i % 2 ? P.paint : P.hull2, { ...bio, whole: true, anim: [(R() - 0.5) * 6, 10 + R() * 8, (R() - 0.5) * 16, AN.PEEL, R() * 0.5] });
+    k.add(tube(arc(xb - 0.2, 2.9, 0.24, 8).map((p) => [p[0], p[1], p[2], 0.62]), 5), P.pale, { ...bio, whole: true });
+    const c = surf(xb, Math.PI / 2, 2.6), h = 4.5 + (i % 3) * 1.6 + T;
+    k.add(tube([[c[0] + 6, c[1] - 0.8, c[2], 1.6], [c[0] + 1, c[1] + h * 0.6, c[2], 0.9], [c[0] - 4.5, c[1] + h, c[2], 0.05]], 5), P.pale, { ...bio, whole: true });
+    for (const a of [0.5, Math.PI - 0.5]) { const q = surf(xb, a, 2.6), sd = a < 1.5 ? 1 : -1; k.add(tube([[q[0] + 3, q[1] - 0.4, q[2], 1.1], [q[0] - 1.5, q[1] + 2.4, q[2] + sd * 1.6, 0.55], [q[0] - 5.5, q[1] + 3.6, q[2] + sd * 3, 0.04]], 4), P.pale, { ...bio, whole: true }); }
+  }
+  for (let x = x0 - 12; x > -50; x -= 3.9) for (const a of [0.02, -0.3, Math.PI - 0.02, Math.PI + 0.3]) {
+    if (Math.abs(x - 16) < 8 && Math.sin(a) > -0.1 && piv[2]) continue;
+    const q = surf(x, a, 0.1);
+    k.add(ball(q[0], q[1], q[2], 1.55, 6, 3, 0.75), (Math.round(x) & 1) ? P.hull2 : P.paint, { ...bio, whole: true });
   }
   k.barbette(0, piv[0], 6.2, 7, P.hull2, M.BIO); if (piv[1]) k.barbette(1, piv[1], 6.4, 7, P.hull2, M.BIO);
   for (const ti of [2, 3]) if (piv[ti]) k.barbette(ti, piv[ti], 5.6, 7, P.hull2, M.BIO);
   yield;
-  // --- the maw: teeth round a lit gullet, a cluster of eyes to starboard ---
-  const mx = 58, my = -0.6, mz = 1.8;
-  k.add(lathe([[mx + 2, 4.6], [mx - 2, 6.4], [mx - 8, 6.6]], 10, { y: my, z: mz, sy: 0.9 }), P.hull2, bio);
-  k.dark(lathe([[mx + 2, 4.6], [mx - 3, 3.4], [mx - 3, 0.001]], 10, { y: my, z: mz, sy: 0.9, flip: true }), PITCH);
-  k.em(lathe([[mx - 2.9, 0.001], [mx - 2.9, 3.3]], 10, { y: my, z: mz, sy: 0.9 }), mul(P.glow, 0.34), CH.BIO);
-  k.em(lathe([[mx - 2.8, 0.001], [mx - 2.8, 3.2]], 10, { y: my, z: mz, sy: 0.9 }), mul(P.lens, 1.3), CH.LASER, 0.5);
-  for (let j = 0; j < 9; j++) {
-    const a = (j / 9) * TAU + 0.2, c = Math.cos(a), s = Math.sin(a), L = 6 + (j % 3) * 2.2;
-    k.add(tube([[mx, my + s * 4.6, mz + c * 5.2, 1.3], [mx + L * 0.6, my + s * 5.2, mz + c * 5.8, 0.8], [mx + L, my + s * 3, mz + c * 3.4, 0.04]], 5), P.pale, { ...bio, whole: true, anim: [1.5, s * 2.6, c * 2.6, AN.LASER, 0] });
-    k.em(ball(mx - 1, my + s * 4.9, mz + c * 5.5, 0.5, 5, 3), mul(P.lens, 1.1), CH.LASER, 0.1 + j * 0.08);
+  // --- organs: a heart under a cage of ribs behind the dorsal mount, sacs along the flanks, veins feeding them ---
+  const organ = mul(P.glow, 0.5), hx = -15, hs = at(hx);
+  k.add(ball(hx, hs[2] - 0.6, hs[4], 5.4, k.seg(12), 6, 0.62), organ, { mat: M.PLASMA, ch: CH.BIO, crease: 60 });
+  k.halo(hx, hs[2] + 2, hs[4], 7, mul(P.glow, 0.16), CH.BIO);
+  for (let i = 0; i < 6; i++) {
+    const x = hx + 6 - i * 2.4, pts = [];
+    for (let j = 0; j <= 6; j++) { const a = lerp(Math.PI / 2 - 0.62, Math.PI / 2 + 0.62, j / 6), q = surf(x, a, 0.2); pts.push([x, q[1] + Math.sin((j / 6) * Math.PI) * 3.1, q[2], 0.5]); }
+    k.add(tube(pts, 4), P.pale, { ...bio, whole: true });
   }
-  k.halo(mx + 2, my, mz, 12, mul(P.lens, 0.5), CH.LASER, 0.5);
+  for (let i = 0; i < 5 + T; i++) for (const sd of [1, -1]) {
+    const x = Math.min(x0 - 14, 34) - i * 10.4, r = 2.1 + ((i * 7) % 3) * 0.5;
+    if (Math.abs(x - 16) < 9 || x < -50) continue;
+    const a = sd > 0 ? 0.42 : Math.PI - 0.42, q = surf(x, a, -0.3), o = surf(x, a, 0.9);
+    k.add(latheY([[q[1] + 0.9, r * 1.02], [q[1] + 0.3, r * 1.3], [q[1] - 1.2, r * 1.3]], 8, q[0], q[2]), P.hull2, { ...bio, whole: true });
+    k.add(ball(o[0], o[1], o[2], r, 8, 5, 0.8), organ, { mat: M.PLASMA, ch: CH.BIO, crease: 60, whole: true });
+  }
+  for (const a of [0.1, -0.22, -0.6, -1.0, Math.PI - 0.1, Math.PI + 0.22, Math.PI + 0.6, Math.PI + 1.0]) {
+    const pts = [];
+    for (let x = Math.min(34, x0 - 12); x >= -44; x -= 4) { const q = surf(x, a + 0.12 * Math.sin(x * 0.21 + a * 3), 0.12); pts.push([q[0], q[1], q[2], 0.3 + 0.12 * Math.sin(x * 0.5)]); }
+    k.em(tube(pts, 4), mul(P.glow, 0.42), CH.BIO, 0, { whole: false });
+  }
+  yield;
+  // --- the maw: teeth round a lit gullet; eyes ---
+  const mx = x0 - 3, my = -0.6, mz = st[0][4], mr = V === 2 ? 4.2 : 4.6;
+  k.add(lathe([[mx + 2, mr], [mx - 2, mr * 1.4], [mx - 8, mr * 1.44]], 10, { y: my, z: mz, sy: 0.9 }), P.hull2, bio);
+  k.dark(lathe([[mx + 2, mr], [mx - 3, mr * 0.74], [mx - 3, 0.001]], 10, { y: my, z: mz, sy: 0.9, flip: true }), PITCH);
+  k.em(lathe([[mx - 2.9, 0.001], [mx - 2.9, mr * 0.72]], 10, { y: my, z: mz, sy: 0.9 }), mul(P.glow, 0.34), CH.BIO);
+  k.em(lathe([[mx - 2.8, 0.001], [mx - 2.8, mr * 0.7]], 10, { y: my, z: mz, sy: 0.9 }), mul(P.lens, 1.3), CH.LASER, 0.5);
+  for (let j = 0; j < 11; j++) {
+    const a = (j / 11) * TAU + 0.2, c = Math.cos(a), s = Math.sin(a), L = (V === 2 ? 3.5 : 6) + (j % 3) * 2.2;
+    k.add(tube([[mx, my + s * mr, mz + c * mr * 1.13, 1.2], [mx + L * 0.6, my + s * mr * 1.13, mz + c * mr * 1.26, 0.75], [mx + L, my + s * mr * 0.65, mz + c * mr * 0.74, 0.04]], 5), P.pale, { ...bio, whole: true, anim: [1.5, s * 2.6, c * 2.6, AN.LASER, 0] });
+    k.em(ball(mx - 1, my + s * mr * 1.06, mz + c * mr * 1.2, 0.5, 5, 3), mul(P.lens, 1.1), CH.LASER, 0.1 + j * 0.07);
+  }
+  k.halo(mx + 2, my, mz, 10, mul(P.lens, 0.4), CH.LASER, 0.5);
   k.emitter = [mx + 3, my, mz];
-  for (const [x, y, z, r] of [[49, 5.6, 8.5, 2.2], [45, 7.4, 11.5, 1.5], [52, 3.6, 10.6, 1.2], [43, 5.2, 14.2, 1.0], [48, 2.2, 12.6, 0.8]]) {
+  const eyes = V === 0 ? [[0, 0.75, 2.2, 1], [-4, 0.58, 1.5, 1], [3, 0.5, 1.2, 1], [-6, 0.4, 1.0, 1], [-1, 0.25, 0.8, 1], [-2, 0.8, 1.0, -1]] : [[0, 0.8, 1.9, 1], [-4, 0.55, 1.3, 1], [2, 0.42, 0.9, 1], [0, 0.8, 1.9, -1], [-4, 0.55, 1.3, -1], [2, 0.42, 0.9, -1]];
+  for (const [dx, a, r, sd] of eyes) {
+    const q = surf(mx - 9 + dx, sd > 0 ? a : Math.PI - a, 0.2), x = q[0], y = q[1], z = q[2];
     k.add(ball(x - 0.3, y - 0.2, z, r * 1.25, 7, 4), P.hull2, bio);
-    k.glass(ball(x + r * 0.3, y + r * 0.2, z + r * 0.2, r, 8, 5), PITCH, { crease: 60 });
-    k.em(box(x + r * 1.18, x + r * 1.3, y - r * 0.3, y + r * 0.75, z + r * 0.08, z + r * 0.34), mul(P.glow, 0.5), CH.BIO);
+    k.glass(ball(x + r * 0.3, y + r * 0.2, z + sd * r * 0.2, r, 8, 5), PITCH, { crease: 60 });
+    k.em(box(x + r * 1.18, x + r * 1.3, y - r * 0.3, y + r * 0.75, z + sd * r * 0.2 - r * 0.13, z + sd * r * 0.2 + r * 0.13), mul(P.glow, 0.5), CH.BIO);
   }
-  // starboard mandibles
-  for (let j = 0; j < 3; j++) {
+  // horns over the head (more of them, and longer, on later beasts)
+  for (const sd of [1, -1]) for (let j = 0; j < 3 + Math.min(2, T); j++) {
+    const q = surf(mx - 16 - j * 4.4, sd > 0 ? 1.0 - j * 0.1 : Math.PI - 1.0 + j * 0.1, 0);
+    k.add(tube([[q[0], q[1] - 0.5, q[2], 1.9 - j * 0.2], [q[0] + 6, q[1] + 4.5 + j * 1.6 + T, q[2] + sd * (2 + j), 1.1], [q[0] + 15 - j * 2, q[1] + 6 + j * 3 + T * 1.5, q[2] + sd * (1.5 + j * 1.6), 0.05]], 5), P.pale, { ...bio, whole: true });
+  }
+  yield;
+  // --- limbs: each joint is its own moving part ---
+  const arm = (s, sc) => { // a scythe: shoulder on the flank, elbow forward and outboard, blade hooking back across the bow
+    const S = surf(10, s > 0 ? 0.08 : Math.PI - 0.08, 1.2);
+    const A = k.limb(S, { axis: 'y', speed: 0.0017, swing: 0.13, ph: s * 0.9, flex: -s * 0.22 }, () => {
+      k.add(ball(0, 0, 0, 6.6 * sc, 9, 5, 0.8), P.hull2, bio);
+      k.add(tube([[0, 0, 0, 5.2 * sc], [9 * sc, 2.6 * sc, s * 6 * sc, 4.4 * sc], [20 * sc, 4 * sc, s * 10 * sc, 3.4 * sc]], 7), P.hull, bio);
+      k.add(tube([[2 * sc, 3.6 * sc, s * 1.5 * sc, 2.2 * sc], [10 * sc, 6 * sc, s * 6 * sc, 2.4 * sc], [19 * sc, 6.4 * sc, s * 9.6 * sc, 1.6 * sc]], 5, { sy: 0.5 }), P.paint, bio);
+      k.add(ball(20 * sc, 4 * sc, s * 10 * sc, 4.4 * sc, 8, 4), P.hull2, bio);
+      k.add(ball(6 * sc, 0.5 * sc, s * 7.5 * sc, 2.3 * sc, 8, 5), organ, { mat: M.PLASMA, ch: CH.BIO, crease: 60 });
+      for (let j = 0; j < 4; j++) k.add(tube([[(4 + j * 4.4) * sc, (4 + j * 0.6) * sc, s * (2.5 + j * 2.2) * sc, 1.0 * sc], [(2.4 + j * 4.4) * sc, (8 + j * 0.6) * sc, s * (3.4 + j * 2.4) * sc, 0.05]], 4), P.pale, bio);
+    });
+    const blade = [[0, 0, 0, 3.4], [11, -1.2, -s * 1, 3.2], [22, -3.4, -s * 6, 2.6], [30, -6, -s * 15, 1.6], [34, -7.8, -s * 22, 0.06]].map((p) => p.map((v) => v * sc));
+    k.limb([20 * sc, 4 * sc, s * 10 * sc], { axis: 'y', parent: A, speed: 0.0017, swing: 0.2, ph: s * 0.9 + 1.1, flex: -s * 0.35 }, () => {
+      k.add(tube(blade, 4, { sx: 0.5, sy: 1.7, phase: Math.PI / 4 }), P.pale, { ...bio, crease: 20 });
+      k.add(tube(blade.slice(0, 4).map((p) => [p[0], p[1] + p[3] * 1.2, p[2], p[3] * 0.6]), 4, { sy: 0.6 }), P.hull2, bio);
+      for (let j = 0; j < 4; j++) { const a = blade[j], b = blade[j + 1]; k.em(tube([[lerp(a[0], b[0], 0.1), a[1] - a[3] * 1.3, lerp(a[2], b[2], 0.1) - s * 0.6, 0.3 * sc], [lerp(a[0], b[0], 0.9), b[1] - b[3] * 1.3 - 0.1, lerp(a[2], b[2], 0.9) - s * 0.6, 0.24 * sc]], 4), mul(P.glow, 0.8), CH.BIO); }
+      for (let j = 0; j < 8; j++) { const f = j / 8, i0 = Math.floor(f * 4), a = blade[i0], b = blade[i0 + 1], u = f * 4 - i0, x = lerp(a[0], b[0], u), y = lerp(a[1], b[1], u), z = lerp(a[2], b[2], u), r = lerp(a[3], b[3], u); k.add(tube([[x, y - r * 1.5, z, 0.8 * sc], [x - 1.6 * sc, y - r * 1.5 - 2.6 * sc, z - s * 0.8, 0.05]], 4), P.hull2, bio); }
+    });
+  };
+  if (V === 0) arm(-1, 1); else if (V === 1) { arm(1, 0.86); arm(-1, 0.86); }
+  if (V === 2) { // a crown of tentacles round the mouth: four reach and curl, four hang short
+    for (let j = 0; j < 8; j++) {
+      const th = (j / 8) * TAU + 0.39, c = Math.cos(th), s = Math.sin(th), root = [mx - 2, my + s * 6, mz + c * 9], L = j % 2 ? 0.62 : 1;
+      const path = [[0, 0, 0, 2.5], [7 * L, s * 2.4, c * 3.4, 2.0], [14 * L, s * 1.6, c * 3, 1.3], [18.5 * L, -s * 1.4, c * 0.6, 0.6], [20.5 * L, -s * 3, -c * 1.4, 0.05]];
+      const make = (ox, oy, oz) => {
+        k.add(tube(path.map((p) => [p[0] + ox, p[1] + oy, p[2] + oz, p[3]]), 6), j % 2 ? P.paint : P.hull, bio);
+        for (let q = 1; q < 7; q++) { const f = q / 7 * 3, i0 = Math.floor(f), a = path[i0], b = path[i0 + 1], u = f - i0; k.em(ball(lerp(a[0], b[0], u) + ox, lerp(a[1], b[1], u) - s * lerp(a[3], b[3], u) * 0.9 + oy, lerp(a[2], b[2], u) - c * lerp(a[3], b[3], u) * 0.9 + oz, 0.34, 4, 2), mul(P.glow, 0.7), CH.BIO); }
+      };
+      if (j % 2) make(root[0], root[1], root[2]);
+      else k.limb(root, { axis: Math.abs(c) > Math.abs(s) ? 'y' : 'z', speed: 0.0015, swing: 0.2, ph: j * 1.3, flex: 0.2 * (Math.abs(c) > Math.abs(s) ? -Math.sign(c) : Math.sign(s)) }, () => make(0, 0, 0));
+    }
+  } else if (V === 0) for (let j = 0; j < 3; j++) { // starboard mandibles
     const z0 = 10 + j * 5, y0 = -3 - j * 0.6;
     k.add(tube([[40 - j * 5, y0, z0, 2.6 - j * 0.3], [50 - j * 3, y0 - 1.5, z0 + 5, 1.9], [59 - j * 4, y0 - 1, z0 + 2, 1.1], [64 - j * 5, y0 + 0.4, z0 - 4, 0.05]], 5), j % 2 ? P.paint : P.pale, { ...bio, whole: false });
   }
-  yield;
-  // --- the scythe arm (port) ---
-  const sz = -(pz + 6);
-  k.add(ball(8, 0.5, sz - 1, 7, 9, 5, 0.8), P.hull2, bio);
-  k.add(tube([[8, 0.5, sz - 2, 5.4], [18, 3, sz - 9, 4.6], [29, 4.6, sz - 12, 3.6]], 7), P.hull, bio);
-  k.add(ball(30, 4.8, sz - 12, 4.4, 8, 4), P.hull2, bio);
-  const blade = [[30, 4.6, sz - 12, 3.4], [42, 3.2, sz - 11, 3.2], [53, 1, sz - 6, 2.6], [61, -1.6, sz + 3, 1.6], [65, -3.4, sz + 10, 0.06]];
-  k.add(tube(blade, 4, { sx: 0.5, sy: 1.7, phase: Math.PI / 4 }), P.pale, { ...bio, crease: 20 });
-  for (let j = 0; j < 4; j++) { const a = blade[j], b = blade[j + 1]; k.em(tube([[lerp(a[0], b[0], 0.1), a[1] - a[3] * 1.3, lerp(a[2], b[2], 0.1) + 0.6, 0.3], [lerp(a[0], b[0], 0.9), b[1] - b[3] * 1.3 - 0.1, lerp(a[2], b[2], 0.9) + 0.6, 0.24]], 4), mul(P.glow, 0.8), CH.BIO); }
-  for (let j = 0; j < 6; j++) { const f = j / 6, i0 = Math.floor(f * 4), a = blade[i0], b = blade[i0 + 1], u = f * 4 - i0, x = lerp(a[0], b[0], u), y = lerp(a[1], b[1], u), z = lerp(a[2], b[2], u), r = lerp(a[3], b[3], u); k.add(tube([[x, y + r, z, 0.9], [x - 2, y + r + 3.4, z - 1, 0.05]], 4), P.hull2, bio); }
-  // --- starboard: a ribbed fin; port: trailing feelers ---
-  const fz = pz + 5;
-  for (let j = 0; j < 5; j++) {
-    const x0 = 6 - j * 9, tipx = x0 - 22 - j * 3, tipz = Math.min(49, fz + 20 - j * 2.4);
-    k.add(tube([[x0, 1, fz - 2, 1.8], [x0 - 8, 2.4, fz + 9, 1.3], [tipx, 1, tipz, 0.05]], 5), P.pale, { ...bio, whole: true });
-    if (j < 4) k.add(prismY([[x0 - 1, fz - 1], [x0 - 9, fz - 1], [tipx - 3 - 1, Math.min(49, fz + 17.6 - j * 2.4)], [tipx, tipz]], 0.9, 1.4), P.paint, { mat: M.BIO, whole: true });
+  // tail whip: two joints and a barbed sting
+  { const tx = V === 1 ? -44 : -46, ts = V === 1 ? 1.25 : 1, c = surf(tx, Math.PI / 2, -1);
+    const A = k.limb(c, { axis: 'y', speed: 0.0011, swing: 0.22, ph: 0.4 }, () => {
+      k.add(tube([[2, 0, 0, 3.4 * ts], [-5 * ts, 1, 0, 2.8 * ts], [-10 * ts, 1.4, 0, 2.2 * ts]], 6), P.hull2, bio);
+      for (let j = 0; j < 3; j++) k.add(tube([[-2 - j * 3.4 * ts, 2, 0, 0.9], [-4 - j * 3.4 * ts, 5.4, 0, 0.05]], 4), P.pale, bio);
+    });
+    k.limb([-10 * ts, 1.4, 0], { axis: 'y', parent: A, speed: 0.0011, swing: 0.3, ph: 1.5 }, () => {
+      k.add(tube([[0, 0, 0, 2.2 * ts], [-6 * ts, 0.8, 0, 1.4 * ts], [-10 * ts, 2.2, 0, 0.9 * ts]], 6), P.hull, bio);
+      k.add(tube([[-9 * ts, 1.8, 0, 1.3 * ts], [-12 * ts, 3.4, 0, 1.0], [-15.5 * ts, 2.4, 0, 0.05]], 5, { sx: 0.6 }), P.pale, bio);
+      k.em(ball(-10 * ts, 2.4, 0, 1.0 * ts, 6, 3), mul(P.glow, 0.9), CH.BIO);
+      for (const sd of [1, -1]) k.add(tube([[-9 * ts, 2, 0, 0.7], [-10.5 * ts, 2.6, sd * 3, 0.05]], 4), P.pale, bio);
+    });
   }
-  for (let j = 0; j < 4; j++) k.add(tube([[-6 - j * 9, -3, sz + 4, 1.6], [-20 - j * 9, -6, sz - 5 - j, 1.0], [-38 - j * 6, -4, sz - 3 + j * 3, 0.05]], 5), P.pale, { ...bio, whole: true });
   yield;
-  // --- tails and thrust sacs, belly ribs, pores ---
-  for (const [z, y, r, L] of [[2, 0, 5.6, 0], [14, -1, 3.6, 4], [-12, 1, 3.6, 6]]) {
+  // --- fins ---
+  const rib = (pts, col = P.pale) => k.add(tube(pts, 5), col, { ...bio, whole: true });
+  if (V === 0) {
+    const fz = pz + 5;
+    for (let j = 0; j < 5; j++) {
+      const xx = 6 - j * 9, tipx = xx - 22 - j * 3, tipz = Math.min(49, fz + 20 - j * 2.4);
+      rib([[xx, 1, fz - 2, 1.8], [xx - 8, 2.4, fz + 9, 1.3], [tipx, 1, tipz, 0.05]]);
+      if (j < 4) k.add(prismY([[xx - 1, fz - 1], [xx - 9, fz - 1], [tipx - 4, Math.min(49, fz + 17.6 - j * 2.4)], [tipx, tipz]], 0.9, 1.4), P.paint, { mat: M.BIO, whole: true });
+    }
+    const sz = -(pz + 6);
+    for (let j = 0; j < 4; j++) rib([[-6 - j * 9, -3, sz + 4, 1.6], [-20 - j * 9, -6, sz - 5 - j, 1.0], [-38 - j * 6, -4, sz - 3 + j * 3, 0.05]]);
+  } else for (const sd of [1, -1]) {
+    // 1: two pairs of veined wings swept back from the thorax; 2: broad mantle fins
+    const sets = V === 1 ? [[[-1, pz + 4], [-12, pz + 3], [-36, 49], [-20, 49]], [[-24, 17], [-33, 18], [-55, 43], [-45, 45]]] : [[[-6, pz + 5], [-44, 19], [-56, 47], [-30, 49]]];
+    sets.forEach((poly, wi) => {
+      const pp = poly.map(([x, z]) => [x, sd * z]);
+      k.add(prismY(pp, 0.6 - wi, 1.2 - wi), wi ? P.hull2 : P.paint, { mat: M.BIO, whole: false, anim: [-6, 4, sd * 14, AN.PEEL, 0.3] });
+      for (const f of [0.02, 0.34, 0.66, 0.98]) rib([[lerp(pp[0][0], pp[1][0], f), 1 - wi, lerp(pp[0][1], pp[1][1], f), 1.5], [lerp(pp[3][0], pp[2][0], f) * 0.6 + lerp(pp[0][0], pp[1][0], f) * 0.4, 2 - wi, lerp(pp[3][1], pp[2][1], f) * 0.6 + lerp(pp[0][1], pp[1][1], f) * 0.4, 1.0], [lerp(pp[3][0], pp[2][0], f), 1 - wi, lerp(pp[3][1], pp[2][1], f), 0.05]]);
+      for (let q = 0; q < 5; q++) { const f = 0.15 + q * 0.17; k.em(ball(lerp(lerp(pp[0][0], pp[1][0], f), lerp(pp[3][0], pp[2][0], f), 0.8), 1.4 - wi, lerp(lerp(pp[0][1], pp[1][1], f), lerp(pp[3][1], pp[2][1], f), 0.8), 0.5, 4, 2), mul(P.glow, 0.8), CH.BIO); }
+    });
+  }
+  // --- thrust sacs, belly ribs, gills, flank spines, pores ---
+  const sacs = V === 1 ? [[0, 0, 5, 0], [10, -1, 3.8, 5], [-10, -1, 3.8, 5]] : [[st[st.length - 1][4], 0, 5.6, 0], [14, -1, 3.6, 4], [-12, 1, 3.6, 6]];
+  for (const [z, y, r, L] of sacs) {
     const x = -58 + L;
     k.add(lathe([[x + 9, r * 0.8], [x + 3, r * 1.2], [x, r * 1.02], [x + 1, r * 0.8], [x + 4, r * 0.5]], 9, { y, z }), P.hull2, bio);
     k.em(lathe([[x + 4, 0.001], [x + 4, r * 0.5], [x + 1, r * 0.8]], 9, { y, z, flip: true }), mul(P.glow, 0.9), CH.ENGINE);
     k.glowCone(x + 2, r * 0.7, mul(P.glow, 0.3), x - r * 2.6, r * 0.2, [0, 0, 0], y, z, 9, CH.ENGINE);
     k.nozzles.push({ x, y, z, r: r * 0.9 });
-    for (let j = 0; j < 3; j++) { const a = j * 2.1 + z; k.add(tube([[x + 5, y + Math.sin(a) * r, z + Math.cos(a) * r, 1.1], [x - 8, y + Math.sin(a) * r * 1.6, z + Math.cos(a) * r * 1.6, 0.7], [x - 20 + L * 0.5, y + Math.sin(a) * r * 0.8, z + Math.cos(a) * r * 2.2, 0.04]], 4), P.pale, { ...bio, whole: true }); }
+    for (let j = 0; j < 3; j++) { const a = j * 2.1 + z; rib([[x + 5, y + Math.sin(a) * r, z + Math.cos(a) * r, 1.1], [x - 5, y + Math.sin(a) * r * 1.6, z + Math.cos(a) * r * 1.6, 0.7], [x - 9 + L * 0.5, y + Math.sin(a) * r * 0.8, z + Math.cos(a) * r * 2.2, 0.04]]); }
   }
-  for (let i = 0; i < 8; i++) {
-    const x = 34 - i * 9, s = at(x), w = s[1] * 0.86, pts = [];
-    for (let j = 0; j <= 6; j++) { const a = lerp(-0.25, Math.PI + 0.25, j / 6); pts.push([x, -Math.pow(Math.max(0, Math.sin(a)), 0.7) * (s[3] + 0.9) + (Math.sin(a) < 0 ? 1.5 : 0), s[4] + Math.cos(a) * w, 0.9]); }
-    k.add(tube(pts, 4), P.pale, { ...bio, whole: true });
+  for (let x = Math.min(36, x0 - 12); x > -46; x -= 6) {
+    const pts = [];
+    for (let j = 0; j <= 8; j++) { const q = surf(x, lerp(0.3, -Math.PI - 0.3, j / 8), 0.5); pts.push([q[0], q[1], q[2], 0.85]); }
+    rib(pts);
   }
-  for (let i = 0; i < 26; i++) {
-    const x = 44 - i * 3.6, s = at(x);
-    for (const sd of [1, -1]) { const z = s[4] + sd * s[1] * 0.985; k.em(ball(x, 0.6, z, 0.38, 4, 2), mul(P.glow, i % 5 === 0 ? 1.4 : 0.6), CH.BIO); }
-  }
-  // gill slits: slanted vents that breathe light
-  for (const sd of [1, -1]) for (let i = 0; i < 7; i++) {
-    const x = 30 - i * 6.4, s = at(x), z = s[4] + sd * s[1] * 0.93, y0 = -s[3] * 0.34, y1 = s[2] * 0.3;
-    k.dark(loft([[[x + 1.9, y1, z + sd * 0.25], [x + 0.9, y1, z + sd * 0.5], [x - 1.5, y0, z + sd * 0.5], [x - 0.5, y0, z + sd * 0.25]], [[x + 1.9, y1, z - sd * 1], [x + 0.9, y1, z - sd * 1], [x - 1.5, y0, z - sd * 1], [x - 0.5, y0, z - sd * 1]]]), PITCH);
-    k.em(loft([[[x + 1.6, y1 - 0.3, z + sd * 0.56], [x + 1.2, y1 - 0.3, z + sd * 0.6], [x - 1.2, y0 + 0.3, z + sd * 0.6], [x - 0.8, y0 + 0.3, z + sd * 0.56]], [[x + 1.6, y1 - 0.3, z], [x + 1.2, y1 - 0.3, z], [x - 1.2, y0 + 0.3, z], [x - 0.8, y0 + 0.3, z]]]), mul(P.glow, 0.5), CH.SEAM, 0, { whole: true });
-  }
-  // crown of horns over the head, lateral spines down the back
   for (const sd of [1, -1]) {
-    for (let j = 0; j < 3; j++) k.add(tube([[40 - j * 5, yA * 0.8, 1 + sd * (6 + j * 3), 1.9 - j * 0.3], [47 - j * 4, yA + 5 + j * 2, 1 + sd * (8 + j * 4), 1.2], [57 - j * 5, yA + 6 + j * 3.4, 1 + sd * (7 + j * 4.6), 0.05]], 5), P.pale, { ...bio, whole: true });
-    for (let i = 0; i < 9; i++) { const x = 26 - i * 8, s = at(x), z = s[4] + sd * s[1] * 0.72, y = s[2] * 0.62; k.add(tube([[x + 1, y, z, 1.25], [x - 2.6, y + 3.4, z + sd * 2.6, 0.6], [x - 6.6, y + 4.6, z + sd * 4.6, 0.04]], 4), i % 3 ? P.hull2 : P.pale, { ...bio, whole: true }); }
+    for (let i = 0; i < 7; i++) {
+      const x = Math.min(30, x0 - 18) - i * 6.4, s = at(x), z = s[4] + sd * s[1] * 0.93, y0 = -s[3] * 0.34, y1 = s[2] * 0.3;
+      k.dark(loft([[[x + 1.9, y1, z + sd * 0.25], [x + 0.9, y1, z + sd * 0.5], [x - 1.5, y0, z + sd * 0.5], [x - 0.5, y0, z + sd * 0.25]], [[x + 1.9, y1, z - sd * 1], [x + 0.9, y1, z - sd * 1], [x - 1.5, y0, z - sd * 1], [x - 0.5, y0, z - sd * 1]]]), PITCH);
+      k.em(loft([[[x + 1.6, y1 - 0.3, z + sd * 0.56], [x + 1.2, y1 - 0.3, z + sd * 0.6], [x - 1.2, y0 + 0.3, z + sd * 0.6], [x - 0.8, y0 + 0.3, z + sd * 0.56]], [[x + 1.6, y1 - 0.3, z], [x + 1.2, y1 - 0.3, z], [x - 1.2, y0 + 0.3, z], [x - 0.8, y0 + 0.3, z]]]), mul(P.glow, 0.5), CH.SEAM, 0, { whole: true });
+    }
+    for (let i = 0; i < 12 + T * 3; i++) { const x = 30 - i * (64 / (12 + T * 3)), q = surf(x, sd > 0 ? 0.62 : Math.PI - 0.62, 0); rib([[q[0] + 1, q[1], q[2], 1.25], [q[0] - 2.6, q[1] + 3.4, q[2] + sd * 2.6, 0.6], [q[0] - 6.6, q[1] + 4.6 + T, q[2] + sd * 4.6, 0.04]], i % 3 ? P.hull2 : P.pale); }
   }
+  for (let i = 0; i < 26; i++) { const x = Math.min(44, x0 - 8) - i * 3.6; for (const a of [-0.12, Math.PI + 0.12]) { const q = surf(x, a, 0.1); k.em(ball(q[0], q[1], q[2], 0.38, 4, 2), mul(P.glow, i % 5 === 0 ? 1.4 : 0.6), CH.BIO); } }
   k.bays.push([20, -8, 0]);
-  k.wound(22, 5, 10, 9); k.wound(-24, 5, -12, 10); k.wound(44, 4, -6, 7); k.wound(0, 3, pz, 9);
-  k.wound(-42, 3, 4, 8); k.wound(14, 3, -pz - 4, 9); k.wound(34, 5, 6, 7); k.wound(-10, 9, 0, 9);
-  k.blasts = [[-52, 2, 2], [-38, 5, -6], [-24, 8, 8], [-8, 9, -10], [8, 9, 12], [22, 7, -14], [38, 6, 4], [52, 2, 0]];
+  k.wound(22, 5, 10, 9); k.wound(-24, 5, -12, 10); k.wound(40, 4, -6, 7); k.wound(0, 3, pz, 9);
+  k.wound(-42, 3, 4, 8); k.wound(14, 3, -pz - 2, 9); k.wound(34, 5, 6, 7); k.wound(-10, 9, 0, 9);
+  k.blasts = [[-52, 2, 2], [-38, 5, -6], [-24, 8, 8], [-8, 9, -10], [8, 9, 12], [22, 7, -14], [38, 6, 4], [48, 2, 0]];
 }
 
 /* -------------------------------- CITADEL -------------------------------- */
 // MEGA. A fortress of seven armour masses bolted round a reactor; the seams between them glow with what is inside.
 function* citadel(k, G) {
-  const P = G.pal, { yA, yB, yC, pz, piv } = G, v = Math.floor(G.level / 5) % 2, GOLD = P.gold;
-  const seam = mul(P.glow, 1.0), zo = pz + 9, yD = yB - 0.3;
+  const P = G.pal, { yA, yB, yC, pz, piv } = G, v = Math.floor(G.level / 5) % 2, V = G.V % 3, GOLD = P.gold;
+  const seam = mul(P.glow, 0.7), zo = pz + 9, yD = yB - 0.3;
   k.nShell = 7; k.cuts = [];
   k.turSec = [6, 5, 4, 3];
   // 5 — the keep: spine block with the crown of towers
@@ -1546,20 +1784,44 @@ function* citadel(k, G) {
   bastion(3, -1, true); bastion(4, 1, true);
   yield;
   // 6 — the prow: twin rams round the great lens
+  // silhouettes: 0 twin rams · 1 pincer: short rams inside great horns hooking in from the fore bastions · 2 keep: one armoured
+  // wedge of a bow, and gun spurs thrust out amidships
   k.sec = 6;
-  for (const s of [1, -1]) {
-    k.add(loft([ringRect(66, -1.6, 1.8, s * 6.4, s * 9.4, 0.4), ringRect(54, -5, 4.6, s * 4.4, s * 12, 1), ringRect(32, -8, yA - 0.3, s * 4.2, s * 12.6, 1)]), P.hull, { win: 130 });
-    k.decks(loft([ringRect(54, -4, 3.6, s * 5.4, s * 11), ringRect(33, -7, yA - 1.3, s * 5.2, s * 11.6)]));
-    k.metal(box(34, 56, yA * 0.42, yA * 0.42 + 0.7, s * 12.2, s * 13), GOLD);
-    for (let i = 0; i < 5; i++) k.em(box(35 + i * 4, 37.6 + i * 4, -1, 0.6, s * 4.1, s * 4.25), mul(P.lens, 0.9), CH.LASER, 0.05 + i * 0.14);
-    k.lamp(65.6, 2.2, s * 7.9, 0.34, LAMP_WHITE, CH.STROBE);
+  const px = V === 1 ? 56 : 66;
+  if (V !== 2) for (const s of [1, -1]) {
+    k.add(loft([ringRect(px, -1.6, 1.8, s * 6.4, s * 9.4, 0.4), ringRect(px - 12, -5, 4.6, s * 4.4, s * 12, 1), ringRect(32, -8, yA - 0.3, s * 4.2, s * 12.6, 1)]), P.hull, { win: 130 });
+    k.decks(loft([ringRect(px - 12, -4, 3.6, s * 5.4, s * 11), ringRect(33, -7, yA - 1.3, s * 5.2, s * 11.6)]));
+    k.metal(box(34, px - 10, yA * 0.42, yA * 0.42 + 0.7, s * 12.2, s * 13), GOLD);
+    for (let i = 0; i < 5 && 37.6 + i * 4 < px - 8; i++) k.em(box(35 + i * 4, 37.6 + i * 4, -1, 0.6, s * 4.1, s * 4.25), mul(P.lens, 0.9), CH.LASER, 0.05 + i * 0.14);
+    k.lamp(px - 0.4, 2.2, s * 7.9, 0.34, LAMP_WHITE, CH.STROBE);
     k.em(box(31.6, 31.9, -1, -0.5, s * 5, s * 12), seam, CH.SEAM);
+  } else {
+    k.add(loft([ringRect(66, -2, 2, -2.4, 2.4, 0.5), ringRect(54, -6, 5, -9.5, 9.5, 1.2), ringRect(32, -8, yA - 0.3, -12.6, 12.6, 1.2)]), P.hull, { win: 150 });
+    k.decks(loft([ringRect(54, -5, 4, -8.4, 8.4), ringRect(33, -7, yA - 1.3, -11.6, 11.6)]));
+    for (const s of [1, -1]) { k.metal(loft([[[66.4, -1.6, s * 0.4], [66.4, 1.6, s * 0.4], [54, 5, s * 9.8], [54, -6, s * 9.8]], [[66.4, -1.6, s * 1.6], [66.4, 1.6, s * 1.6], [53, 5.4, s * 11], [53, -6.4, s * 11]]]), GOLD, { whole: true }); k.lamp(54, 5.6, s * 9, 0.34, LAMP_WHITE, CH.STROBE); k.em(box(31.6, 31.9, -1, -0.5, s * 5, s * 12), seam, CH.SEAM); }
+    for (let i = 0; i < 4; i++) for (const s of [1, -1]) k.em(loft([[[62 - i * 5.5, -0.5, s * (2.9 + i * 3.3)], [62 - i * 5.5, 0.5, s * (2.9 + i * 3.3)], [60 - i * 5.5, 0.5, s * (4.1 + i * 3.3)], [60 - i * 5.5, -0.5, s * (4.1 + i * 3.3)]], [[62 - i * 5.5, -0.5, s * (2.7 + i * 3.3)], [62 - i * 5.5, 0.5, s * (2.7 + i * 3.3)], [60 - i * 5.5, 0.5, s * (3.9 + i * 3.3)], [60 - i * 5.5, -0.5, s * (3.9 + i * 3.3)]]]), mul(P.lens, 0.9), CH.LASER, 0.05 + i * 0.18, { whole: true });
   }
   k.add(box(31.5, 44.5, yA - 2.4, yA - 0.3, -12.6, 12.6, 0.5), P.hull2);
   k.metal(box(43.8, 44.7, yA - 2.5, yA - 0.2, -12.8, 12.8), GOLD);
   k.barbette(0, piv[0], 6.2);
-  k.lens(47, -2.6, 0, 3.4, P.lens, { n: 8 });
-  k.emitter = [52, -2.6, 0];
+  if (V === 2) { k.metal(tbox(50, 62, [-12, -6, -4.4, 4.4], [-10.6, -7, -3, 3], 0.6), P.hull2, { whole: true }); k.lens(62.6, -9, 0, 2.8, P.lens, { n: 8 }); k.emitter = [66, -9, 0]; }
+  else { k.lens(47, -2.6, 0, 3.4, P.lens, { n: 8 }); k.emitter = [52, -2.6, 0]; }
+  if (V === 1) for (const s of [1, -1]) { // the pincer horns ride on the fore bastions
+    k.sec = s > 0 ? 4 : 3;
+    const hz = Math.min(44, zo + 1);
+    k.add(tube([[30, -1, s * (hz - 3), 5.4], [46, -0.6, s * hz, 4.8], [58, 0, s * (hz - 4), 3.4], [65, 0.4, s * (hz - 13), 1.6], [67, 0.6, s * (hz - 19), 0.06]], 6, { sy: 1.2 }), P.hull, { crease: 28, whole: false });
+    for (const [x, zz, r] of [[40, hz - 1, 5.4], [53, hz - 1.6, 4.4], [62, hz - 8, 2.7]]) k.metal(tube([[x, -0.4, s * zz, r], [x + 2, -0.3, s * (zz - (x > 55 ? 1.6 : 0)), r * 0.97]], 6, { sy: 1.2 }), GOLD, { whole: true });
+    for (let i = 0; i < 5; i++) k.em(ball(36 + i * 5.2, -0.6, s * (hz - 5.6 + Math.min(i, 2) * 0.9 - Math.max(0, i - 2) * 2.4), 0.5, 5, 3), mul(P.lens, 1.0), CH.LASER, 0.05 + i * 0.16);
+    k.lamp(66.6, 1.2, s * (hz - 18), 0.34, LAMP_WHITE, CH.STROBE);
+  }
+  if (V === 2) for (const s of [1, -1]) { // gun spurs amidships (they belong to the aft bastions)
+    k.sec = s > 0 ? 2 : 1;
+    wing(k, P, [[-4, s * (zo + 3)], [-26, s * (zo + 3)], [-20, s * 50], [-10, s * 50]], s, { y: -3, th: 3.2, col: P.hull });
+    k.metal(tube([[-15, -0.6, s * 46, 1.5], [-15, -0.6, s * 52.5, 1.1]], 6), GUN, { whole: true });
+    k.em(ball(-15, -0.6, s * 52.6, 0.9, 6, 3), [4, 1.5, 0.3], CH.VOLLEY, 0.3);
+    k.metal(latheY([[1.6, 2.6], [0.6, 3.6], [0.2, 3.6]], 8, -15, s * 44), GOLD);
+  }
+  k.sec = 6;
   // 0 — the engine bank
   k.sec = 0;
   const ew = Math.min(38, zo + 2);
@@ -1834,8 +2096,12 @@ function* buildSteps(T, q, level, gen, mega, key) {
     level, mega, cls, R, piv, nT: piv.length,
     yA: piv[0][1], yB: piv[1] ? piv[1][1] : piv[0][1] * 1.55,
     yC: piv[2] ? piv[2][1] : 6.2, pz: Math.abs(piv[2] ? piv[2][2] : (noz[0] ? noz[0].z : 27)),
-    pal: palette(level, cls, R), variant: Math.floor(level / 3) + level,
+    pal: palette(level, cls, R),
   };
+  // the n-th ship of its class takes the n-th silhouette; ornament grows with the level
+  let occ = 0;
+  for (let l = 1; l < level; l++) if (Bosses3D.classOf(l) === cls) occ++;
+  G.V = occ; G.tier = k.tier = Math.min(3, Math.floor((level - 1) / 4));
   yield* DESIGNS[cls](k, G);
   for (let i = 0; i < piv.length; i++) { k.use('tur' + i); k.sec = -1; turret(k, G, i); yield; }
   const proto = {
@@ -1912,7 +2178,7 @@ function instance(lib, proto) {
     core = { root, secs: cs, rings: [], info: proto.coreInfo, open: 0 };
   }
   // rotating gear rides on the section that carries it; the core's rings orbit under the core root
-  const rots = [];
+  const rots = [], limbs = [];
   proto.rot.forEach((r, i) => {
     const m = mk(r.part, r.core ? coreMat : turMat);
     if (r.core) {
@@ -1923,8 +2189,10 @@ function instance(lib, proto) {
       return;
     }
     m.position.set(r.pivot[0], r.pivot[1], r.pivot[2]);
-    secs[proto.mega ? Math.min(secs.length - 1, r.sec ?? 5) : secOfX(r.pivot[0])].mesh.add(m);
-    rots.push({ m, axis: r.axis, speed: r.speed });
+    limbs[i] = m;
+    if (r.parent != null) limbs[r.parent].add(m);
+    else secs[proto.mega ? Math.min(secs.length - 1, r.sec ?? 5) : secOfX(r.pivot[0])].mesh.add(m);
+    rots.push({ m, axis: r.axis, speed: r.speed, swing: r.swing || 0, ph: r.ph || 0, base: r.base || 0, flex: r.flex || 0 });
   });
   // turrets: the integrator aims the outer group, the body inside rises on deploy; each rides on its section
   const turrets = [], bodies = [], wrecks = [];
@@ -2082,7 +2350,9 @@ function instance(lib, proto) {
     Lv[CH.LASER] = E.laser; Lv[CH.SWEEP] = E.sweep; Lv[CH.RAM] = E.ram; Lv[CH.VOLLEY] = E.volley;
     Lv[CH.BAY] = Math.max(E.bay, 0.12 * lightsOn) * (dying ? k : 1);
     Lv[CH.SHIELD] = S.shieldT;
-    Lv[CH.BIO] = accOn * (dying ? k : 1) * (1 + E.laser + E.volley * 0.6);
+    // living hulls: a heartbeat that quickens and flares as the damage mounts
+    const beat = Math.pow(Math.max(0, Math.sin(tMs * 0.0042 * (1 + S.damage * 1.4))), 6);
+    Lv[CH.BIO] = accOn * (dying ? k : 1) * (0.8 + 0.5 * beat + S.damage * 0.9 * (0.6 + 0.4 * beat) + E.laser + E.volley * 0.6);
     Lv[CH.SEAM] = accOn * (0.7 + 0.3 * Math.sin(tMs * 0.0034)) * (dying ? 1 + dq : 1) * (1 + E.ram);
     Lv[CH.CORE] = (0.85 + 0.15 * Math.sin(tMs * 0.0062)) * (1 + E.laser * 0.6 + E.sweep * 0.6) * (dying ? 1 + dq * 0.8 : 1);
     Lv[CH.BEAM] = Math.max(E.laser, E.sweep);
@@ -2092,7 +2362,12 @@ function instance(lib, proto) {
 
     // turrets rise out of their wells; rotating gear
     for (let i = 0; i < bodies.length; i++) { bodies[i].position.y = -(1 - deploy) * 7; bodies[i].visible = deploy > 0.02; }
-    for (const r of rots) r.m.rotation[r.axis] = tMs * r.speed;
+    // steady turners (radar) and swaying limbs: limbs thrash harder when hurt, tense on a charge, go slack in death
+    const sway = dying ? Math.max(0, 1 - dq * 1.4) : 1 + S.damage * 0.7, tense = Math.max(E.laser, E.volley, E.ram);
+    for (let i = 0; i < rots.length; i++) {
+      const r = rots[i];
+      r.m.rotation[r.axis] = r.swing ? r.base + r.swing * sway * Math.sin(tMs * r.speed * (1 + S.damage * 0.5) + r.ph) + r.flex * tense : tMs * r.speed;
+    }
 
     // blown turrets: tumbling, burning wreckage
     for (let i = 0; i < wrecks.length; i++) {

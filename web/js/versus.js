@@ -3,7 +3,8 @@ import { makeSpaceBackdrop } from './bggen.js';
 import { W, H, STEP, randInt, overlap, setRngSeed } from './const.js';
 import * as input from './input.js';
 import * as audio from './audio.js';
-import { Button, ButtonGroup, drawText } from './ui.js';
+import { Button, ButtonGroup } from './ui.js';
+import * as ui from './ui.js';
 import { BaseWorld } from './world.js';
 import { Player, Bullet, Explosion, Rocket, LaserBeam } from './entities.js';
 import { VsArena, applyVsPod } from './versus_arena.js';
@@ -270,19 +271,17 @@ export class VersusState extends BaseWorld {
     this.player1.draw(g, this);
     this.player2.draw(g, this);
 
-    drawText(g, `P1: ${this.score1}`, 10, 24, 26, '#fff', 'left');
-    drawText(g, `P2: ${this.score2}`, W - 10, 24, 26, '#fff', 'right');
-    drawText(g, `First to ${SCORE_LIMIT}`, W / 2, 24, 18, 'rgb(160,160,160)');
-    // secondary-ammo readout per player
-    drawText(g, `🚀${this.player1.rockets} ⚡${this.player1.lasers}`, 10, 50, 16, 'rgb(120,220,255)', 'left');
-    drawText(g, `🚀${this.player2.rockets} ⚡${this.player2.lasers}`, W - 10, 50, 16, 'rgb(120,220,255)', 'right');
+    // score plates with the secondary-ammo readout per player
+    ui.begin(g);
+    ui.scrim(g, 'top', 100, 0.3);
+    ui.hudScorePlate(g, 'left', { name: 'PLAYER 1', score: this.score1, rockets: this.player1.rockets, lasers: this.player1.lasers });
+    ui.hudScorePlate(g, 'right', { name: 'PLAYER 2', score: this.score2, rockets: this.player2.rockets, lasers: this.player2.lasers });
+    ui.hudLabel(g, `FIRST TO ${SCORE_LIMIT}`, W / 2, 22, { size: 10, weight: 700, track: 0.3, align: 'center', color: ui.rgba(ui.C.mid) });
 
     this.drawPauseOverlay(g);
 
     if (this.winner) {
-      g.fillStyle = 'rgba(0,0,0,0.6)';
-      g.fillRect(0, 0, W, H);
-      drawText(g, `${this.winner} WINS!`, W / 2, H / 2 - 100, 56);
+      ui.notice(g, `${this.winner} WINS`, { y: H / 2 - 100, sub: `${this.score1} – ${this.score2}`, color: ui.C.gold, size: 40 });
       this.winMenu.draw(g);
     }
   }

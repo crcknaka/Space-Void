@@ -1,14 +1,14 @@
 // Space Void service worker — offline play + instant repeat loads.
 // Assets are cache-first (immutable), code/html/fonts are network-first
 // with cache fallback, /api is never cached.
-const CACHE = 'space-void-v7'; // v5: WebGL renderer (three.js + 3D modules load lazily, cached at runtime)
+const CACHE = 'space-void-v8'; // v5: WebGL renderer (three.js + 3D modules load lazily, cached at runtime)
 
 const PRECACHE = [
   '.',
   'index.html',
   'manifest.json',
   'js/main.js', 'js/const.js', 'js/input.js', 'js/audio.js', 'js/assets.js',
-  'js/ui.js', 'js/fx.js', 'js/entities.js', 'js/world.js', 'js/game.js',
+  'js/ui.js', 'js/bake3d.js', 'js/fx.js', 'js/entities.js', 'js/world.js', 'js/game.js',
   'js/versus.js', 'js/menu.js', 'js/scores.js', 'js/options.js',
   'js/lb.js', 'js/settings.js',
   'js/mesh3d.js', 'js/shipgen.js', 'js/procassets.js', 'js/bossgen.js', 'js/bggen.js',

@@ -13,6 +13,7 @@
 // (2.5D over-the-field) → 'chase' (third person, behind the ship). The old
 // canvas renderer stays available as "classic" graphics (settings / G).
 import { W, H } from './const.js';
+import * as audio from './audio.js';
 import * as input from './input.js';
 import { settings, saveSettings } from './settings.js';
 import {
@@ -25,10 +26,10 @@ import { SECTOR_THEMES } from './bggen.js';
 
 export const MODES = ['top', 'tilt', 'chase', 'cockpit'];
 const MODE_LABEL = { top: 'TOP', tilt: 'TILT', chase: 'CHASE', cockpit: 'COCKPIT' };
-const COCKPIT_FOV = 62;
-const EYE_Y = 96;      // the pilot sits well above the lane: the field has to read as a floor, not a line
-const EYE_PITCH = 0.2; // …and looks down it
-const LAUNCH_MS = 3000;
+const COCKPIT_FOV = 58;
+const EYE_Y = 76;      // the pilot sits well above the lane: the field has to read as a floor, not a line
+const EYE_PITCH = 0.16; // …and looks down it
+const LAUNCH_MS = 3600;
 const FOV = 50;
 const CHASE_FOV = 40; // telephoto: compresses depth so the far end of the field stays readable
 const HI = 3;         // tessellation multiplier for models shown in 3D
@@ -431,7 +432,7 @@ export class View3D {
   }
 
   exhOpt(boost, intensity) { // reused opts object for the player plumes
-    const o = this._exh || (this._exh = { color: 'player', boost: false, intensity: 1 });
+    const o = this._exh || (this._exh = { color: 'player', boost: false, intensity: 1, trail: true, embers: true, kick: true });
     o.boost = boost; o.intensity = intensity;
     return o;
   }
@@ -662,6 +663,7 @@ export class View3D {
     // --- players: hero hulls from ships3d.js (roster id recovered from the sprite) ---
     // first person: the pilot's own hull is not drawn — the cockpit pass shows its nose
     const p1 = world.player1, fp = this.mode === 'cockpit';
+    this.fwd = fp || this.mode === 'chase';
     if (p1.alive) this._pitDead = 0; else if (!this._pitDead) this._pitDead = now;
     this.pitShown = fp && !!this.cockpit && (p1.alive || now - this._pitDead < 1500);
     for (const p of world.players()) {
@@ -710,7 +712,7 @@ export class View3D {
       ud.update(dt, t);
       if (inside) continue; // exhaust, shield and aura are all behind or around the pilot's head
       for (const n of ud.nozzles || []) {
-        fx.exhaust(px + (n.x - n.r) * L, n.y * L, pz + n.z * L, -1, 0, n.r * L * 0.95, this.exhOpt(thrust >= 2, 0.55));
+        fx.exhaust(px + (n.x - n.r) * L, n.y * L, pz + n.z * L, -1, 0, n.r * L * 1.7, this.exhOpt(thrust >= 2, 0.6));
       }
       this.wounds(o, ud, k);
       if (p.shield) this.bubble(p, px, pz, 36, 0x50dcff, t);
@@ -722,7 +724,7 @@ export class View3D {
     for (const e of world.enemies) {
       if (e.dead) continue;
       if (e.isBoss) { this.boss(e, world, ox, oz, t); continue; }
-      const ex = e.x - ox, ez = e.y - oz;
+      const ex = this.mapX(e.x), ez = e.y - oz;
       const warping = e.warpUntil && t < e.warpUntil;
       const drone = e.type === 'basic' && e.w < 40; // carrier drones, brood fragments
       const o = this.obj(e, () => {
@@ -738,7 +740,11 @@ export class View3D {
       });
       const ud = o.userData;
       const L = e.w * (e.type === 'sniper' ? 1.5 : e.type === 'hunter' ? 1.3 : 1.2); // hull length (model is 1 long)
-      o.scale.setScalar(L);
+      // from the cockpit a fighter has to grow into a threat as it closes: perspective alone
+      // (the eye rides high above the lane) leaves it toy-sized, so it is drawn larger up close
+      const near = fp ? 1.3 + 0.35 * Math.max(0, Math.min(1, 1 - (e.x - p1.x) / 700)) : 1;
+      const born = Math.min(1, 0.3 + (t - (ud.born ??= t)) / 500); // …and nothing snaps in at full size
+      o.scale.setScalar(L * near * (warping ? 1 : born));
       this.setU(ud, 'setWarp', warping ? Math.min(1, (e.warpUntil - t) / 550) : 0); // printed in nose-first
       if (ud.hp0 == null) ud.hp0 = ud.hpL = Math.max(1, e.health);
       if (e.health < ud.hpL || (e.dying && !ud.fell)) { // every hit tears something off
@@ -814,8 +820,8 @@ export class View3D {
         };
         return r;
       });
-      const ax = a.x - ox, az = a.y - oz;
-      o.scale.setScalar(a.w * 1.2);
+      const ax = this.mapX(a.x), az = a.y - oz;
+      o.scale.setScalar(a.w * 1.2 * (fp ? 1.15 : 1) * Math.min(1, 0.25 + (t - (o.userData.born ??= t)) / 600));
       o.position.set(ax, 0, az);
       o.quaternion.setFromAxisAngle(o.userData.axis, (a.angle * Math.PI) / 180);
       if (a.hp < o.userData.hp) { // a giant soaked a hit: chips fly off the struck face
@@ -831,7 +837,7 @@ export class View3D {
         const src = r.img.mesh ? r.img : images.rocket;
         const o = this.obj(r, () => this.model(src.mesh, { flame: r.enemyFire ? 'enemy' : 'player', kind: 'rocket', scale: src.fitScale * (r.w / src.width) * 1.7 }));
         const rad = (r.angle * Math.PI) / 180, cx = Math.cos(rad), cz = Math.sin(rad);
-        const rx = r.x - ox, rz = r.y - oz;
+        const rx = this.mapX(r.x), rz = r.y - oz;
         o.scale.setScalar(src.fitScale * (r.w / src.width) * 1.7);
         o.position.set(rx, 0, rz);
         o.rotation.order = 'YXZ';
@@ -860,7 +866,7 @@ export class View3D {
         return g;
       });
       o.scale.setScalar(11);
-      o.position.set(mn.x - ox, 0, mn.y - oz);
+      o.position.set(this.mapX(mn.x), 0, mn.y - oz);
       o.rotation.set(t / 1300, t / 900, 0);
       o.userData.led.scale.setScalar(2.2 + 1.6 * Math.max(0, Math.sin(t / 180 + mn.phase)));
     }
@@ -890,7 +896,7 @@ export class View3D {
         g.userData.ownMats = [shell.material, cage.material, glow.material, icon.material];
         return g;
       });
-      o.position.set(pu.x - ox, 6 + Math.sin(t / 300 + pu.phase) * 4, pu.y - oz);
+      o.position.set(this.mapX(pu.x), 6 + Math.sin(t / 300 + pu.phase) * 4, pu.y - oz);
       for (const m of o.userData.spin) { m.rotation.y = t / 700 + pu.phase; m.rotation.x = 0.35; m.scale.setScalar(22 * (1 + 0.05 * Math.sin(t / 200 + pu.phase))); }
     }
 
@@ -943,10 +949,10 @@ export class View3D {
         });
         const dy = o.userData.vy * age;
         o.scale.setScalar(e.scale * (p < 0.7 ? 1 : Math.max(0.05, 1 - (p - 0.7) / 0.3)));
-        o.position.set(e.x - ox, dy, e.y - oz);
+        o.position.set(this.mapX(e.x), dy, e.y - oz);
         o.rotation.set(e.srx * age / 16, e.ry0 + e.sry * age / 16, o.userData.srz * age / 16);
         this.hullSet(o, 'setHeat', Math.round(Math.max(0, 1 - p * 2.4) * 20) / 20); // glowing-hot, cooling off
-        if (e.burning) fx.fireTrail(e.x - ox, dy, e.y - oz);
+        if (e.burning) fx.fireTrail(this.mapX(e.x), dy, e.y - oz);
         continue;
       }
       if (e instanceof LaserBeam) {
@@ -960,7 +966,7 @@ export class View3D {
       }
       if (seen.has(e)) continue;
       seen.add(e);
-      const x = e.x - ox, z = e.y - oz;
+      const x = this.mapX(e.x), z = e.y - oz;
       if (e instanceof Explosion) fx.explosion(x, 0, z, e.scale);
       else if (e instanceof Shockwave) {
         this.col.set(e.color);
@@ -968,7 +974,7 @@ export class View3D {
       } else if (e instanceof Spark) fx.sparks(x, 0, z, 2, e.vx, e.vy, { speed: Math.hypot(e.vx, e.vy) * 60, spread: 0.5 });
       else if (e instanceof SmokeParticle) fx.smokePuff(x, 0, z, e.size * 5, { dark: 0.7 });
       else if (e instanceof RockDust) { if (e.soft) fx.dust(x, 0, z, e.size * 4, { count: 2 }); }
-      else if (e instanceof MuzzleFlash) fx.muzzle(x, 0, z, 1, 0, { color: 'player' });
+      else if (e instanceof MuzzleFlash) fx.muzzle(x + 14, 0, z, 1, 0, { color: 'player' }); // (the sim's flash sits at the sprite edge; the hull's guns reach further)
     }
 
     // --- gravity well ---
@@ -994,7 +1000,7 @@ export class View3D {
     // environment: gets the frame's light list so the mist glows around fire and gunfire
     const es = this.envState, ion = world.ionStorm, ec = world.eclipse;
     es.time = t; es.W = W; es.H = H; es.mode = this.mode; es.viewH = this.cv.height;
-    es.speedMul = world.speedMul || 1; es.warpMul = world.warpMul || 1;
+    es.speedMul = (world.speedMul || 1) * (fp ? 1.25 + 0.5 * Math.max(0, this.pit.throttle) + (p1.boosting ? 0.5 : 0) : 1); es.warpMul = world.warpMul || 1; // from the cockpit the world has to rush past
     es.paused = !!(world.paused || world.over);
     es.intense = world.bossSpawned || !!world.bossWarnStart; // background keeps quiet during boss fights
     es.ion = ion ? (ion.phase === 'active' ? 1 : 0.25) : 0;
@@ -1013,6 +1019,8 @@ export class View3D {
     this.camera(world, k);
     if (this.cockpitPass) this.cockpitPass.enabled = this.pitShown;
     if (this.pitShown) this.pitFeed(world, dt, t, images);
+    if (this.pitShown !== this._pitSnd) audio.setInterior((this._pitSnd = this.pitShown)); // the world is heard through the hull
+    if (t < 300 && !world.over && this._launchFor !== world) { this._launchFor = world; audio.playSynth('launch', world.player1.x); }
     this.quiet = false;
     this.grade.uniforms.uPunch.value = settings.motionFx ? Math.min(1, (world.impactFx || 0) + (world.dmgFlash || 0) * 0.6) : 0;
     this.grade.uniforms.uTime.value = (t % 1000) / 1000;
@@ -1048,6 +1056,7 @@ export class View3D {
       rx: (r() - 0.5) * 0.012, ry: (r() - 0.5) * 0.012, rz: (r() - 0.5) * 0.012, s: part.scale.x,
     });
     this.fx.sparks(part.position.x, part.position.y, part.position.z, 6, vx, vz, { speed: 140, spread: 1.6 });
+    audio.playSynth('tear', part.position.x + W / 2, 0.6);
   }
 
   shards(dt) {
@@ -1069,6 +1078,15 @@ export class View3D {
   dropShards() {
     for (const d of this.shardList || []) { this.scene.remove(d.o); d.o.userData.dispose?.(); }
     if (this.shardList) this.shardList.length = 0;
+  }
+
+  // sim x → world X. In the two forward-looking views the far edge of the
+  // field is in plain sight, so things the sim spawns just past it would pop
+  // into existence there: instead that last strip is stretched deep into the
+  // distance, and arrivals sweep in from far away and settle onto the lane.
+  mapX(x) {
+    const d = x - (W - 20);
+    return x - W / 2 + (this.fwd && d > 0 ? 1400 * (1 - Math.exp(-d * d / 2600)) : 0);
   }
 
   // roster id of a player's hull (recovered from its sprite)
@@ -1160,15 +1178,18 @@ export class View3D {
     if (p.lives < this._pitHp) {
       const d = Math.hypot(shot.x, shot.z) || 1;
       c.hit({ side: shot.z / d, front: shot.x / d, power: Math.min(1, 0.55 + 0.45 * (1 - p.lives / (p.maxLives || 3))), shielded: false });
+      audio.playSynth('pit_hit', p.x); audio.playSynth('pit_crack', p.x); audio.playSynth('pit_spark', p.x);
     } else if (p.lives > this._pitHp && p.lives >= (p.maxLives || 3)) c.reset(); // fully repaired
     this._pitHp = p.lives;
     shot.x = nx; shot.z = nz;
     const sr = p.shieldRipple;
-    if (sr && sr !== p._srPit) { p._srPit = sr; c.hit({ side: Math.sin(sr.a), front: Math.cos(sr.a), power: 0.5, shielded: true }); }
+    if (sr && sr !== p._srPit) { p._srPit = sr; c.hit({ side: Math.sin(sr.a), front: Math.cos(sr.a), power: 0.5, shielded: true }); audio.playSynth('pit_shield', p.x); }
 
     const cc = c.camera;
     if (cc.fov !== cam.fov || cc.aspect !== cam.aspect) { cc.fov = cam.fov; cc.aspect = cam.aspect; cc.updateProjectionMatrix(); }
     c.update(dt, t, s);
+    s.x = p.x;
+    audio.interiorState(s);
   }
 
   // Depth aids for the behind-the-ship view, where distance along the lane is
@@ -1207,7 +1228,7 @@ export class View3D {
   // sim point → 2D-canvas coordinates (for HUD bits pinned to world positions)
   toScreen(x, y) {
     const v = this._v || (this._v = new THREE.Vector3());
-    v.set(x - W / 2, 0, y - H / 2).project(this.cam);
+    v.set(this.mapX(x), 0, y - H / 2).project(this.cam);
     if (v.z > 1 || v.z < -1) return null;
     return { x: (v.x + 1) / 2 * W, y: (1 - v.y) / 2 * H };
   }
@@ -1220,7 +1241,7 @@ export class View3D {
       const sp = Math.hypot(b.vx, b.vy) || 1;
       const o = enemy ? (sp > 14 ? K.enemyHeavy : K.enemy) : b.tier === 3 ? K.playerPlasma : b.tier === 2 ? K.playerHot : K.player;
       o.scale = scale;
-      fx.bolt(b.x - ox, 0, b.y - oz, b.vx / sp, b.vy / sp, o);
+      fx.bolt(this.mapX(b.x), 0, b.y - oz, b.vx / sp, b.vy / sp, o);
     }
   }
 
@@ -1256,9 +1277,9 @@ export class View3D {
   // the boss as a hero model (bosses3d.js): it animates, burns and breaks up by
   // itself — this only tells it what the sim is doing
   heroBoss(b, world, ox, oz, t) {
-    const bx = b.x - ox, bz = b.y - oz, fx = this.fx;
+    const bx = this.mapX(b.x), bz = b.y - oz, fx = this.fx;
     const o = this.obj(b, () => {
-      if (!this.quiet && t - b.spawnTime < 1500) fx.warpIn(bx - b.w * 0.3, 0, bz, b.w * 1.6, { color: [1, 0.35, 0.25] });
+      if (!this.quiet && t - b.spawnTime < 1500) { fx.warpIn(bx - b.w * 0.3, 0, bz, b.w * 1.6, { color: [1, 0.35, 0.25] }); audio.playSynth('warp_in', b.x); }
       const g = this.bossKit.build(b.level, b.gen, { mega: !!b.mega });
       const u = g.userData;
       u.release = (x) => x.userData.dispose?.();
@@ -1266,7 +1287,7 @@ export class View3D {
       return g;
     });
     const ud = o.userData;
-    const S = b.fit.scale * 1.24; // a touch larger than its hitbox: a capital ship should loom
+    const S = b.fit.scale * 1.1;
     const dying = !!b.deathSeq, dq = dying ? Math.min(1, (t - b.deathSeq.start) / 1700) : 0;
     const shudder = dying ? (Math.random() - 0.5) * 4 * (1 - dq) : 0;
     const sinkY = dying ? -(t - b.deathSeq.start) * 0.008 : 0;
@@ -1297,14 +1318,14 @@ export class View3D {
         if (tm && !tr.dead) tm.rotation.y = Math.atan2(Math.sin(tr.yaw) * Math.sin(VIEW.rx), Math.cos(tr.yaw)) - Math.PI;
       });
     }
-    if (dying) ud.setDeath(dq, t);
+    if (dying) { ud.setDeath(dq, t); if (!ud.broke) { ud.broke = true; audio.playSynth('boss_break', b.x); } }
     else for (const n of ud.nozzles || []) fx.exhaust(bx - n.x * S, n.y * S, bz - n.z * S, 1, 0, n.r * S * 2.2, { color: 'enemy', boost: !!b.ram });
     ud.update(this._dt || 0, t, { x: o.position.x, y: sinkY, z: o.position.z, scale: S, rotY: Math.PI });
     return bx;
   }
 
   boss(b, world, ox, oz, t) {
-    const bx = b.x - ox, bz = b.y - oz, fx = this.fx;
+    const bx = this.mapX(b.x), bz = b.y - oz, fx = this.fx;
     if (this.bossKit) { this.heroBoss(b, world, ox, oz, t); this.bossBeams(b, bx, bz, ox, oz, t); return; }
     const o = this.obj(b, () => {
       if (!this.quiet && t - b.spawnTime < 1500) fx.warpIn(bx - b.w * 0.3, 0, bz, b.w * 1.6, { color: [1, 0.35, 0.25] }); // it tears its way in
@@ -1520,7 +1541,7 @@ export class View3D {
         ease = 0.965;
       }
       if (boss?.deathSeq) { // the kill: push in on the dying hull and drift around it
-        const bx = boss.x - W / 2, bz = boss.y - H / 2, q = Math.min(1, (t - boss.deathSeq.start) / 1700);
+        const bx = this.mapX(boss.x), bz = boss.y - H / 2, q = Math.min(1, (t - boss.deathSeq.start) / 1700);
         if (mode === 'chase') {
           tgt[0] += (bx - tgt[0]) * 0.75; tgt[2] += (bz - tgt[2]) * 0.75;
           pos[0] += 190 * q; pos[1] -= 90 * q; pos[2] += Math.sin(q * 2.2) * 150;
@@ -1553,6 +1574,11 @@ export class View3D {
       }
       // trauma: fed by the sim's shake, decays on its own; squared for punch
       this.trauma = Math.min(1, Math.max((this.trauma || 0) - 0.02 * k, (world.shake || 0) / 12));
+      if (t < LAUNCH_MS && !world.over) { // the catapult: a kick in the back, the frame rattling until the mouth has gone by
+        const q = t / LAUNCH_MS, g = q < 0.1 ? 0 : q < 0.6 ? Math.min(1, (q - 0.1) / 0.12) : Math.max(0, 1 - (q - 0.6) / 0.25);
+        this.trauma = Math.max(this.trauma, 0.42 * g);
+        fov += (mode === 'cockpit' ? 13 : mode === 'chase' ? 7 : 0) * g;
+      }
     } else {
       this.trauma = 0;
     }
@@ -1611,6 +1637,7 @@ export class View3D {
   // frame the 3D view wasn't rendered (2D mode, menus, other states)
   endFrame() {
     if (!this.ready) return;
+    if (!this._rendered && this._pitSnd) audio.setInterior((this._pitSnd = false));
     if (!this._rendered && this.cv.style.display !== 'none') {
       this.cv.style.display = 'none';
       this.app.canvas.style.background = '#000';

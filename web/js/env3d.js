@@ -85,11 +85,11 @@ float fbm2(vec3 p){ return n3(p)*.62+n3(p*2.11+vec3(3.7,9.2,1.3))*.38; }
 const G_MASK = /* glsl */`
 float sq(float x){ return x*x; }
 uniform vec3 uCam;
-uniform vec4 uField; // halfW, halfH, dim strength, -
+uniform vec4 uField; // halfW, halfH, dim strength, how far the far end is drawn out (chase / cockpit stretch the last strip of the field)
 float fieldMask(vec3 ro, vec3 rd){
   if(rd.y>-1e-4||ro.y<=0.) return 0.;
   vec2 h=ro.xz+rd.xz*(ro.y/-rd.y);
-  float mx=1.-smoothstep(-220.,220.,max(-uField.x-120.-h.x,h.x-uField.x-420.));
+  float mx=1.-smoothstep(-1.,1.,max((-uField.x-120.-h.x)/220.,(h.x-uField.x-420.-uField.w*.5)/(220.+uField.w*.5)));
   float mz=1.-smoothstep(-130.,130.,abs(h.y)-uField.y);
   return mx*mz;
 }
@@ -435,7 +435,8 @@ void main(){
   // dashes on the longitudinal lines instead of a full grid: quieter, still measurable
   float dash=smoothstep(.30,.34,abs(fract(cx+.5)-.5));
   float g=inside*(lline*dash*.34+cline*(.10+.22*major+1.3*tick));
-  float xf=smoothstep(-hw-900.,-hw-150.,vW.x)*exp(-max(vW.x-hw,0.)/3200.);
+  float fx=max(vW.x-hw,0.);
+  float xf=smoothstep(-hw-900.,-hw-150.,vW.x)*exp(-fx/3200.)*(1.-.8*smoothstep(500.,3200.,fx));
   float near=smoothstep(40.,260.,dist);
   vec3 dl=dynLight(vW,1.7,1.);
   float dlum=dot(dl,vec3(.3,.5,.2));
@@ -444,7 +445,9 @@ void main(){
   vec3 rail=mix(uRail,vec3(.5,.75,1.4),uIon*.5);
   col+=rail*(core*(.8+chev*1.6)+glow*pulse*.7)*(1.+min(dlum*1.2,2.5));
   col+=rail*glow*uWarp*1.5;
-  gl_FragColor=vec4(col*uLane*xf*near,1.);
+  // the far end is not a line: grid and rails thin out into a bank of haze that arriving ships come out of
+  float bank=smoothstep(100.,1700.,fx)*exp(-fx/3000.)*(1.-smoothstep(-200.,700.,dz))*smoothstep(.0,.06,-normalize(vW-uCam).y+.02);
+  gl_FragColor=vec4((col*xf+mix(uGrid,rail,.35)*(bank*.16))*uLane*near,1.);
   ${G_END}
 }`;
 
@@ -1265,6 +1268,7 @@ void main(){
 //  * solids resolve their own occlusion in a far-end sliver of the depth buffer (gl_FragDepth
 //    0.9995 … 0.99982: behind any gameplay nearer than ~10 000 units, in front of the far hulls).
 
+const BOW_END = 1340;   // where the catapult shuttle stops on the carrier's bow (object space)
 const SET_SPAN = 12000, SET_X0 = -3000, SET_K = 2.0;
 
 const SET_TRACK = /* glsl */`
@@ -1274,7 +1278,7 @@ float trackSeed; float trackOp;
 float track(float x0,float seed,float rank){
   float t=x0-uSS.x, k=floor(t/uSS.z), x=t-k*uSS.z;
   trackSeed=fract(seed+(uSS.y-k)*.1379);
-  trackOp=uSG.x*clamp((uSG.y-rank)*10.,0.,1.)*smoothstep(0.,500.,x)*(1.-smoothstep(uSS.z-2600.,uSS.z-300.,x));
+  trackOp=uSG.x*smoothstep(0.,1.,(uSG.y*1.3-rank)*4.)*smoothstep(0.,500.,x)*(1.-smoothstep(uSS.z-2600.,uSS.z-300.,x));
   return x+uSS.w;
 }
 `;
@@ -1311,6 +1315,7 @@ ${G_NOISE}${G_MASK}
 varying vec3 vW; varying vec3 vN; varying vec3 vO; varying vec3 vNo; varying vec4 vX; varying vec4 vC; varying float vOp;
 uniform vec3 uKey,uSunCol,uAmb,uTint;
 uniform vec4 uHaze,uSG;
+uniform vec4 uBay;              // carrier only: shuttle x (object space), status 0 red … 1 amber … 2 green, catapult firing, curtain flash
 uniform vec4 uVW;               // per view: near fade from, to | dimming, flattening of what shows through the field
 uniform float uTime,uEclipse,uGain;
 float hash2(vec2 p){ return texture(uNoise,vec3(p+.5,7.5)*.03125).r; }
@@ -1341,44 +1346,81 @@ void main(){
   vec3 hv=normalize(key-rd);
   vec3 po=vO/vX.z;
   vec3 col=vec3(0.),em=vec3(0.);
-  if(kind>3.5&&part<4.5){            // launch bay: lit from its own strips, pulses race toward the mouth
-    float wave=smoothstep(.5,1.,fract(vO.x/2080.-uTime*.9));
+  if(kind>3.5&&(part<4.5||part>6.5)){   // launch bay: lit from its own strips, pulses race toward the mouth
+    float fire=uBay.z, sx=vO.x-uBay.x;                          // sx: along the rail from the catapult shuttle
+    float wave=smoothstep(.5,1.,fract(vO.x/2080.-uTime*(.9+1.6*fire)));
     float ribs=.5+.5*cos(vO.x*6.2832/260.);
     vec3 bl=vec3(.5,.62,.86)*(.2+.3*ribs+.75*wave)*(.75+.25*n.y);
+    bl+=vec3(.25,.5,1.)*(uBay.w*1.6*exp(vO.x/900.));            // the curtain flares as the ship goes through it
+    bl+=vec3(1.,.55,.2)*(fire*.5*exp(-abs(sx)/260.));           // …and the shuttle lights the walls it passes
+    vec3 stat=uBay.y<1.?mix(vec3(1.3,.08,.04),vec3(1.2,.55,.06),smoothstep(.6,1.,uBay.y)):mix(vec3(1.2,.55,.06),vec3(.1,1.2,.3),smoothstep(1.,1.5,uBay.y));
     if(part<.5){
       col=plating(vC.rgb,uv,seed)*bl;
     } else if(part<1.5){
-      float ph=fract(vO.x/520.-uTime*1.7);
-      em=vC.rgb*(.22+1.5*smoothstep(.7,1.,ph));
+      float ph=fract(vO.x/520.-uTime*(1.7+3.*fire));
+      if(vC.r>vC.b*1.5) em=stat*(.5+.35*step(abs(n.x),.5))*(.55+.45*step(.5,fract(uTime*(1.5+2.*step(1.,uBay.y))+vO.x*.004))*step(uBay.y,1.6)); // status lamps: blink, then steady green
+      else em=vC.rgb*(.22+1.5*smoothstep(.7,1.,ph));
     } else if(part<2.5){
       col=vC.rgb*bl*.7;
-    } else if(part<3.5){             // deck: catapult track, lane dashes, chevrons, hazard edges, guide lights
+    } else if(part<3.5){             // deck: catapult track, lane dashes, chevrons, hazard edges, bay numbers, guide lights
       float cz=abs(vO.z);
       float fz=fwidth(vO.z)+fwidth(vO.x)*.5+.5;
       vec3 alb=plating(vec3(.085,.095,.115),uv,seed);
       float dash=step(.45,fract(vO.x/170.))*(1.-smoothstep(3.,3.+fz,abs(cz-215.)));
       float chev=step(.8,fract((vO.x-cz*1.1)/230.))*step(70.,cz)*step(cz,175.);
       float haz=step(.5,fract((vO.x+vO.z)/64.))*smoothstep(372.,376.,cz);
-      alb=mix(alb,vec3(.5,.52,.54),dash*.8);
+      // stencilled bay numbers, read from the cockpit: two seven-segment digits every 1040 units
+      float bay=floor(-vO.x/1040.);
+      vec2 np=vec2((vO.z-236.)/92.,fract(-vO.x/1040.)*1040./150.-.4);
+      float num=0.;
+      if(np.x>0.&&np.x<1.&&np.y>0.&&np.y<1.&&vO.x<0.){
+        float dg=np.x<.5?0.:mod(bay+1.,10.);
+        vec2 q=vec2(fract(np.x*2.),1.-np.y)*vec2(1.3,1.)-vec2(.15,0.);
+        int m=dg<.5?119:dg<1.5?36:dg<2.5?93:dg<3.5?109:dg<4.5?46:dg<5.5?107:dg<6.5?123:dg<7.5?37:dg<8.5?127:111;
+        float w=.07;
+        float hT=step(abs(q.y-.92),w)*step(.1,q.x)*step(q.x,.9), hM=step(abs(q.y-.5),w)*step(.1,q.x)*step(q.x,.9), hB=step(abs(q.y-.08),w)*step(.1,q.x)*step(q.x,.9);
+        float vL=step(abs(q.x-.12),w), vR=step(abs(q.x-.88),w), up2=step(.5,q.y)*step(q.y,.96), lo2=step(.04,q.y)*step(q.y,.5);
+        num=float(m&1)*hT+float((m>>1)&1)*vL*up2+float((m>>2)&1)*vR*up2+float((m>>3)&1)*hM+float((m>>4)&1)*vL*lo2+float((m>>5)&1)*vR*lo2+float((m>>6)&1)*hB;
+        num=min(num,1.)*step(vO.z,0.)+min(num,1.)*step(0.,vO.z);
+      }
+      alb=mix(alb,vec3(.5,.52,.54),max(dash,num*.75)*.8);
       alb=mix(alb,vec3(.52,.4,.06),max(chev*.75,haz*.8));
       col=alb*bl*1.25;
       vec2 gd=vec2((fract(vO.x/130.)-.5)*130.,cz-122.);
       float dot1=1.-smoothstep(4.,7.+fz,length(gd));
-      float run=smoothstep(.6,1.,fract(vO.x/1040.-uTime*1.5));
-      em=vec3(.35,.6,1.)*dot1*(.25+2.2*run);
+      float run=smoothstep(.6,1.,fract(vO.x/1040.-uTime*(1.5+3.*fire)));
+      em=mix(vec3(.35,.6,1.),stat,.5*step(uBay.y,1.99))*dot1*(.25+2.2*run);
       float slot=1.-smoothstep(5.,6.+fz,cz);
-      em+=vec3(1.,.5,.12)*slot*(.25+.9*run);
-    } else {                         // mouth: a thin pressure curtain
+      // the catapult: a white-hot shuttle under the ship, the slot glowing where it has just been, sparks off the rails
+      float behind=step(sx,0.)*exp(sx/520.);
+      em+=vec3(1.,.5,.12)*slot*(.25+.9*run+3.5*fire*behind);
+      em+=vec3(1.3,.9,.5)*((1.-smoothstep(10.,26.,cz))*exp(-sx*sx/900.)*(.5+2.5*fire));
+      float spk=step(.9,hash2(floor(vec2(vO.x/7.,vO.z/3.))+floor(uTime*40.)*7.))*behind*step(sx,-10.)*(1.-smoothstep(30.,70.,cz))*step(26.,cz);
+      em+=vec3(1.4,.75,.25)*(spk*fire*2.5);
+    } else if(part<4.5){             // mouth: a pressure curtain — faint hexagons, bright when something crosses it
+      vec2 hp=vec2(vO.z,vO.y)/46.; hp.x+=.5*floor(hp.y);
+      vec2 hf=abs(fract(hp)-.5);
+      float cellE=smoothstep(.38,.5,max(hf.x,hf.y));
       float hx=n3(vec3(vO.z/90.,vO.y/90.,uTime*.6));
-      em=vec3(.1,.34,.8)*(.05+.22*hx*hx);
-      a*=.3;
+      em=vec3(.1,.34,.8)*((.03+.16*hx*hx)*(1.+9.*uBay.w)+cellE*(.012+.1*hx*hx));
+      a*=.12+.3*uBay.w;
+    } else {                         // steam off the rail behind the shuttle
+      float st=n3(vec3(vO.x/70.-uTime*.5,vO.z/45.,uTime*.7))*.6+n3(vec3(vO.x/23.,vO.z/17.,uTime*1.3))*.4;
+      float env=step(sx,30.)*exp(sx/600.)*(1.-smoothstep(40.,110.,abs(vO.z)))*fire;
+      a*=smoothstep(.38,.75,st)*env*.55;
+      if(a<.012) discard;
+      col=vec3(.55,.62,.72)*(bl+vec3(1.,.5,.2)*.4*exp(sx/200.));
     }
   } else {
     float ndl=max(dot(n,key),0.);
     vec3 light=uSunCol*(ndl*1.1)+uAmb*(.4+(.5+.5*n.y));
     float rim=pow(clamp(1.+dot(n,rd),0.,1.),3.);
     if(kind<.5||kind>3.5){           // hull metal
-      if(part>.5&&part<1.5){           // strips glow; red / amber lamps are emergency lighting on its last charge
+      if(part>5.5){                    // rows of lit ports
+        vec2 gw=uv/vec2(20.,30.); vec2 fq=fract(gw);
+        float lit=step(.4,hash2(floor(gw)+seed*31.))*step(.2,fq.x)*step(fq.x,.8);
+        em=mix(vec3(1.,.8,.5),vec3(.7,.86,1.),step(.8,hash2(floor(gw*.25)+3.)))*(lit*.75); col=vec3(.012,.014,.02);
+      } else if(part>.5&&part<1.5){           // strips glow; red / amber lamps are emergency lighting on its last charge
         float lamp=step(vC.b*1.5,vC.r);
         float bl=mix(.75+.25*sin(uTime*1.7+seed*40.+vO.x*.013),.25+.75*step(.45,fract(uTime*.35+seed*7.+floor(vO.x/40.)*.37)),lamp);
         em=vC.rgb*bl; col=vec3(.01);
@@ -1466,13 +1508,21 @@ ${G_NOISE}${G_MASK}
 varying vec2 vUv; varying vec3 vW; varying vec3 vL; varying vec4 vX; varying float vOp;
 uniform vec3 uCA,uCB,uSunDir,uSunCol;
 uniform vec4 uSG,uSP;           // uSP: lightning odds, lightning gain, cloud gain, absorption
-uniform float uTime,uEclipse;
+uniform float uTime,uEclipse,uSoft;
 void main(){
   vec3 rd=vW-uCam; float dC=length(rd); rd/=dC;
-  float fm=fieldMask(uCam,rd)*uSG.w;
+  float fm=fieldMask(uCam,rd)*uSG.w, hard=smoothstep(0.,.2,fm);
+  // looking down the lane (uSoft = 1) a silhouette cut would show as an edge in the cloud: fade instead by where
+  // the ray lands — long ramps past the far end and the sides — and let cloud that is itself beyond the far end stay
+  if(uSoft>0.&&rd.y<-1e-4&&uCam.y>0.){
+    vec2 h=uCam.xz+rd.xz*(uCam.y/-rd.y);
+    float sm=(1.-smoothstep(-300.,3000.,h.x-uField.x))*smoothstep(-900.,-100.,h.x+uField.x)*(1.-smoothstep(-300.,800.,abs(h.y)-uField.y));
+    sm*=1.-.6*smoothstep(600.,3200.,vW.x-uField.x);
+    fm=mix(fm,sm,uSoft); hard=mix(hard,sm,uSoft);
+  } else { fm*=1.-uSoft; hard*=1.-uSoft; }
   float mode=vX.y, seed=vX.x;
   float r2=dot(vUv,vUv);
-  float vis=vOp*(1.-.5*uEclipse)*(1.-smoothstep(-30.,30.,vW.y)*max(uSG.z,smoothstep(0.,.2,fm)));
+  float vis=vOp*(1.-.5*uEclipse)*(1.-smoothstep(-30.,30.,vW.y)*max(uSG.z,hard));
   vec3 col=vec3(0.); float a=0.;
   if(mode<.5){
     if(r2>1.) discard;
@@ -1525,7 +1575,8 @@ uniform vec4 uMQ;               // slab half-height, field mask, top-view fade, 
 uniform float uPx,uAspect,uTime;
 varying vec2 vUv; varying vec3 vCol; varying float vLen;
 void main(){
-  if(aD.w>uMP.w||uMP.z<=0.){ gl_Position=vec4(2.,2.,2.,1.); return; }
+  float keep=clamp((uMP.w-aD.w)*8.,0.,1.);
+  if(keep<=0.||uMP.z<=0.){ gl_Position=vec4(2.,2.,2.,1.); return; }
   vec3 p=aPos; p.x-=uMP.x*aD.x;
   p=mod(p-uAnchor+uBox*.5,uBox)-uBox*.5+uAnchor;
   vec3 e=uBox*.5-abs(p-uAnchor);
@@ -1547,7 +1598,7 @@ void main(){
   float edge=smoothstep(0.,300.,e.x)*smoothstep(0.,90.,e.y)*smoothstep(0.,300.,e.z);
   float fade=edge*smoothstep(40.,220.,c0.w)*min(1.,wpx/1.1)*(1.-smoothstep(2600.,5200.,c0.w)*.7);
   float tw=1.-uMQ.w*(.5+.5*sin(uTime*(3.+7.*fract(aD.w*9.7))+aD.w*40.));
-  vCol=mix(uMCol,uMCol2,fract(aD.w*5.3))*(aD.y*uMP.z*fade*tw*(1.-max(uMQ.y,up)*smoothstep(0.,.25,fieldMask(uCam,p-uCam)))*(1.-up*uMQ.z)/(1.+vLen*.03));
+  vCol=mix(uMCol,uMCol2,fract(aD.w*5.3))*(aD.y*uMP.z*keep*fade*tw*(1.-max(uMQ.y,up)*smoothstep(0.,.25,fieldMask(uCam,p-uCam)))*(1.-up*uMQ.z)/(1.+vLen*.03));
 }`;
 
 // a floor far below the lane: a ring plane seen from just above it (0), a star's surface (1)
@@ -2885,7 +2936,8 @@ export class Env3D {
     const c = this.U.uCam.value;
     if (dy > -1e-4 || c.y <= 0) return 0;
     const t = c.y / -dy, hx = c.x + dx * t, hz = c.z + dz * t, hw = this._W / 2, hh = this._H / 2;
-    const a = clamp01((Math.max(-hw - 120 - hx, hx - hw - 420) + 220) / 440), b = clamp01((Math.abs(hz) - hh + 130) / 260);
+    const fw = this.U.uField.value.w * 0.5;
+    const a = clamp01((Math.max((-hw - 120 - hx) / 220, (hx - hw - 420 - fw) / (220 + fw)) + 1) / 2), b = clamp01((Math.abs(hz) - hh + 130) / 260);
     return (1 - smooth(a)) * (1 - smooth(b));
   }
 
@@ -3375,7 +3427,7 @@ export class Env3D {
     if (!st.on) return;
     if (!p.on) { st.on = false; return; }
     st.t += dt; st.a += dt * 0.017;
-    const S = st.S, f = p.op, D = p.R * 1.5, ca = Math.cos(st.a) * D, sa = Math.sin(st.a) * D, cam = this.U.uCam.value;
+    const S = st.S, f = p.op * (p.ef ?? 1), D = p.R * 1.5, ca = Math.cos(st.a) * D, sa = Math.sin(st.a) * D, cam = this.U.uCam.value;
     const P = st.pos.copy(p.pos).addScaledVector(st.e1, ca).addScaledVector(st.e2, sa);
     const q = this._q.setFromAxisAngle(this._Y, st.t * 0.11).premultiply(st.q);
     this.shipU.uOcc.value.set(p.pos.x, p.pos.y, p.pos.z, p.R);
@@ -3511,10 +3563,10 @@ export class Env3D {
 
     // ---- a tiny mesh builder: flat triangles with a part id and a colour ----
     let pos = [], nor = [], prt = [], col = [], PART = 0, C = [0.3, 0.32, 0.36];
-    let SCL = 1; const OFS = [0, 0, 0];   // applied to everything pushed (uniform scale, then offset)
+    let SCL = 1, YC = 1, YS = 0; const OFS = [0, 0, 0];   // applied to everything pushed (yaw about Y, uniform scale, then offset)
     const push = (a, b, c, na, nb, nc) => {
-      for (const v of [a, b, c]) pos.push(v[0] * SCL + OFS[0], v[1] * SCL + OFS[1], v[2] * SCL + OFS[2]);
-      nor.push(na[0], na[1], na[2], nb[0], nb[1], nb[2], nc[0], nc[1], nc[2]);
+      for (const v of [a, b, c]) pos.push((v[0] * YC + v[2] * YS) * SCL + OFS[0], v[1] * SCL + OFS[1], (v[2] * YC - v[0] * YS) * SCL + OFS[2]);
+      for (const v of [na, nb, nc]) nor.push(v[0] * YC + v[2] * YS, v[1], v[2] * YC - v[0] * YS);
       prt.push(PART, 0, PART, 0, PART, 0);
       col.push(C[0], C[1], C[2], C[0], C[1], C[2], C[0], C[1], C[2]);
     };
@@ -3767,43 +3819,89 @@ export class Env3D {
       PART = 5; C = j % 2 ? GM : GD;         // the bow around it
       const o0 = [0, AY + (SEC[j][1] - AY) * 2.0, SEC[j][0] * 2.3], o1 = [0, AY + (SEC[(j + 1) % 8][1] - AY) * 2.0, SEC[(j + 1) % 8][0] * 2.3];
       xq(sp(0, j), sp(0, j + 1), o1, o0, -100);
-      PART = 4; triO([-8, AY, 0], sp(-8, j), sp(-8, j + 1), [100, AY, 0], false);
       PART = 2; C = GD; triO([-TL, AY, 0], sp(-TL, j), sp(-TL, j + 1), [-TL - 100, AY, 0], false);
     }
-    PART = 3; C = GD; quadO([0, -130, -420], [560, -130, -150], [560, -130, 150], [0, -130, 420], [0, -1000, 0], false);   // launch ramp
-    PART = 5; C = G1;
-    // the prow under the ramp: flared skirts falling away from the deck edge, so from above it is a ship's bow and not a cut-out
+    // the bow: the catapult deck runs on 900 units past the mouth and narrows to the stem; flared plating falls away
+    // from its edge to a keel, so from any camera it is the front of one ship and never a loose piece of deck
+    const BL = 1400, BW = 100;
+    PART = 3; C = GD; quadO([0, -130, -420], [BL, -130, -BW], [BL, -130, BW], [0, -130, 420], [0, -1000, 0], false);
+    PART = 2; C = GD; box(0, BL - 30, -130, -121, 34, 58); box(0, BL - 30, -130, -121, -58, -34);
+    PART = 5;
     for (const sg of [-1, 1]) {
-      C = sg > 0 ? G1 : GM; quadO([0, -130, sg * 420], [560, -130, sg * 150], [720, -330, sg * 250], [0, -330, sg * 600], [200, -900, 0], false);
-      C = GD; quadO([0, -330, sg * 600], [720, -330, sg * 250], [760, -520, sg * 120], [0, -520, sg * 380], [200, -900, 0], false);
+      C = sg > 0 ? G1 : GM; quadO([0, -130, sg * 420], [BL, -130, sg * BW], [BL + 190, -340, sg * 190], [0, -340, sg * 640], [300, -1200, 0], false);
+      C = GD; quadO([0, -340, sg * 640], [BL + 190, -340, sg * 190], [BL + 120, -640, sg * 60], [0, -640, sg * 330], [300, -1200, 0], false);
+      PART = 6; C = [1, 0.8, 0.5];           // a row of ports along the flare
+      quadO([40, -196, sg * 486], [BL - 60, -196, sg * 164], [BL - 50, -226, sg * 178], [40, -226, sg * 520], [300, -1200, 0], false);
+      PART = 1; C = [0.25, 0.42, 0.65]; bar(0, -128, sg * 420, BL, -128, sg * BW, 3);
+      PART = 5;
     }
-    C = G2; quadO([560, -130, -150], [560, -130, 150], [720, -330, 250], [720, -330, -250], [200, -900, 0], false);
-    C = GD; quadO([720, -330, -250], [720, -330, 250], [760, -520, 120], [760, -520, -120], [200, -900, 0], false);
-    PART = 1; C = LA; box(548, 560, -130, -124, -60, 60);
-    PART = 1; C = [0.25, 0.42, 0.65]; bar(0, -128, -420, 560, -128, -150, 3); bar(0, -128, 420, 560, -128, 150, 3);
-    PART = 5; C = GM;
-    for (const s of [-1, 1]) hexa([[-200, -420, s * 700], [900, -150, s * 900], [-200, 330, s * 700], [900, 120, s * 900], [-200, -420, s * 1300], [900, -150, s * 1100], [-200, 330, s * 1300], [900, 120, s * 1100]]);
+    C = G2; quadO([BL, -130, -BW], [BL, -130, BW], [BL + 190, -340, 190], [BL + 190, -340, -190], [300, -1200, 0], false);
+    C = GD; quadO([BL + 190, -340, -190], [BL + 190, -340, 190], [BL + 120, -640, 60], [BL + 120, -640, -60], [300, -1200, 0], false);
+    PART = 1; C = LB; box(BL - 14, BL, -130, -124, -50, 50);
+    // the two bow sponsons either side of the mouth: plating, rows of lit ports facing the lane, running lights
+    for (const sg of [-1, 1]) {
+      const K = [[-200, -420, sg * 700], [2400, -200, sg * 700], [-200, 330, sg * 700], [2400, 60, sg * 700], [-200, -420, sg * 1300], [2400, -200, sg * 900], [-200, 330, sg * 1300], [2400, 60, sg * 900]];
+      PART = 5; C = GM; hexa(K);
+      const F = (u, v, o) => [K[0][0] + (K[1][0] - K[0][0]) * u, (K[0][1] + (K[1][1] - K[0][1]) * u) * (1 - v) + (K[2][1] + (K[3][1] - K[2][1]) * u) * v, K[0][2] + (K[1][2] - K[0][2]) * u - sg * o];
+      PART = 6; C = [1, 0.8, 0.5];
+      for (const v of [0.3, 0.52, 0.64, 0.8]) quadO(F(0.1, v, 3), F(0.95, v, 3), F(0.95, v + 0.055, 3), F(0.1, v + 0.055, 3), [400, 0, sg * 3000], false);
+      PART = 0; C = G2; for (let k = 0; k < 8; k++) { const a0 = F(0.12 + k * 0.105, 0.4, 0), a1 = F(0.16 + k * 0.105, 0.47, 0); box(a0[0], a1[0], a0[1], a1[1], a0[2], a0[2] - sg * 26); }
+      PART = 1; C = LB; { const a0 = F(0.18, 0.92, 4), a1 = F(0.97, 0.92, 4); bar(a0[0], a0[1], a0[2], a1[0], a1[1], a1[2], 4); }
+      C = sg > 0 ? [0.1, 0.8, 0.25] : [0.2, 0.5, 1.1]; box(2392, 2406, -90, -50, sg * 780, sg * 820);
+    }
+    // ---- life in the bay ----
+    // fighters parked nose-out along both sides of the deck, each with a deck lamp
+    const fighter = (x, z, yaw) => {
+      YC = Math.cos(yaw); YS = Math.sin(yaw); OFS[0] = x; OFS[1] = -130; OFS[2] = z;
+      PART = 0; C = [0.36, 0.39, 0.45];
+      hexa([[-58, 10, -13], [62, 14, -5], [-58, 30, -11], [40, 27, -5], [-58, 10, 13], [62, 14, 5], [-58, 30, 11], [40, 27, 5]]);   // fuselage
+      C = [0.3, 0.32, 0.38];
+      for (const w of [-1, 1]) {
+        hexa([[-50, 15, w * 12], [14, 16, w * 10], [-50, 19, w * 12], [14, 19, w * 10], [-56, 13, w * 64], [-30, 14, w * 60], [-56, 16, w * 64], [-30, 16, w * 60]]);   // wing
+        hexa([[-58, 28, w * 9], [-34, 28, w * 8], [-66, 52, w * 15], [-52, 52, w * 14], [-58, 28, w * 11], [-34, 28, w * 10], [-66, 52, w * 17], [-52, 52, w * 16]]);   // fin
+        PART = 2; C = GD; box(-20, -14, 0, 10, w * 24, w * 28); PART = 0; C = [0.3, 0.32, 0.38];                                                                         // gear
+      }
+      PART = 2; C = [0.05, 0.07, 0.1]; hexa([[4, 27, -5], [34, 25, -4], [4, 34, -4], [26, 31, -3], [4, 27, 5], [34, 25, 4], [4, 34, 4], [26, 31, 3]]);                // canopy
+      box(40, 46, 0, 12, -2, 2);
+      PART = 1; C = LA; box(-62, -58, 14, 26, -8, 8);
+      YC = 1; YS = 0; OFS[0] = OFS[1] = OFS[2] = 0;
+    };
+    for (let k = 0; k < 12; k++) {
+      const sg = k % 2 ? 1 : -1, x = -330 - k * 300 - (k % 3) * 40, z = sg * 318;
+      fighter(x, z, sg * -0.45);
+      PART = 2; C = GD; box(x - 80, x - 74, -130, -78, z + sg * 62, z + sg * 68);             // marshalling post
+      PART = 1; C = LA; box(x - 82, x - 72, -78, -68, z + sg * 60, z + sg * 70);
+      PART = 0; C = YL; box(x + 70, x + 96, -130, -104, z + sg * 40, z + sg * 74);             // a cart
+    }
+    // status gantries hanging from the roof: five lamps each, red, amber, green with the launch
+    for (const x of [-180, -700, -1220]) {
+      PART = 2; C = GD; box(x - 8, x + 8, 430, 520, -150, -138); box(x - 8, x + 8, 430, 520, 138, 150); box(x - 12, x + 12, 408, 432, -170, 170);
+      PART = 1; C = LA; for (let k = -2; k <= 2; k++) box(x - 15, x - 12, 411, 429, k * 62 - 17, k * 62 + 17);
+    }
+    // the catapult's steam: a low sheet over the rail, drawn only behind the shuttle (see SET_FS); then the pressure curtain
+    PART = 7; C = [0.6, 0.7, 0.85]; quadO([-TL, -104, -110], [BL - 40, -104, -110], [BL - 40, -104, 110], [-TL, -104, 110], [0, -1000, 0], false);
+    PART = 4; for (let j = 0; j < 8; j++) triO([-8, AY, 0], sp(-8, j), sp(-8, j + 1), [100, AY, 0], false);
     const carrier = done(1);
     carrier.A.set([1000, 0, 0, 1]); carrier.B.set([0.31, 0, -999, 4]); carrier.C.set([1, 1, 1, 1]);
     carrier.geo.instanceCount = 1;
 
     // ---- materials: one program for all solids (the carrier gets its own uniform set) ----
-    const vw = this._setVW = { value: V4(0, 1, 0.62, 0.15) };
+    const vw = this._setVW = { value: V4(0, 1, 0.62, 0.15) }, bay0 = { value: V4(-1e6, 2, 0, 0) };
     const amb = { value: new THREE.Color(0.04, 0.05, 0.08) }, tint = { value: new THREE.Color(0.3, 0.5, 0.9) };
     const solidU = () => ({
       uNoise: U.uNoise, uCam: U.uCam, uField: U.uField, uTime: U.uTime, uEclipse: U.uEclipse, uSunCol: U.uSunCol, uKey: this.shipU.uKey,
       uSS: { value: V4(0, 0, SET_SPAN, SET_X0) }, uSG: { value: V4(0, 1, 0, 1) }, uOff: { value: new THREE.Vector3() },
-      uAmb: amb, uTint: tint, uHaze: { value: V4(0, 0, 0, 5200) }, uVW: vw, uGain: { value: 1 },
+      uAmb: amb, uTint: tint, uHaze: { value: V4(0, 0, 0, 5200) }, uVW: vw, uGain: { value: 1 }, uBay: bay0,
     });
     const solidMat = (u) => { const m = this._mat({ uniforms: u, vs: SET_VS, fs: SET_FS, blending: THREE.NormalBlending }); m.depthTest = m.depthWrite = true; return m; };
     const sU = this.setU = solidU(), mat = solidMat(sU);
     const meshes = [rockHi, rockLo, hullA, hullB, hullC, truss, arch, crystal];
     meshes.forEach((m, i) => { m.mesh = this._mesh(m.geo, mat, RO.set + i); m.mesh.visible = false; });
     const cU = solidU();
-    cU.uSS.value.set(0, 0, 1e6, 0); cU.uHaze.value.w = 1e9; cU.uVW = { value: V4(0, 1, 0.62, 0) };   // never dissolves near the camera
+    cU.uSS.value.set(0, 0, 1e6, 0); cU.uHaze.value.w = 1e9; cU.uVW = { value: V4(0, 1, 0.62, 0) }; cU.uBay = { value: V4(-1500, 0, 0, 0) };   // never dissolves near the camera
     carrier.mesh = this._mesh(carrier.geo, solidMat(cU), RO.carrier);
     carrier.mesh.visible = false;
-    this._car = { m: carrier, mesh: carrier.mesh, u: cU };
+    this._car = { m: carrier, mesh: carrier.mesh, u: cU, op: 0 };
     this._lq = -1; this._lx = 0; this._lz = 0;
 
     // ---- soft sprites ----
@@ -3812,13 +3910,14 @@ export class Env3D {
     let geo = new THREE.InstancedBufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(quad, 3));
     geo.setIndex([0, 1, 2, 0, 2, 3]);
-    const spr = { geo, cap: NSP, n: 0, A: new Float32Array(NSP * 4), B: new Float32Array(NSP * 4), mesh: null, u: null };
+    const spr = { geo, cap: NSP, n: 0, A: new Float32Array(NSP * 4), B: new Float32Array(NSP * 4), mesh: null, u: null,
+      MA: new Float32Array(NSP * 4), MB: new Float32Array(NSP * 4), idx: new Uint8Array(NSP), rot: -1 };   // master copy sorted along the track (see _sortSprites)
     geo.setAttribute('aA', dyn(spr.A, 4)); geo.setAttribute('aB', dyn(spr.B, 4));
     geo.instanceCount = 0;
     spr.u = {
       uNoise: U.uNoise, uCam: U.uCam, uField: U.uField, uTime: U.uTime, uEclipse: U.uEclipse, uSunCol: U.uSunCol, uSunDir: U.uSunDir,
       uSS: sU.uSS, uSG: sU.uSG, uShaft: { value: new THREE.Vector3(-0.6, -0.8, 0) }, uSP: { value: V4(0.14, 1, 1, 0.6) },
-      uCA: { value: new THREE.Color() }, uCB: { value: new THREE.Color() },
+      uCA: { value: new THREE.Color() }, uCB: { value: new THREE.Color() }, uSoft: { value: 0 },
     };
     spr.mesh = this._mesh(this._geo(geo), this._mat({ uniforms: spr.u, vs: SPR_VS, fs: SPR_FS, premult: true, side: THREE.DoubleSide }), RO.puff);
     spr.mesh.visible = false;
@@ -3885,8 +3984,8 @@ export class Env3D {
     const sprite = (x, y, z, size, seed, rank, mode, asp) => {
       const i = spr.n; if (i >= spr.cap) return;
       const o = i * 4;
-      spr.A[o] = ((x % SET_SPAN) + SET_SPAN) % SET_SPAN; spr.A[o + 1] = y; spr.A[o + 2] = z; spr.A[o + 3] = size;
-      spr.B[o] = seed; spr.B[o + 1] = rank; spr.B[o + 2] = mode; spr.B[o + 3] = asp;
+      spr.MA[o] = ((x % SET_SPAN) + SET_SPAN) % SET_SPAN; spr.MA[o + 1] = y; spr.MA[o + 2] = z; spr.MA[o + 3] = size;
+      spr.MB[o] = seed; spr.MB[o + 1] = rank; spr.MB[o + 2] = mode; spr.MB[o + 3] = asp;
       spr.n = i + 1;
     };
     const MOTES = {
@@ -4016,11 +4115,31 @@ export class Env3D {
       m.geo.instanceCount = m.n;
       if (m.n) { const a = m.geo.attributes; a.aA.needsUpdate = a.aB.needsUpdate = a.aC.needsUpdate = true; }
     }
-    const sg = S.spr.geo; sg.instanceCount = S.spr.n;
-    if (S.spr.n) sg.attributes.aA.needsUpdate = sg.attributes.aB.needsUpdate = true;
+    // soft sprites blend "over": they are kept far-to-near along the track. Order by track x, farthest first
+    const sp = S.spr, ix = sp.idx;
+    for (let i = 0; i < sp.n; i++) ix[i] = i;
+    for (let i = 1; i < sp.n; i++) { const v = ix[i], kv = sp.MA[v * 4]; let j = i - 1; while (j >= 0 && sp.MA[ix[j] * 4] < kv) { ix[j + 1] = ix[j]; j--; } ix[j + 1] = v; }
+    sp.geo.instanceCount = sp.n; sp.rot = -1;
+    this._sortSprites();
     const k = S.moteK, mu = S.mote.u;
     if (k) { mu.uMCol.value.setRGB(k.a[0], k.a[1], k.a[2]); mu.uMCol2.value.setRGB(k.b[0], k.b[1], k.b[2]); }
     S.layH = this._H;
+  }
+
+  // The track wraps, so "farthest first" is the sorted master list rotated: pieces that have already passed the
+  // rear end are the farthest again. The buffers are rewritten only when a sprite wraps (it is faded out there),
+  // so two clouds never swap their order on screen.
+  _sortSprites() {
+    const sp = this._set.spr, n = sp.n, ix = sp.idx, sf = this._set.sf;
+    let c = 0;
+    for (let i = n - 1; i >= 0 && sp.MA[ix[i] * 4] < sf; i--) c++;
+    if (c === sp.rot || !n) return;
+    sp.rot = c;
+    for (let i = 0; i < n; i++) {
+      const src = ix[(n - c + i) % n] * 4, o = i * 4;
+      for (let k = 0; k < 4; k++) { sp.A[o + k] = sp.MA[src + k]; sp.B[o + k] = sp.MB[src + k]; }
+    }
+    sp.geo.attributes.aA.needsUpdate = sp.geo.attributes.aB.needsUpdate = true;
   }
 
   /**
@@ -4041,21 +4160,33 @@ export class Env3D {
     const car = this._car, lq = this._lq;
     this._lq = -1;
     if (lq >= 0) {
-      const u = car.u, op = 1 - smooth(clamp01((lq - 0.82) / 0.18)), mask = smooth(clamp01((lq - 0.42) / 0.16));
-      u.uSS.value.w = this._lx + 1500 - 1500 * Math.pow(lq / 0.5, 1.5) - 1000;
+      // a catapult shot, all from q: hold on the clamps while the lamps go red, amber, green (q < 0.1), then constant
+      // hard acceleration — the mouth (1500 ahead at rest) whips past at q = 0.55, the stem of the bow at 0.69, and by
+      // 0.8 the whole ship is behind every forward camera. Nothing fades in front of the player: it leaves by passing.
+      const u = car.u, a = clamp01((lq - 0.1) / 0.9), run = 1500 * (a / 0.5) * (a / 0.5);
+      const op = 1 - smooth(clamp01((lq - 0.9) / 0.1));
+      // the field mask comes on once the bow has gone by (forward views), or as it slides off the picture (top, tilt)
+      const mask = smooth(clamp01((lq - 0.5) / 0.14)) * (1 - this._wView) + smooth(clamp01((lq - 0.8) / 0.08)) * this._wView;
+      u.uSS.value.w = this._lx + 1500 - run - 1000;
+      u.uBay.value.set(Math.min(run - 1500, BOW_END), clamp01(lq / 0.04) + clamp01((lq - 0.045) / 0.04),
+        smooth(clamp01((lq - 0.085) / 0.05)) * (1 - smooth(clamp01((run - 2300) / 500))), Math.exp(-((run - 1650) / 380) * ((run - 1650) / 380)));
       u.uOff.value.set(0, 0, this._lz);
       const flat = mode === 'top' ? 1 : mode === 'tilt' ? 0.6 : 0;   // looked at from above the deck is one big lit surface: hold it down, and let it sink away as the prow leaves
       u.uGain.value = (1 - 0.6 * flat) * (1 - 0.75 * flat * smooth(clamp01((lq - 0.3) / 0.35)));
       u.uSG.value.set(op * (0.3 + 0.7 * dip), 2, S.top, mask);   // top view: the roof half of the tube is never drawn
+      car.op = u.uSG.value.x;
       car.mesh.visible = op > 0.004;
-    } else car.mesh.visible = false;
+    } else if (car.mesh.visible) {   // the calls stopped: let it go, do not cut it
+      car.op *= Math.exp(-dt * 7); car.u.uSG.value.x = car.op;
+      if (car.op < 0.01) car.mesh.visible = false;
+    }
 
     // eased state
     const tDens = Math.min(1.15, 0.5 + 0.5 * speed) * (state.intense ? 0.45 : 1), tTop = mode === 'top' ? 1 : 0;
     const tLg = lq >= 0 ? smooth(clamp01((lq - 0.5) / 0.4)) : 1;
     if (!S.init) { S.init = true; S.dens = tDens; S.top = tTop; S.lg = tLg; }
-    S.dens += (tDens - S.dens) * (1 - Math.exp(-dt * 1.6));
-    S.top = tTop ? 1 : S.top * Math.exp(-dt * 6);   // into the top view at once: nothing may linger over the field
+    S.dens += (tDens - S.dens) * (1 - Math.exp(-dt * 0.8));
+    S.top += (tTop - S.top) * (1 - Math.exp(-dt * (tTop ? 12 : 5)));   // quick into the top view (the field mask already covers the field itself), eased out of it
     S.lg = lq >= 0 ? tLg : S.lg + (1 - S.lg) * (1 - Math.exp(-dt * 3));
     const gain = dip * (1 - smooth(clamp01((warp - 0.03) / 0.25))) * S.lg;
 
@@ -4083,6 +4214,8 @@ export class Env3D {
     const sp = S.spr;
     sp.mesh.visible = on && sp.n > 0;
     if (sp.mesh.visible) {
+      this._sortSprites();
+      sp.u.uSoft.value = this._wView;
       sp.u.uCA.value.copy(P.nebA).multiplyScalar(2.8); sp.u.uCB.value.copy(P.nebB).multiplyScalar(2.8);
       sp.u.uSP.value.set(S.ltn + 0.3 * this._ion, 1, 1, 0.8);
       sp.u.uShaft.value.copy(this.sunSkyDirection).multiplyScalar(-0.75); sp.u.uShaft.value.y -= 0.7; sp.u.uShaft.value.normalize();
@@ -4151,7 +4284,7 @@ export class Env3D {
     const mode = state.mode || 'tilt';
     if (state.W && state.H) { this._W = state.W; this._H = state.H; }
     const hw = this._W / 2, hh = this._H / 2;
-    U.uField.value.set(hw, hh, this.opts.fieldDim, 0);
+    U.uField.value.set(hw, hh, this.opts.fieldDim, this._far || 0);
 
     // eased state
     const ease = (cur, tgt, rate) => cur + (tgt - cur) * (1 - Math.exp(-dt * rate));
@@ -4159,7 +4292,7 @@ export class Env3D {
     this._ion = ease(this._ion, clamp01(state.ion || 0), 3);
     this._ecl = ease(this._ecl, clamp01(state.eclipse || 0), 4);
     const fwdView = mode === 'chase' || mode === 'cockpit';
-    const laneT = fwdView ? 1 : mode === 'top' ? 0.07 : 0.55;
+    const laneT = fwdView ? 0.34 : mode === 'top' ? 0.05 : 0.22; // a depth cue, not a feature: just enough to read the floor
     if (!this._laneInit) { this._lane = laneT; this._laneInit = true; this._ion = clamp01(state.ion || 0); this._ecl = clamp01(state.eclipse || 0); }
     this._lane = ease(this._lane, laneT, 3.2);
     const warp = this._warp;
@@ -4167,6 +4300,7 @@ export class Env3D {
     if (warp > 0.9 && !this._wPeak) { this._wPeak = true; this._wFlash = 1; } else if (warp < 0.5) this._wPeak = false;
     this._wFlash = (this._wFlash || 0) * Math.exp(-dt * 3);
     this._wView = this._wView === undefined ? (fwdView ? 1 : 0) : ease(this._wView, fwdView ? 1 : 0, 4);
+    this._far = this._wView * 800; U.uField.value.w = this._far;
 
     this._clock += dt * speed;
     const flow = dt * speed * (1 + (warpMul - 1) * 0.9) * SCROLL;
@@ -4292,7 +4426,8 @@ export class Env3D {
       p.sun.copy(this._sunPos).sub(p.pos).normalize();
       p.spin += p.spinV * pdt;
       p.op = b.surf.ready ? (this._seen < 3 || dip < 0.2 ? 1 : Math.min(1, p.op + dt / 0.6)) : 0;   // ready before anyone looks: no fade-in
-      u.uOp.value = dip * p.op;
+      p.ef = smooth(clamp01((11000 + p.R * 2 - p.pos.x) / 2200)) * smooth(clamp01((p.pos.x - lim) / 1200));   // wraps far ahead: emerges, never pops
+      u.uOp.value = dip * p.op * p.ef;
       this._spinBody(b, p.pos, p.R, p.qTilt, p.spin, p.sun, pdt);
       u.uP2.value.z = p.aur + p.aurBoost;
       if (p.imp >= 0) { p.imp += pdt; if (p.imp > 120) p.imp = -1; u.uImp.value.w = p.imp; }

@@ -1,0 +1,172 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>audio harness</title>
+<style>
+  html, body { margin: 0; min-height: 100%; background: #05070c; color: #cfd8e3; font: 12px/1.4 monospace; }
+  body { padding: 10px; box-sizing: border-box; }
+  h3 { margin: 10px 0 4px; font-size: 12px; color: #7fd4ff; font-weight: normal; }
+  button { font: 12px monospace; background: #14202e; color: #dfe9f3; border: 1px solid #2c4660; padding: 5px 9px; margin: 2px; cursor: pointer; }
+  button:hover { background: #1d3147; }
+  button.on { background: #1f5a3a; border-color: #3fae74; }
+  label { margin-right: 12px; white-space: nowrap; display: inline-block; }
+  input[type=range] { width: 110px; vertical-align: middle; }
+  #err { color: #fff; background: rgba(160, 0, 0, .92); white-space: pre-wrap; padding: 8px; display: none; }
+  #info { white-space: pre; color: #9ab; margin-top: 8px; font-size: 11px; line-height: 1.25; }
+</style>
+</head>
+<body>
+<div id="err"></div>
+<div id="ui"></div>
+<div id="info"></div>
+<script>
+  // audio dev harness. Click anything to unlock audio, then audition.
+  //   ?auto  — calls every new API in sequence, renders each synth sound and the cabin bed through an
+  //            OfflineAudioContext and prints peak / RMS / length, flagging SILENT, CLIP (>0.99) and NaN.
+  const errBox = document.getElementById('err');
+  let errCount = 0;
+  function showErr(m) { errCount++; errBox.style.display = 'block'; errBox.textContent += m + '\n'; }
+  window.onerror = (m, s, l, c, e) => showErr(`${m} @ ${s}:${l}:${c}\n${e && e.stack || ''}`);
+  window.onunhandledrejection = (e) => showErr('REJECTION: ' + (e.reason && (e.reason.stack || e.reason.message) || e.reason));
+</script>
+<script type="module">
+import * as audio from '../js/audio.js';
+import { settings } from '../js/settings.js';
+import { W } from '../js/const.js';
+
+const Q = new URLSearchParams(location.search);
+const ui = document.getElementById('ui'), info = document.getElementById('info');
+const NEW = ['pit_hit', 'pit_crack', 'pit_shield', 'pit_spark', 'pit_switch', 'launch', 'tear', 'boss_break', 'warp_in', 'lock'];
+const INTERNAL = ['pit_decomp', 'pit_alarm', 'pit_chirp', 'pit_gun', 'pit_rocket', 'pit_beam'];
+const OLD = ['hit', 'crack', 'thock', 'shield_hit', 'shield_pop', 'zap', 'storm', 'warp', 'laser_charge', 'laser_fire', 'plaser', 'siren'];
+
+audio.installAutoUnlock();
+if (settings.sfx <= 0) settings.sfx = 0.6; // not saved: the harness must be audible
+audio.loadSounds(() => {}).catch(() => {});
+
+const state = { boost: false, speed: 0.3, warp: 0, hp: 3, hpMax: 3, shield: false, ion: 0, overdrive: false, paused: false, dead: false, x: W / 2 };
+let pan = null; // null = centre
+
+function section(title) { const h = document.createElement('h3'); h.textContent = title; ui.appendChild(h); const d = document.createElement('div'); ui.appendChild(d); return d; }
+function button(parent, text, fn) { const b = document.createElement('button'); b.textContent = text; b.onclick = () => fn(b); parent.appendChild(b); return b; }
+function toggle(parent, key) { return button(parent, key, (b) => { state[key] = !state[key]; b.classList.toggle('on', state[key]); }); }
+function slider(parent, text, min, max, step, val, fn) {
+  const l = document.createElement('label'), i = document.createElement('input'), v = document.createElement('span');
+  i.type = 'range'; i.min = min; i.max = max; i.step = step; i.value = val; v.textContent = ' ' + val;
+  i.oninput = () => { v.textContent = ' ' + i.value; fn(+i.value); };
+  l.append(text + ' ', i, v); parent.appendChild(l);
+}
+
+let s = section('interior (cockpit) mode');
+let interior = false;
+button(s, 'setInterior: off', (b) => { interior = !interior; audio.setInterior(interior); b.textContent = 'setInterior: ' + (interior ? 'ON' : 'off'); b.classList.toggle('on', interior); });
+for (const k of ['boost', 'shield', 'overdrive', 'paused', 'dead']) toggle(s, k);
+s = section('interiorState');
+slider(s, 'speed', 0, 1, 0.01, state.speed, (v) => (state.speed = v));
+slider(s, 'warp', 0, 1, 0.01, 0, (v) => (state.warp = v));
+slider(s, 'ion', 0, 1, 0.01, 0, (v) => (state.ion = v));
+slider(s, 'hp', 0, 3, 1, 3, (v) => (state.hp = v));
+slider(s, 'sfx volume', 0, 1, 0.05, settings.sfx, (v) => (settings.sfx = v));
+slider(s, 'pan x', 0, 1, 0.05, 0.5, (v) => (pan = v === 0.5 ? null : v * W));
+
+s = section('new one-shots');
+for (const n of NEW) button(s, n, () => audio.playSynth(n, pan));
+s = section('cockpit internals (normally triggered by interiorState / own weapons)');
+for (const n of INTERNAL) button(s, n, () => audio.playSynth(n, pan));
+s = section('own weapons (stay dry in the cockpit, with a body thump)');
+button(s, 'gun (own)', () => audio.play('gun', 0.24, state.x, 0.8, true));
+button(s, 'rocket (own)', () => audio.play('rocket', 0.4, state.x, 1, true));
+button(s, 'plaser', () => audio.playSynth('plaser', state.x));
+s = section('world sounds (muffled by the hull in the cockpit)');
+button(s, 'gun (enemy)', () => audio.play('gun', 0.3, pan ?? W * 0.3, 0.8));
+button(s, 'rocket (enemy)', () => audio.play('rocket', 0.5, pan ?? W * 0.7));
+button(s, 'explosion', () => audio.play('explosion', 0.45, pan));
+for (const n of OLD) if (n !== 'plaser') button(s, n, () => audio.playSynth(n, pan));
+s = section('music');
+button(s, 'background_music', () => audio.playMusic('background_music'));
+button(s, 'stop', () => audio.stopMusic());
+
+(function frame() { audio.interiorState(state); requestAnimationFrame(frame); })();
+
+/* ------------------------------ measurements ------------------------------ */
+function measure(buf) {
+  let peak = 0, sum = 0, n = 0, last = 0, nan = false;
+  for (let ch = 0; ch < buf.numberOfChannels; ch++) {
+    const d = buf.getChannelData(ch);
+    for (let i = 0; i < d.length; i++) {
+      const v = d[i];
+      if (v !== v) { nan = true; continue; }
+      const a = v < 0 ? -v : v;
+      if (a > peak) peak = a;
+      if (a > 0.002 && i > last) last = i;
+      sum += v * v; n++;
+    }
+  }
+  // RMS over the audible part only, so long render tails do not dilute it
+  let s2 = 0, m = 0;
+  for (let ch = 0; ch < buf.numberOfChannels; ch++) { const d = buf.getChannelData(ch); for (let i = 0; i <= last; i++) { s2 += d[i] * d[i]; m++; } }
+  return { peak, rms: Math.sqrt(s2 / Math.max(1, m)), dur: last / buf.sampleRate, nan };
+}
+const db = (v) => (v > 0 ? (20 * Math.log10(v)).toFixed(1) : '-inf').padStart(6);
+function row(name, m, minPeak = 0.02) {
+  const flags = [m.nan && 'NaN', m.peak > 0.99 && 'CLIP', m.peak < minPeak && 'SILENT'].filter(Boolean);
+  if (flags.length) flagged.push(name + ':' + flags.join('+'));
+  return `${name.padEnd(22)} peak ${m.peak.toFixed(3)} (${db(m.peak)} dB)  rms ${m.rms.toFixed(3)} (${db(m.rms)} dB)  ${m.dur.toFixed(2)} s  ${flags.join(' ')}`;
+}
+const flagged = [];
+
+// Headless runs use a virtual clock that races ahead of the audio render thread; burning a little real
+// CPU between polls gives the offline render time to land before the time budget is spent.
+async function settle(p) {
+  let done = false, val, err;
+  p.then((v) => { done = true; val = v; }, (e) => { done = true; err = e || new Error('render failed'); });
+  while (!done) { let x = 0; for (let i = 0; i < 2e6; i++) x += Math.sqrt(i); await new Promise((r) => setTimeout(r, 0)); }
+  if (err) throw err;
+  return val;
+}
+
+async function auto() {
+  const lines = [];
+  { const push = lines.push.bind(lines); lines.push = (...a) => { push(...a); info.textContent = lines.join('\n'); }; } // show progress as it goes
+  ui.style.display = 'none';
+  const call = (label, fn) => { try { fn(); } catch (e) { showErr(`${label}: ${e && e.stack || e}`); } };
+  // 1. every entry point, in sequence (the context may be suspended here: they must all be safe)
+  call('setInterior(true)', () => audio.setInterior(true));
+  const states = [
+    {}, { boost: true, speed: 1 }, { warp: 1 }, { hp: 1 }, { ion: 1 }, { shield: true, overdrive: true },
+    { paused: true }, { dead: true }, { dead: false }, { hp: 1, hpMax: 1 }, { speed: NaN, warp: 7, ion: -2 },
+  ];
+  for (const st of states) for (let i = 0; i < 8; i++) call('interiorState ' + JSON.stringify(st), () => audio.interiorState({ ...state, ...st }));
+  call('interiorState(undefined)', () => audio.interiorState());
+  for (const n of [...NEW, ...INTERNAL, ...OLD]) { call('playSynth ' + n, () => audio.playSynth(n)); call('playSynth ' + n + ' panned', () => audio.playSynth(n, W * 0.2, 0.8)); }
+  call('play own', () => { audio.play('gun', 0.24, state.x, 0.8, true); audio.play('rocket', 0.4, state.x); audio.play('explosion', 0.4, 100); });
+  call('setInterior(false)', () => audio.setInterior(false));
+  call('setInterior flip', () => { audio.setInterior(true); audio.setInterior(false); audio.setInterior(true); });
+  // (a probe context tells whether this browser lets audio run without a gesture, i.e. whether the live graph was exercised)
+  await new Promise((r) => setTimeout(r, 300));
+  for (let i = 0; i < 5; i++) call('interiorState live', () => audio.interiorState({ ...state, hp: 1, ion: 1, boost: true }));
+  call('setInterior(false) live', () => audio.setInterior(false));
+  const probe = new AudioContext();
+  lines.push(`api calls done (autoplay context: ${probe.state})`);
+  probe.close();
+
+  // 2. offline renders
+  lines.push('', '-- new one-shots (unity volume) --');
+  for (const n of NEW) { try { lines.push(row(n, measure(await settle(audio.renderSynth(n, 4))))); } catch (e) { showErr(`render ${n}: ${e && e.stack || e}`); } }
+  lines.push('-- cockpit internals --');
+  for (const n of INTERNAL) { try { lines.push(row(n, measure(await settle(audio.renderSynth(n, 6))), 0.01)); } catch (e) { showErr(`render ${n}: ${e && e.stack || e}`); } }
+  lines.push('-- existing sounds, for reference --');
+  for (const n of OLD) { try { const m = measure(await settle(audio.renderSynth(n, 4))); lines.push(`${n.padEnd(22)} peak ${m.peak.toFixed(3)} (${db(m.peak)} dB)  rms ${m.rms.toFixed(3)} (${db(m.rms)} dB)  ${m.dur.toFixed(2)} s`); } catch (e) { showErr(`render ${n}: ${e && e.stack || e}`); } }
+  lines.push('-- cabin bed, 4 s held state --');
+  const beds = { idle: { speed: 0.3 }, cruise: { speed: 1 }, boost: { speed: 1, boost: true }, warp: { speed: 1, warp: 1 }, 'shield+overdrive': { speed: 0.5, shield: true, overdrive: true }, 'everything': { speed: 1, boost: true, warp: 1, shield: true, overdrive: true, ion: 1 } };
+  for (const [k, st] of Object.entries(beds)) { try { lines.push(row('bed ' + k, measure(await settle(audio.renderBed({ ...state, ...st }, 4))), 0.004)); } catch (e) { showErr(`bed ${k}: ${e && e.stack || e}`); } }
+  for (const [k, st] of Object.entries({ paused: { paused: true }, dead: { dead: true } })) {
+    try { const m = measure(await settle(audio.renderBed({ ...state, ...st }, 4))); lines.push(`${('bed ' + k).padEnd(22)} peak ${m.peak.toFixed(4)} (expected near silence)${m.peak > 0.02 ? ' LOUD' : ''}`); if (m.peak > 0.02) flagged.push('bed ' + k + ':LOUD'); } catch (e) { showErr(`bed ${k}: ${e && e.stack || e}`); }
+  }
+  lines.push('', `DONE errors=${errCount} flagged=${flagged.length ? flagged.join(',') : 'none'}`);
+}
+if (Q.has('auto')) await auto(); // top-level await holds the load event until the renders are in
+</script>
+</body>
+</html>

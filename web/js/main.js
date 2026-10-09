@@ -6,6 +6,7 @@ import { loadImages, IMG_COUNT } from './assets.js';
 import { generateSprites } from './procassets.js';
 import { makeVignette } from './fx.js';
 import { drawText } from './ui.js';
+import * as ui from './ui.js';
 import { MenuState } from './menu.js';
 import { GameState } from './game.js';
 import { VersusState } from './versus.js';
@@ -112,29 +113,40 @@ class StartState {
     }
   }
   draw(g) {
-    g.fillStyle = '#000';
-    g.fillRect(0, 0, W, H);
-    drawText(g, 'SPACE VOID', W / 2, H / 2 - 80, 56);
+    drawLockup(g);
     const pulse = 0.5 + 0.5 * Math.sin((this.t || 0) / 20);
-    g.globalAlpha = 0.4 + 0.6 * pulse;
-    drawText(g, input.isTouch ? 'TAP TO START' : 'CLICK OR PRESS ANY KEY', W / 2, H / 2 + 30, 26, 'rgb(120,220,120)');
-    g.globalAlpha = 1;
+    ui.text(g, input.isTouch ? 'TAP TO START' : 'CLICK OR PRESS ANY KEY', W / 2, H / 2 + 64, {
+      size: 13, weight: 600, track: 0.36, align: 'center', color: ui.rgba(ui.C.hi), alpha: 0.4 + 0.6 * pulse, maxW: W - 40,
+    });
   }
 }
 
 /* --------------------------------- loading --------------------------------- */
 
+// splash / loading backdrop + the SPACE (heavy) VOID (light) lockup, as in the menu
+function drawLockup(g) {
+  const { C, rgba } = ui;
+  ui.begin(g);
+  ui.spaceBackdrop(g);
+  const size = Math.min(60, (W - 48) / 9.6);
+  const o1 = { size, weight: 700, track: 0.2 }, o2 = { size, weight: 200, track: 0.2 };
+  const w1 = ui.measure(g, 'SPACE', o1), w2 = ui.measure(g, 'VOID', o2), gap = size * 0.52;
+  const tw = w1 + gap + w2, x = W / 2 - tw / 2, y = H / 2 - 40;
+  ui.text(g, 'SPACE', x, y, o1);
+  ui.text(g, 'VOID', x + w1 + gap, y, { ...o2, color: rgba(C.cyan) });
+  const ry = Math.round(y + size * 0.74);
+  g.fillStyle = rgba(C.mid, 0.22); g.fillRect(x, ry, tw, ui.hair());
+  g.fillStyle = rgba(C.cyan); g.fillRect(W / 2 - 18, ry - 1, 36, 2);
+  return { x, w: tw, y: ry };
+}
+
 let progress = 0;
 function drawLoading() {
   g.setTransform(scale, 0, 0, scale, 0, 0);
-  g.fillStyle = '#000';
-  g.fillRect(0, 0, W, H);
-  drawText(g, 'SPACE VOID', W / 2, H / 2 - 80, 56);
-  const bw = 300, bh = 10;
-  g.fillStyle = 'rgba(255,255,255,0.15)';
-  g.fillRect(W / 2 - bw / 2, H / 2 + 20, bw, bh);
-  g.fillStyle = 'rgb(0,220,120)';
-  g.fillRect(W / 2 - bw / 2, H / 2 + 20, bw * progress, bh);
+  const l = drawLockup(g);
+  const bw = Math.min(300, l.w);
+  ui.hudBar(g, W / 2 - bw / 2, l.y + 42, bw, 4, progress, { color: ui.C.cyan, segs: 24, back: 0.16 });
+  ui.text(g, 'LOADING', W / 2, l.y + 66, { size: 10, weight: 700, track: 0.4, align: 'center', color: ui.rgba(ui.C.low) });
 }
 
 async function boot() {
@@ -149,9 +161,9 @@ async function boot() {
   const [images] = await Promise.all([
     loadImages((d) => { imgDone = d; tick(); }),
     audio.loadSounds((d) => { sndDone = d; tick(); }),
-    document.fonts?.load('700 30px Orbitron').catch(() => {}),
   ]);
   app.images = generateSprites(images); // procedural sprites replace the old PNG set
+  { const baked = import('./bake3d.js').then((m) => m.bakeSprites(app)).catch(() => {}); if (/[?&]bakefirst\b/.test(location.search)) await baked; } // classic sprites re-baked from the WebGL hero models, behind the menu (debug ?bakefirst waits for it)
 
   const params = new URLSearchParams(location.search);
   app.debugGod = params.has('god'); // debug: invincible player for testing
@@ -196,6 +208,10 @@ async function boot() {
       };
     }
     app.setState(st);
+  } else if (params.get('screen') === 'online') { // debug: the online lobby (&phase=lobby|hosting|joining|lobby-guest|error, no network)
+    const { OnlineState } = await import('./online.js');
+    app.setState(new OnlineState(app));
+    if (params.get('phase')) { app.state.phase = params.get('phase'); app.state.errorText = 'Room not found'; }
   } else if (params.get('screen') === 'local') { // debug: the LOCAL 2P menu page
     app.goMenu();
     app.state.goPage('local');
@@ -221,6 +237,9 @@ async function boot() {
   }
   // debug: open a run straight on an overlay (?mode=single&hud=pause | &hud=over) — HUD screenshots
   if (params.get('hud') === 'pause') app.state.togglePause?.();
+  else if (params.get('hud') === 'over' && app.state.buildWinMenu) { // versus result
+    app.state.score1 = 5; app.state.score2 = 3; app.state.winner = 'PLAYER 1'; app.state.winMenu = app.state.buildWinMenu();
+  }
   else if (params.get('hud') === 'over' && app.state.buildOverMenu) {
     const st = app.state;
     st.over = true; st.overAlpha = 0.5; st.overMenu = st.buildOverMenu();

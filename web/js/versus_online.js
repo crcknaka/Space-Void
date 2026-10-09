@@ -6,7 +6,8 @@ import { makeSpaceBackdrop } from './bggen.js';
 import { W, H, STEP, clamp, overlap, rand } from './const.js';
 import * as input from './input.js';
 import * as audio from './audio.js';
-import { Button, ButtonGroup, drawText } from './ui.js';
+import { Button, ButtonGroup } from './ui.js';
+import * as ui from './ui.js';
 import { BaseWorld } from './world.js';
 import { Player, Bullet, Explosion, BoostParticle, Rocket, LaserBeam } from './entities.js';
 import { savedName } from './lb.js';
@@ -138,7 +139,7 @@ export class VersusOnline extends BaseWorld {
     p.invulnUntil = this.time + 1500;
   }
 
-  leaveBtn() { return { x: 34, y: 70, r: 22 }; } // below the score HUD
+  leaveBtn() { return { x: 34, y: 88, r: 22 }; } // below the score plate
   rocketBtn() { return { x: W - 70, y: H - 80, r: 44 }; }
   laserBtn() { return { x: W - 70, y: H - 185, r: 38 }; }
 
@@ -420,69 +421,60 @@ export class VersusOnline extends BaseWorld {
     this.local.draw(g, this);
 
     // HUD — P1 left, P2 right; names shown, your side marked
-    const p1c = this.localId === 1 ? 'rgb(0,255,140)' : '#fff';
-    const p2c = this.localId === 2 ? 'rgb(0,255,140)' : '#fff';
-    // clip long names so the side scores never run into the centered "First to N"
+    const { C, rgba } = ui;
+    ui.begin(g);
+    ui.scrim(g, 'top', 100, 0.3);
+    // clip long names so they stay inside the plates
     const clip = (s) => (s.length > 9 ? `${s.slice(0, 9)}…` : s);
     const name1 = clip(this.localId === 1 ? this.myName : this.oppName);
     const name2 = clip(this.localId === 2 ? this.myName : this.oppName);
-    drawText(g, `${name1}: ${this.score1}`, 10, 24, 22, p1c, 'left');
-    drawText(g, `${name2}: ${this.score2}`, W - 10, 24, 22, p2c, 'right');
-    drawText(g, `First to ${SCORE_LIMIT}`, W / 2, 24, 16, 'rgb(160,160,160)');
+    ui.hudScorePlate(g, 'left', { name: name1, score: this.score1, color: rgba(this.localId === 1 ? C.ok : C.low) });
+    ui.hudScorePlate(g, 'right', { name: name2, score: this.score2, color: rgba(this.localId === 2 ? C.ok : C.low) });
+    ui.hudLabel(g, `FIRST TO ${SCORE_LIMIT}`, W / 2, 22, { size: 10, weight: 700, track: 0.3, align: 'center', color: rgba(C.mid) });
     // my secondary ammo
-    drawText(g, `🚀${this.local.rockets} ⚡${this.local.lasers}`, W / 2, 50, 16, 'rgb(120,220,255)');
+    ui.hudAmmo(g, W / 2 - 38, 46, this.local.rockets, this.local.lasers);
     this.drawPing(g);
 
     // touch controls: leave + rocket + laser
     if (input.isTouch && !this.winner && !this.disconnected) {
       const lb = this.leaveBtn();
-      g.globalAlpha = 0.3; g.fillStyle = '#fff';
-      g.beginPath(); g.arc(lb.x, lb.y, lb.r, 0, Math.PI * 2); g.fill();
-      g.globalAlpha = 0.85; g.strokeStyle = '#000'; g.lineWidth = 3;
+      ui.touchDisc(g, lb.x, lb.y, lb.r - 2);
+      g.strokeStyle = rgba(C.hi); g.lineWidth = 2;
       g.beginPath(); g.moveTo(lb.x - 6, lb.y - 6); g.lineTo(lb.x + 6, lb.y + 6);
       g.moveTo(lb.x + 6, lb.y - 6); g.lineTo(lb.x - 6, lb.y + 6); g.stroke();
-      g.globalAlpha = 1;
       // rocket button (bottom-right) + laser button (above it)
       const rb = this.rocketBtn(), zb = this.laserBtn();
-      g.globalAlpha = this.local.rockets > 0 ? 0.4 : 0.2; g.fillStyle = '#fff';
-      g.beginPath(); g.arc(rb.x, rb.y, rb.r, 0, Math.PI * 2); g.fill();
-      g.globalAlpha = 0.9; g.drawImage(this.app.images.rocket, rb.x - 20, rb.y - 18, 40, 20);
-      drawText(g, `${this.local.rockets}`, rb.x, rb.y + 16, 20, '#000');
-      g.globalAlpha = this.local.lasers > 0 ? 0.4 : 0.2; g.fillStyle = 'rgb(120,220,255)';
-      g.beginPath(); g.arc(zb.x, zb.y, zb.r, 0, Math.PI * 2); g.fill();
-      g.globalAlpha = 0.95; drawText(g, '⚡', zb.x, zb.y - 4, 26, '#000'); drawText(g, `${this.local.lasers}`, zb.x, zb.y + 18, 20, '#000');
-      g.globalAlpha = 1;
+      const hasRk = this.local.rockets > 0, hasLz = this.local.lasers > 0;
+      ui.touchDisc(g, rb.x, rb.y, rb.r, hasRk ? C.hi : C.low, hasRk ? 0.8 : 0.4);
+      g.globalAlpha = hasRk ? 0.95 : 0.4; g.drawImage(this.app.images.rocket, rb.x - 20, rb.y - 20, 40, 20); g.globalAlpha = 1;
+      ui.text(g, String(this.local.rockets), rb.x, rb.y + 17, { size: 17, weight: 700, align: 'center', color: rgba(hasRk ? C.hi : C.low) });
+      ui.touchDisc(g, zb.x, zb.y, zb.r, hasLz ? C.cyan : C.low, hasLz ? 0.9 : 0.4);
+      ui.hudGlyph(g, 'bolt', zb.x, zb.y - 9, 20, rgba(hasLz ? C.cyan : C.low));
+      ui.text(g, String(this.local.lasers), zb.x, zb.y + 16, { size: 17, weight: 700, align: 'center', color: rgba(hasLz ? C.hi : C.low) });
     }
 
     if (this.phase === 'wait') {
-      drawText(g, 'Waiting for host…', W / 2, H / 2, 22, 'rgb(255,210,80)');
+      ui.notice(g, 'WAITING FOR HOST', { dim: 0, size: 22, color: C.gold });
     } else if (this.phase === 'countdown') {
       const n = Math.ceil(this.countdown / 1000);
-      drawText(g, n > 0 ? String(n) : 'FIGHT!', W / 2, H / 2, 90, 'rgb(255,210,80)');
+      ui.text(g, n > 0 ? String(n) : 'FIGHT', W / 2, H / 2, { size: 84, weight: 200, track: n > 0 ? 0 : 0.3, align: 'center', color: rgba(C.gold), maxW: W - 40 });
     }
 
     if (this.winner) {
-      g.fillStyle = 'rgba(0,0,0,0.6)';
-      g.fillRect(0, 0, W, H);
       const iWon = (this.winner === 'PLAYER 1' && this.localId === 1) || (this.winner === 'PLAYER 2' && this.localId === 2);
-      drawText(g, iWon ? 'YOU WIN!' : 'YOU LOSE', W / 2, H / 2 - 60, 56, iWon ? 'rgb(0,255,140)' : 'rgb(255,90,90)');
-      drawText(g, `${this.winner} · ${this.score1} – ${this.score2}`, W / 2, H / 2 - 10, 24, '#fff');
+      ui.notice(g, iWon ? 'YOU WIN' : 'YOU LOSE', { y: H / 2 - 64, size: 42, color: iWon ? C.ok : C.danger, sub: `${this.winner} · ${this.score1} – ${this.score2}` });
+      const line = (str, y, c) => ui.text(g, str, W / 2, y, { size: 12, weight: 700, track: 0.22, align: 'center', color: rgba(c) });
       if (this.rematchMe) {
-        drawText(g, this.rematchThem ? 'starting…' : 'waiting for partner…', W / 2, H / 2 + 90, 18, 'rgb(255,210,80)');
+        line(this.rematchThem ? 'STARTING…' : 'WAITING FOR PARTNER…', H / 2 + 90, C.gold);
       } else {
-        if (this.rematchThem) drawText(g, 'partner wants a rematch!', W / 2, H / 2 + 30, 16, 'rgb(0,255,140)');
+        if (this.rematchThem) line('PARTNER WANTS A REMATCH', H / 2 + 30, C.ok);
         this.endMenu?.draw(g);
       }
     } else if (this.disconnected) {
-      g.fillStyle = 'rgba(0,0,0,0.6)';
-      g.fillRect(0, 0, W, H);
-      drawText(g, 'OPPONENT DISCONNECTED', W / 2, H / 2 - 10, 28, 'rgb(255,90,90)');
-      drawText(g, 'press any key to return', W / 2, H / 2 + 40, 16, 'rgb(180,180,180)');
+      ui.notice(g, 'OPPONENT DISCONNECTED', { size: 26, color: C.danger, sub: 'PRESS ANY KEY TO RETURN' });
     } else if (this.reconnecting) {
-      g.fillStyle = 'rgba(0,0,0,0.55)';
-      g.fillRect(0, 0, W, H);
       const dots = '.'.repeat(1 + (Math.floor(this.time / 400) % 3));
-      drawText(g, `RECONNECTING${dots}`, W / 2, H / 2, 30, 'rgb(255,210,80)');
+      ui.notice(g, `RECONNECTING${dots}`, { dim: 0.55, size: 26, color: C.gold });
     }
   }
 
@@ -491,7 +483,7 @@ export class VersusOnline extends BaseWorld {
     const r = this.net.rtt || 0;
     if (!r) return;
     const col = r < 80 ? 'rgb(0,220,130)' : r < 160 ? 'rgb(255,210,60)' : 'rgb(255,90,90)';
-    drawText(g, `${r} ms`, W / 2, 74, 13, col); // below the ammo line — no overlap
+    ui.hudLabel(g, `${r} MS`, W / 2, 70, { size: 10, weight: 700, track: 0.16, align: 'center', color: col }); // below the ammo line — no overlap
   }
 
   onResize() { super.onResize(); }

@@ -156,7 +156,7 @@ export const FX_TUNING = {
   worldDriftX: -45,          // units/s: smoke drifts backward as the world scrolls
   smokeRise: 34,             // units/s upward
   exhaustRate: 16,           // wisp particles / s / nozzle at quality 1 (the plume itself is a shader)
-  plumeLength: 3.6,          // plume length in nozzle widths (x ~1.8 with full boost)
+  plumeLength: 3.8,          // plume length in nozzle widths for a big engine (x ~1.8 with full boost; small nozzles get relatively longer flames)
   nearFade0: 50, nearFade1: 200, // sprites fade out this close to the camera (units)
   fireOcclusion: 0.8,        // how strongly flame bodies hide what is behind them (0 = the old purely additive fire)
   exposureLoad: 0.6,         // local exposure budget: flash/light gain = 1 / (1 + this x recent blast energy nearby)
@@ -493,6 +493,11 @@ void main() {
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
     return;
   }
+  // close to the eye (cockpit view): a sprite never spans more than about a screen, and it thins out on the way
+  // there, so a fireball a ship's length ahead is layered detail and not one flat quad eating the fill-rate
+  float ang = size / max(-mv.z, 1.0);
+  vColor.a *= 1.0 - 0.8 * smoothstep(0.5, 1.3, ang);
+  size = min(size, 1.3 * max(-mv.z, 1.0));
   vec2 off = ax * position.x * (1.0 + st) + vec2(-ax.y, ax.x) * position.y;
   mv.xy += off * size;
   vColor.a *= smoothstep(uNearFade.x, uNearFade.y, -mv.z);
@@ -555,6 +560,7 @@ void main() {
 
 const SMOKE_FS = /* glsl */`
 uniform sampler2D uAtlas;
+uniform sampler2D uNoise;
 uniform vec3 uSunView;
 uniform vec3 uHeatCol;
 uniform vec3 uKeyCol;
@@ -565,16 +571,24 @@ varying vec2 vCell;
 varying vec2 vAx;
 varying vec4 vFx;
 void main() {
-  vec4 t = texture2D(uAtlas, (vCell + clamp(vUv, 0.008, 0.992)) * vec2(${INV_COLS}, ${INV_ROWS}));
+  // rolling: the lookup is dragged by a noise field that scrolls as the puff ages, so a puff keeps turning itself
+  // inside out instead of being one stamped shape that only grows (the poor man's flipbook)
+  vec2 wq = texture2D(uNoise, vUv * 0.42 + vec2(vFx.z * 0.31, vFx.z * 0.53)).rg - 0.5;
+  vec2 uv = clamp(vUv + wq * (0.07 + 0.11 * vFx.x), 0.008, 0.992);
+  vec4 t = texture2D(uAtlas, (vCell + uv) * vec2(${INV_COLS}, ${INV_ROWS}));
+  // fine structure that only matters up close: billows inside the billows
+  float fine = texture2D(uNoise, vUv * 1.7 - vec2(vFx.z * 0.4, vFx.z * 0.23)).b;
   float e = vFx.x * vFx.x * 0.42;
-  float d = t.a * smoothstep(e, e + 0.55, t.a);
-  float a = vColor.a * d;
+  float d = t.a * smoothstep(e, e + 0.55, t.a) * (0.62 + 0.76 * fine);
+  float a = vColor.a * min(d, 1.0);
   if (a < 0.003) discard;
-  vec2 n2 = t.rg * 2.0 - 1.0;
-  vec3 n = vec3(vAx * n2.x + vec2(-vAx.y, vAx.x) * n2.y, sqrt(max(0.0, 1.0 - dot(n2, n2))));
+  vec2 n2 = t.rg * 2.0 - 1.0 + wq * 0.5;
+  vec3 n = vec3(vAx * n2.x + vec2(-vAx.y, vAx.x) * n2.y, sqrt(max(0.0, 1.0 - min(dot(n2, n2), 1.0))));
   float key = dot(n, uSunView);
   float lit = smoothstep(-0.35, 0.8, key);
-  vec3 rgb = vColor.rgb * mix(uShadeCol, uKeyCol, lit) * (0.72 + 0.28 * t.a);
+  // self-shadow: the thick middle of a puff shades its own far side, the thin lit rim stays bright
+  float shadow = 1.0 - 0.5 * t.a * (1.0 - lit) * (0.5 + fine);
+  vec3 rgb = vColor.rgb * mix(uShadeCol, uKeyCol, lit) * (0.72 + 0.28 * t.a) * shadow;
   // young smoke glows from inside: strongest on the side the sun does not reach
   rgb += uHeatCol * vFx.w * (0.22 + 0.78 * (1.0 - lit)) * (0.35 + 0.65 * t.a);
   gl_FragColor = vec4(rgb, a);
@@ -616,6 +630,8 @@ void main() {
   vP = vec2(position.x * vL + e, position.y);
   vCore = iTail.w;
   float fade = w > 0.0 ? max(w / wu, 0.3) : 0.0;
+  // a spark flying past the pilot's nose would be a fat glowing bar: seen that large it is held back
+  fade *= mix(1.0, 0.3, smoothstep(7.0, 28.0, vPx));
   vColH = vec4(iColH.rgb, iColH.a * fade);
   vColT = vec4(iColT.rgb, iColT.a * fade);
   if (w <= 0.0 || c.z > -1.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
@@ -809,7 +825,7 @@ const BEAM_VS = /* glsl */`
 attribute vec4 iA;      // x0, y0, z0, quad half-width (world units)
 attribute vec4 iB;      // x1, y1, z1, kind
 attribute vec4 iCol;    // rgb, alpha
-attribute vec4 iPar;    // seed, flag (marker: hot, plume: boost), p2, p3
+attribute vec4 iPar;    // seed, flag (marker: hot, plume: thrust + 4 x engine class), p2 (gain), p3 (plume: sideways lag of the tip)
 uniform float uPxPerUnit;
 varying vec2 vUv;       // x: world units along from A, y: -1..1 across
 varying vec4 vCol;
@@ -860,7 +876,15 @@ void main() {
   float hwE = max(hw, 1.5 * max(-c.z, 1.0) / uPxPerUnit);
   vCol.a *= hw / hwE;
   // a plume seen (nearly) along its axis: the ribbon thins out and the engine discs take over
-  if (kind > 5.5) { hwE *= mix(0.5, 1.0, smoothstep(0.15, 0.75, sl)); vCol.a *= smoothstep(0.06, 0.4, sl); }
+  if (kind > 5.5) {
+    hwE *= mix(0.5, 1.0, smoothstep(0.15, 0.75, sl)); vCol.a *= smoothstep(0.06, 0.4, sl);
+    // inertia: the ribbon runs straight to the lagging tip; the fragment shader curves the flame inside it.
+    // Only the part of the lag that lies across the ribbon is visible.
+    vec3 dW = iB.xyz - iA.xyz;
+    vec3 pv = (modelViewMatrix * vec4(-dW.z, 0.0, dW.x, 0.0)).xyz;
+    float pl = length(pv);
+    vPar.w = pl > 1e-4 ? iPar.w * dot(pv / pl, side) * hw / hwE : 0.0;
+  }
   c += d * e * hwE + side * position.y * hwE;
   vUv = vec2(s + e * hwE, position.y);
   vInfo = vec3(len, hwE, kind);
@@ -932,31 +956,77 @@ void main() {
     float blink = mix(0.8 + 0.2 * sin(T * 3.0 + seed), 0.55 + 0.45 * step(0.5, fract(T * 5.5)), hot);
     rgb = col * (body * (0.14 + mix(0.32, 0.6, hot) * stripe) + rail * mix(0.6, 1.3, hot)) * ends * blink * mix(0.75, 1.0, hot);
   } else if (kind > 6.5) {
-    // engine disc (vPar.y: 1 = the nozzle itself, 0 = a cross-section of the plume further down)
-    float rr = length(vUv), hot = vPar.y;
+    // engine disc (vPar.y: 1 = the nozzle itself, 0..1 = a mach disk standing in the plume further down,
+    // 2 = the afterburner's ignition ring)
+    float rr = length(vUv), hot = min(vPar.y, 1.0), ign = step(1.5, vPar.y);
     float fl = 0.86 + 0.14 * sin(T * 43.0 + seed * 9.0) * sin(T * 17.0 + seed * 5.0);
     float ring = exp(-pow((rr - 0.6) / mix(0.2, 0.07, hot), 2.0));
     float well = exp(-rr * rr * 9.0);
     float m = max(col.r, max(col.g, col.b));
     vec3 hotC = (col / max(m, 1e-3) + vec3(1.2)) * 0.6;
-    rgb = (col * (ring * mix(0.4, 0.95, hot) + exp(-rr * rr * 2.4) * 0.16) + hotC * (ring * 0.3 + well * 0.34) * hot) * fl * vPar.z * (1.0 - smoothstep(0.88, 1.0, rr));
+    // the ring is not even: petals of the nozzle, slowly turning
+    float pet = 0.8 + 0.2 * sin(atan(vUv.y, vUv.x) * 9.0 + T * 3.0 + seed * 4.0);
+    vec3 disc = col * (ring * mix(0.4, 0.95, hot) * pet + exp(-rr * rr * 2.4) * 0.16) + hotC * ((ring * 0.3 + well * 0.34) * hot + well * 0.3 * (1.0 - hot));
+    vec3 thin = hotC * exp(-pow((rr - 0.74) / 0.05, 2.0)) * 1.2 + col * exp(-pow((rr - 0.7) / 0.16, 2.0)) * 0.5;
+    rgb = mix(disc, thin, ign) * fl * vPar.z * (1.0 - smoothstep(0.88, 1.0, rr));
   } else {
-    // engine plume: tapering cone, bright core with shock diamonds, flicker scrolling downstream
-    float u = clamp(x / len, 0.0, 1.0), boost = vPar.y;
-    float n1 = texture2D(uNoise, vec2(x / hw * 0.05 - T * 5.0 + seed, y * 0.25 + seed)).r;
-    float n2 = texture2D(uNoise, vec2(x / hw * 0.13 - T * 11.0, y * 0.5 + seed * 3.0)).g;
-    float rad = mix(0.50, 0.15, pow(u, 0.7)) * (0.9 + 0.3 * (n1 - 0.5));
-    float w = abs(y) / rad;
-    float body = exp(-w * w * 1.8) * pow(1.0 - u, 1.35) * (0.8 + 0.6 * n2 * (0.3 + u));
-    float coreLen = 0.42 + 0.2 * boost;
-    float cu = clamp(u / coreLen, 0.0, 1.0);
-    float cw = abs(y) / (0.20 * (1.0 - cu * 0.75));
-    float dia = 0.5 + 0.5 * cos(u * len / hw * 9.0 - 0.6);
-    float core = exp(-cw * cw * 2.4) * (1.0 - cu) * (0.72 + 0.5 * dia * dia);
-    float start = smoothstep(-0.22, 0.04, x / hw) * step(x, len);
+    // Jet plume. Layers, inside out: a white-hot core pinched into a chain of shock diamonds with a bright mach
+    // disk behind every node; the faint criss-cross of the shocks; a soft coloured flame whose edge is torn by
+    // noise racing downstream; a wavering veil of heat around and beyond it. Thrust (0..1+) lengthens the core,
+    // spreads the diamonds and lights an ignition collar at the nozzle; the engine class (0 fighter .. 2 capital)
+    // packs more, finer diamonds into the plume and roughens its edges.
+    float flag = vPar.y;
+    float big = floor(flag * 0.25 + 0.01);
+    float boost = flag - big * 4.0, bk = min(boost, 1.5);
+    float xs = x / hw, L = len / hw;
+    // breathing: the flame shortens and lengthens a little, each nozzle to its own rhythm
+    float br = 0.93 + 0.045 * sin(T * 6.3 + seed * 5.0) + 0.025 * sin(T * 17.0 + seed * 11.0);
+    float u = clamp(x / (len * br), 0.0, 1.0);
+    // the flame's centre line: tangent to the engine axis at the nozzle, swung out to the lagging tip
+    float yc = y - vPar.w * (u * u - u);
+    float n1 = texture2D(uNoise, vec2(xs * 0.045 - T * 4.2 + seed, yc * 0.22 + seed * 1.3)).r;
+    float n2 = texture2D(uNoise, vec2(xs * 0.12 - T * 9.5, yc * 0.45 + seed * 3.0)).g;
+    float n3 = texture2D(uNoise, vec2(xs * 0.3 - T * 15.0 + seed * 2.0, yc * 1.2 + seed)).b;
     float m = max(col.r, max(col.g, col.b));
-    vec3 hotC = (col / max(m, 1e-3) + vec3(2.0)) * 0.62;
-    rgb = (col * body * 1.25 + hotC * core * (0.9 + 0.5 * boost)) * start * vPar.z;
+    vec3 nrm = col / max(m, 1e-3);
+    vec3 hotC = (nrm + vec3(2.0)) * 0.62;
+    vec3 deep = nrm * nrm * m * 0.85;                     // the tail: the same hue, saturated and dark
+    // outer flame: leaves the nozzle, swells a little (it is under-expanded), then tapers to a ragged point
+    float yw = yc + (n1 - 0.5) * (0.16 + 0.1 * big) * (0.25 + u) + (n3 - 0.5) * 0.08 * big;
+    float rad = mix(0.46, 0.12, pow(u, 0.8)) * (1.0 + 0.3 * sin(min(u * 3.5, 1.0) * 3.14159)) * (0.92 + 0.22 * (n1 - 0.5));
+    float w = abs(yw) / rad;
+    float tear = mix(1.0, 0.55 + 0.9 * n3, 0.35 + 0.3 * big);
+    float flame = exp(-w * w * 1.9) * pow(1.0 - u, 0.95) * (0.6 + 0.8 * n2 * (0.3 + u)) * tear;
+    // it is a shell of burning gas: a little brighter towards its skin than half-way in
+    flame *= 0.8 + 0.35 * smoothstep(0.35, 0.9, w);
+    vec3 flameC = mix(col + hotC * 0.22 * exp(-w * w * 3.0), deep, smoothstep(0.15, 0.9, u));
+    // core + shock diamonds
+    float lam = (0.62 + 0.3 * bk) / (1.0 + 0.3 * big) * max(1.0, L / 5.0) * (1.0 + 0.025 * sin(T * 29.0 + seed * 7.0));
+    float cu = clamp(xs / (L * br * (0.52 + 0.16 * bk)), 0.0, 1.0);
+    float sd = xs / lam - 0.35;
+    float fs = fract(sd), tri = abs(fs - 0.5) * 2.0;      // tri: 1 at a node, 0 half-way between two
+    float cw0 = (0.15 + 0.03 * bk) * (1.0 - 0.72 * cu);
+    float live = step(0.0, sd) * (1.0 - cu);
+    float pinch = mix(1.0, 0.4, pow(tri, 1.6) * step(-0.35, sd));
+    float cq = abs(yc) / (cw0 * pinch);
+    float core = exp(-cq * cq * 2.2) * pow(1.0 - cu, 1.15) * (0.42 + 0.28 * (1.0 - tri));
+    float bq = abs(yc) / (cw0 * 0.95);
+    float bead = exp(-pow((fs - 0.17) / 0.15, 2.0)) * exp(-bq * bq) * live * exp(-floor(max(sd, 0.0)) * 0.22);
+    float xq = (abs(yc) / (cw0 * 2.3) - (1.0 - tri)) / 0.22;
+    float lattice = exp(-xq * xq) * live * live * (0.5 + 0.5 * n2);
+    core = core + bead * 0.95 * (0.85 + 0.3 * n2);
+    // afterburner: an ignition collar, the glowing ring of the nozzle seen edge-on
+    float ry = abs(y) / 0.5;
+    float collar = exp(-pow((xs - 0.1) / 0.075, 2.0)) * (1.0 - smoothstep(0.92, 1.08, ry)) * (0.45 + 0.75 * ry * ry) * smoothstep(0.25, 0.9, boost) / (1.0 + 1.5 * big);
+    // heat haze, without a refraction pass: a faint veil that wavers across the flow, widest behind the flame
+    float hv = abs(yc + (n1 - 0.5) * 0.3) / (rad * 1.9 + 0.12);
+    float rip = 0.5 + 0.5 * sin(xs * 4.6 - T * 13.0 + n1 * 8.0 + yc * 5.0);
+    float veil = exp(-hv * hv * 1.6) * smoothstep(0.02, 0.3, u) * pow(1.0 - u, 0.7) * rip * rip * (0.035 + 0.02 * bk);
+    float start = smoothstep(-0.22, 0.04, xs) * step(x, len);
+    float flick = 0.9 + 0.1 * sin(T * 47.0 + seed * 13.0) * sin(T * 19.0 + seed * 3.0);
+    rgb = (flameC * flame * 1.5 + mix(col, hotC, 0.35) * lattice * 0.3
+      + hotC * (core * (0.9 + 0.3 * bk) + collar * 0.6) * flick
+      + mix(col, vec3(m), 0.45) * veil) * start * vPar.z;
   }
   rgb *= vCol.a * (1.0 - smoothstep(0.86, 1.0, abs(y)));
   if (max(rgb.r, max(rgb.g, rgb.b)) < 0.002) discard;
@@ -1250,6 +1320,7 @@ const LIGHT_DATA_MAX = 16;
 const IMM_LIGHTS = 96, TIMED_LIGHTS = 32;
 const GRID_X = 18, GRID_Z = 10, GRID_CELL = 160; // bolt-light clustering grid, centred on the field
 const CAND_MAX = IMM_LIGHTS + TIMED_LIGHTS + 64;
+const NZ = 8, NZ_SLOTS = 64; // nozzle memory stride: x y z tick lag(sideways, world units) ignition-time thrust(smoothed) boost(raw)
 
 export class Fx3D {
   constructor(THREE, scene, opts = {}) {
@@ -1271,6 +1342,8 @@ export class Fx3D {
     this.shN = 0;
     this.rkS = new Float32Array(24 * 4).fill(-1e3); // rocket smoke trails: last x, last z, frame seen, distance flown
     this._frame = 0;
+    this.nzS = new Float32Array(NZ_SLOTS * NZ).fill(-1e3); // what each engine nozzle was doing last frame (see _nozzle)
+    this._tick = 0; this.exhN = 0;
     this.lut = buildRamps(this.palette);
     const pal = this.palette;
 
@@ -1332,7 +1405,7 @@ export class Fx3D {
     // ---- smoke (alpha blended, drawn first) ----
     this.smokeMat = new THREE.ShaderMaterial({
       uniforms: {
-        uAtlas: this.uAtlas, uNearFade: this.uNearFade, uSunView: this.uSunView,
+        uAtlas: this.uAtlas, uNoise: this.uNoise, uNearFade: this.uNearFade, uSunView: this.uSunView,
         uHeatCol: this.uSmokeHeat, uKeyCol: this.uSmokeKey, uShadeCol: this.uSmokeShade,
       },
       vertexShader: SPRITE_VS, fragmentShader: SMOKE_FS,
@@ -1654,6 +1727,7 @@ export class Fx3D {
     this.beamN = 0; this.plumeN = 0; this.beamGeo.instanceCount = 0; this.beamMesh.visible = false;
     this.glowN = 0; this.glowGeo.instanceCount = 0; this.glowMesh.visible = false;
     this.imN = 0;
+    this._tick++; this.exhN = 0;
     if (dt > 0) this._frame++;
     // shield ripples are timed, but drawn through the immediate glow pool
     {
@@ -1807,6 +1881,11 @@ export class Fx3D {
       C[c3] = S[o + 16] * gl; C[c3 + 1] = S[o + 17] * gl; C[c3 + 2] = S[o + 18] * gl;
       const h = S[o + 19] / (1 + S[o + 22] * age * age);
       heat[i * 2] = h; heat[i * 2 + 1] = S[o + 23];
+      // cooling metal ticks: a glowing piece spits the odd spark as it contracts
+      if (h > 0.3 && rnd() < dt * 1.5 * this.quality * (h < 1.5 ? h : 1.5)) {
+        const mc = this.palette.microSpark;
+        this._spark(x, y, z, vx * 0.4 + rr(-90, 90), vy * 0.4 + rr(10, 90), vz * 0.4 + rr(-90, 90), rr(0.1, 0.28), rr(0.6, 1.1), mc[0], mc[1] * 0.85, mc[2] * 0.6, 4, 150, 0.022, 0, 1, 1.4);
+      }
       // burning chunks leave a thin thread of smoke (and fire while they are still hot)
       if (S[o + 24] > 0 && dt > 0) {
         const d = S[o + 25] + Math.hypot(vx, vy, vz) * dt, size = S[o + 27];
@@ -2159,7 +2238,7 @@ export class Fx3D {
     this.beamN = 0; this.plumeN = 0; this.beamGeo.instanceCount = 0; this.beamMesh.visible = false;
     this.glowN = 0; this.glowGeo.instanceCount = 0; this.glowMesh.visible = false;
     this.tlN = 0; this.imN = 0; this.lightCount = 0;
-    this.exS.fill(-1e3); this.shN = 0; this.rkS.fill(-1e3);
+    this.exS.fill(-1e3); this.shN = 0; this.rkS.fill(-1e3); this.nzS.fill(-1e3); this.exhN = 0;
     this.lightData.fill(0);
     for (let i = 0; i < this.gDirtyN; i++) this.gW[this.gDirty[i]] = 0;
     this.gDirtyN = 0;
@@ -2230,14 +2309,14 @@ export class Fx3D {
     this.glowMesh.visible = true;
   }
 
-  _beam(x0, y0, z0, x1, y1, z1, hw, kind, r, g, b, a, seed, flag, p2) {
+  _beam(x0, y0, z0, x1, y1, z1, hw, kind, r, g, b, a, seed, flag, p2, p3) {
     const i = this.beamN;
     if (i >= this.beamCap) return false;
     const m = i * 4, A = this.bmA, B = this.bmB, C = this.bmCol, P = this.bmPar;
     A[m] = x0; A[m + 1] = y0; A[m + 2] = z0; A[m + 3] = hw;
     B[m] = x1; B[m + 1] = y1; B[m + 2] = z1; B[m + 3] = kind;
     C[m] = r; C[m + 1] = g; C[m + 2] = b; C[m + 3] = a;
-    P[m] = seed; P[m + 1] = flag; P[m + 2] = p2; P[m + 3] = 0;
+    P[m] = seed; P[m + 1] = flag; P[m + 2] = p2; P[m + 3] = p3 || 0;
     const n = this.beamN = i + 1, rg = this.rBm;
     touch(this.aBmA, rg[0], n * 4); touch(this.aBmB, rg[1], n * 4); touch(this.aBmCol, rg[2], n * 4); touch(this.aBmPar, rg[3], n * 4);
     this.beamGeo.instanceCount = n;
@@ -2336,6 +2415,32 @@ export class Fx3D {
       }
     }
 
+    // ordinary ones get one late pop as well: something inside cooks off a moment after the hull goes
+    else if (s >= 0.8) {
+      n = this._n(1.2);
+      for (let k = 0; k < n; k++) {
+        randSphere();
+        const off = rr(22, 52) * sz, d = rr(0.09, 0.3), s1 = rr(30, 52) * sz;
+        const px = x + DX * off, py = y + Math.abs(DY) * off * 0.4 + 3, pz = z + DZ * off;
+        for (let j = 0; j < 2; j++) {
+          i = F.spawn(px + rr(-5, 5), py + rr(-3, 4), pz + rr(-5, 5), rr(-40, 40) + ivx, rr(0, 40), rr(-40, 40) + ivz,
+            rr(0.26, 0.45) * ls, s1 * 0.35, s1, R_FIRE, tint[0], tint[1], tint[2], flameCell());
+          F.drag[i] = 3; F.turb[i] = 80; F.spin[i] = rr(-1.5, 1.5); F.occ(i, occ);
+          F.delay(i, d);
+        }
+        i = F.spawn(px, py, pz, 0, 0, 0, 0.09, 26 * sz, 74 * sz, R_FLASH, ft[0] * 0.7 * fk * tint[0], ft[1] * 0.7 * fk * tint[1], ft[2] * 0.7 * fk * tint[2], C_BURST + (k & 1));
+        F.delay(i, d); F.spin[i] = rr(-2, 2);
+        const mc = pal.microSpark, m2 = this._n(7);
+        for (let j = 0; j < m2; j++) {
+          randSphere();
+          const sp = rr(120, 600);
+          const so = this._spark(px, py, pz, DX * sp + ivx, DY * sp * 0.7 + 20, DZ * sp + ivz, rr(0.12, 0.42), rr(0.9, 1.7),
+            mc[0] * tint[0], mc[1] * tint[1], mc[2] * tint[2], 3.6, 140, 0.03, 0, 1, 1.4);
+          this.sparkS[so + 6] = -d;
+        }
+      }
+    }
+
     // 3b. flamelets: many small tongues thrown further than the fireball, so the edge is lace, not a blob
     n = this._n(12 * s);
     for (let k = 0; k < n; k++) {
@@ -2413,6 +2518,22 @@ export class Fx3D {
         this._spark(x + ca * r0, y + 2, z + sa2 * r0, ca * sp + ivx, rr(-0.06, 0.1) * sp, sa2 * sp + ivz,
           rr(0.14, 0.26), rr(1.0, 1.7) * w, mc[0] * tint[0], mc[1] * tint[1], mc[2] * tint[2], 1.4, 0, 0.032, 0, 1, 1.4);
       }
+      // comets: a handful of white-hot fragments that outrun everything else, each dragging a long tail of light
+      n = this._n(5 * s * sa);
+      for (let k = 0; k < n; k++) {
+        randSphere();
+        const sp = rr(520, 1150) * vs;
+        this._spark(x + DX * 6, y + DY * 4, z + DZ * 6, DX * sp + ivx, DY * sp * 0.6 + 50, DZ * sp + ivz,
+          rr(0.4, 0.8), rr(2.2, 3.6) * w, cr, cg, cb, 1.5, 150, 0.1, 0, 1, 1.3);
+      }
+      // the last embers: a few that hang in the smoke for seconds after everything else is gone
+      n = this._n(6 * s * sa);
+      for (let k = 0; k < n; k++) {
+        randSphere();
+        const sp = rr(15, 120) * vs, off = rr(10, 40) * sz;
+        this._spark(x + DX * off, y + Math.abs(DY) * off * 0.6, z + DZ * off, DX * sp + ivx + tn.worldDriftX * 0.6, DY * sp * 0.6 + 22, DZ * sp + ivz,
+          rr(2.2, 4.0), rr(1.2, 2.2) * w, e[0] * 0.8, e[1] * 0.8, e[2] * 0.8, 1.6, 10, 0.01, 1 + rnd() * 5, 1, 0.7);
+      }
       // embers: slow, flickering, the last things to go out
       n = this._n(16 * s * sa);
       for (let k = 0; k < n; k++) {
@@ -2478,7 +2599,7 @@ export class Fx3D {
 
   /**
    * Bullet hits armour. (dirX,dirZ) = direction the sparks fly (away from the surface).
-   * opts: color, count, scale, light (false to skip), chips (count of tiny hot chips, default 2; 0 = none), flash (false to skip)
+   * opts: color, count, scale, light (false to skip), chips (count of tiny hot chips, default 3; 0 = none), flash (false to skip)
    */
   impact(x, y, z, dirX, dirZ, opts) {
     const o = opts || EMPTY;
@@ -2503,7 +2624,9 @@ export class Fx3D {
       this._spark(x, y, z, DX * sp, DY * sp + 20, DZ * sp, rr(0.06, 0.22), rr(0.7, 1.3) * sc,
         c0 * 1.15, c1 * 1.15, c2 * 1.15, 5, 120, 0.024, 0, cool, 1.5);
     }
-    const ch = o.chips ?? 2;
+    // ricochets along the normal, skitters along the plate, a wisp of scorched paint
+    for (let k = 0; k < 2; k++) this._ricochet(x, y, z, dirX, dirZ, 380 * sc, 0.3, 1.9 * sc, c0, c1, c2, cool, 0.8);
+    const ch = o.chips ?? 3;
     if (ch > 0) this._chips(x, y, z, dirX, dirZ, ch, 210 * sc, sc);
     if (o.flash !== false) this._hitFlash(x, y, z, dirX, dirZ, c0, c1, c2, sc);
     if (o.light !== false) this._lightTimed(x, y + 36, z, c0, c1, c2, 0.05 * sc * sc, 0.09, 0, 0, 0);
@@ -2523,6 +2646,27 @@ export class Fx3D {
     }
   }
 
+  // what a hit leaves besides its fan of sparks. `p` = chance of each element (they are all optional extras).
+  _ricochet(x, y, z, dirX, dirZ, speed, life, width, c0, c1, c2, cool, p) {
+    const l = Math.hypot(dirX, dirZ);
+    if (!(l > 1e-5)) return;
+    const nx = dirX / l, nz = dirZ / l, q = this.quality < 1 ? p * this.quality : p;
+    if (rnd() < q) { // the ricochet: fast, long-lived, arcing over
+      randCone(nx, nz, 0.35, 0.9);
+      const sp = speed * rr(1.3, 2.3);
+      this._spark(x, y, z, DX * sp, DY * sp + 40, DZ * sp, life * rr(1.3, 2.2), width * rr(0.7, 1.0), c0 * 1.1, c1 * 1.1, c2 * 1.1, 0.9, 380, 0.05, 0, cool, 1.3);
+    }
+    if (rnd() < q) { // the skitter: runs along the surface, dies quickly
+      const sg = rnd() < 0.5 ? -1 : 1, sp = speed * rr(0.7, 1.5), out = rr(0.05, 0.3);
+      this._spark(x, y, z, (-nz * sg + nx * out) * sp, rr(-0.15, 0.15) * sp, (nx * sg + nz * out) * sp, life * rr(0.35, 0.7), width * rr(0.5, 0.8), c0, c1, c2, 6, 0, 0.03, 0, cool, 1.4);
+    }
+    if (rnd() < q * 0.5) {
+      const K = this.smoke, tn = this.tuning, s1 = rr(12, 22), g = rr(0.2, 0.32);
+      const i = K.spawn(x, y + 1, z, nx * rr(20, 60), rr(6, 22), nz * rr(20, 60), rr(0.35, 0.6), s1 * 0.3, s1, R_SMOKE_PLAIN, g, g * 0.97, g * 0.94, wispCell());
+      K.drag[i] = 3; K.turb[i] = 26; K.spin[i] = rr(-2, 2); K.wx[i] = tn.worldDriftX * 0.6; K.wy[i] = tn.smokeRise * 0.4; K.ta[i] = 0.4; K.aux[i] = 0.6;
+    }
+  }
+
   // a few tiny hot chips knocked off the armour
   _chips(x, y, z, dirX, dirZ, count, speed, sc) {
     const hull = this.palette.hull;
@@ -2538,7 +2682,8 @@ export class Fx3D {
   /**
    * Generic spark spray. Zero direction = omnidirectional.
    * opts: spread (rad), speed, color, life (ms), width, gravity, drag, embers (0..1 fraction), light (false to skip),
-   *       micro (fine sparks per main spark, default 1.5; 0 = none), chips (chance per call of a tiny hot chip, default 0.3),
+   *       micro (fine sparks per main spark, default 1.5; 0 = none), chips (chance per call of a tiny hot chip, default 0.4),
+   *       ricochet (false = no ricochet / skitter sparks on small directed sprays),
    *       flash (false = no pin-point hit flash; by default small directional sprays get one)
    */
   sparks(x, y, z, count, dirX, dirZ, opts) {
@@ -2573,14 +2718,17 @@ export class Fx3D {
         c0 * 1.1, c1 * 1.1, c2 * 1.1, drag * 1.8, grav * 0.5, 0.026, 0, cool, 1.5);
     }
     const directed = (dirX || 0) !== 0 || (dirZ || 0) !== 0;
-    const chips = o.chips ?? 0.3;
+    // a round glancing off armour (the sim's small directed sprays): one spark that ricochets far along the
+    // normal and falls, one that skitters along the plate, sometimes a breath of scorched paint
+    if (directed && cnt <= 6 && o.ricochet !== false) this._ricochet(x, y, z, dirX || 0, dirZ || 0, speed, life, width, c0, c1, c2, cool, 0.45);
+    const chips = o.chips ?? 0.4;
     if (chips > 0 && rnd() < chips * Math.min(3, cnt * 0.5)) this._chips(x, y, z, dirX || 0, dirZ || 0, 1, speed * 0.5, 1);
     if (o.flash !== false && directed && cnt <= 6 && rnd() < 0.5) this._hitFlash(x, y, z, 0, 0, c0, c1, c2, 0.55 + 0.1 * cnt);
     // a big burst lights its surroundings for a moment
     if (cnt >= 8 && o.light !== false) this._lightTimed(x, y + 40, z, c0, c1, c2, Math.min(0.2, cnt * 0.006), life * 0.5, 0, 0, 0);
   }
 
-  /** Muzzle flash. opts: color ('player' | 'enemy' | [r,g,b]), scale, light (false to skip), sparks (count) */
+  /** Muzzle flash. opts: color ('player' | 'enemy' | [r,g,b]), scale, light (false to skip), sparks (count), smoke (false to skip) */
   muzzle(x, y, z, dirX, dirZ, opts) {
     const o = opts || EMPTY, pal = this.palette;
     const c = this._col(o.color, pal.muzzlePlayer);
@@ -2590,24 +2738,34 @@ export class Fx3D {
     if (l < 1e-5) { dirX = 1; dirZ = 0; l = 1; }
     const dx = dirX / l, dz = dirZ / l;
     const F = this.fire;
-    // forward tongue of flame + two side licks (the classic muzzle star)
-    let i = F.spawn(x + dx * 10 * sc, y, z + dz * 10 * sc, dx * 300 * sc, 0, dz * 300 * sc, rr(0.05, 0.075), 30 * sc, 20 * sc, R_FLASH, c0 * 0.9, c1 * 0.9, c2 * 0.9, C_LICK0);
-    F.drag[i] = 6; F.aux[i] = 1.4;
+    // short and directional: a forward tongue of flame, two small licks swept forward beside it, a pin-point at the bore
+    let i = F.spawn(x + dx * 9 * sc, y, z + dz * 9 * sc, dx * 320 * sc, 0, dz * 320 * sc, rr(0.045, 0.07), 26 * sc, 16 * sc, R_FLASH, c0 * 0.9, c1 * 0.9, c2 * 0.9, C_LICK0);
+    F.drag[i] = 6; F.aux[i] = 1.7;
     for (let k = -1; k <= 1; k += 2) {
-      const ax = dx * 0.45 - dz * k * 0.9, az = dz * 0.45 + dx * k * 0.9;
-      i = F.spawn(x + ax * 5 * sc, y, z + az * 5 * sc, ax * 190 * sc, 0, az * 190 * sc, rr(0.04, 0.06), 18 * sc, 12 * sc, R_FLASH, c0 * 0.7, c1 * 0.7, c2 * 0.7, C_LICK0 + 1);
-      F.drag[i] = 8; F.aux[i] = 0.8;
+      const ax = dx * 0.78 - dz * k * 0.62, az = dz * 0.78 + dx * k * 0.62;
+      i = F.spawn(x + ax * 4 * sc, y, z + az * 4 * sc, ax * 200 * sc, 0, az * 200 * sc, rr(0.035, 0.055), 13 * sc, 8 * sc, R_FLASH, c0 * 0.55, c1 * 0.55, c2 * 0.55, C_LICK0 + 1);
+      F.drag[i] = 8; F.aux[i] = 1.1;
     }
-    // hot dot + thin star at the muzzle
-    F.spawn(x, y, z, 0, 0, 0, 0.05, 14 * sc, 22 * sc, R_FLASH, c0 * 0.8, c1 * 0.8, c2 * 0.8, C_DOT);
-    i = F.spawn(x, y, z, 0, 0, 0, 0.06, 60 * sc, 110 * sc, R_FLASH, c0 * 0.5, c1 * 0.5, c2 * 0.5, C_SPARKLE);
-    // a couple of sparks
-    const n = this._n(o.sparks ?? 2);
+    F.spawn(x, y, z, 0, 0, 0, 0.045, 12 * sc, 19 * sc, R_FLASH, c0 * 0.8, c1 * 0.8, c2 * 0.8, C_DOT);
+    i = F.spawn(x, y, z, 0, 0, 0, 0.055, 46 * sc, 84 * sc, R_FLASH, c0 * 0.4, c1 * 0.4, c2 * 0.4, C_SPARKLE);
+    // a few sparks spat out of the barrel, now and then one that lingers
+    const n = this._n(o.sparks ?? 3);
     const cool = c0 >= c2 ? 1 : 0;
     for (let k = 0; k < n; k++) {
-      randCone(dx, dz, 0.38, 0.6);
-      const sp = rr(420, 900) * (0.6 + 0.4 * sc);
-      this._spark(x, y, z, DX * sp, DY * sp, DZ * sp, rr(0.1, 0.24), rr(1.4, 2.2) * sc, c0, c1, c2, 3.5, 120, 0.035, 0, cool, 1);
+      randCone(dx, dz, 0.3, 0.6);
+      if (k === 2) {
+        const sp = rr(120, 260) * (0.6 + 0.4 * sc);
+        this._spark(x, y, z, DX * sp, DY * sp + 14, DZ * sp, rr(0.3, 0.6), rr(1.0, 1.6) * sc, c0 * 0.7, c1 * 0.6, c2 * 0.5, 2.2, 60, 0.012, 1 + rnd() * 5, cool, 0.7);
+      } else {
+        const sp = rr(420, 900) * (0.6 + 0.4 * sc);
+        this._spark(x, y, z, DX * sp, DY * sp, DZ * sp, rr(0.1, 0.24), rr(1.4, 2.2) * sc, c0, c1, c2, 3.5, 120, 0.035, 0, cool, 1);
+      }
+    }
+    // a touch of smoke curling off the muzzle, lit for a moment by the shot
+    if (o.smoke !== false && this._n(0.55) > 0) {
+      const K = this.smoke, tn = this.tuning, sp = rr(30, 80) * sc, s1 = rr(13, 20) * sc, g = rr(0.24, 0.36);
+      i = K.spawn(x + dx * 6 * sc, y + 1, z + dz * 6 * sc, dx * sp + rr(-8, 8), rr(4, 16), dz * sp + rr(-8, 8), rr(0.3, 0.55), s1 * 0.35, s1, R_SMOKE_PLAIN, g, g, g * 1.05, wispCell());
+      K.drag[i] = 3; K.turb[i] = 30; K.spin[i] = rr(-2, 2); K.wx[i] = tn.worldDriftX * 0.5; K.wy[i] = tn.smokeRise * 0.4; K.ta[i] = 0.38; K.aux[i] = 0.5;
     }
     if (o.light !== false) {
       const tn = this.tuning;
@@ -2697,14 +2855,27 @@ export class Fx3D {
     const K = this.smoke;
     const i = K.spawn(x, y, z, o.vx ?? rr(-12, 12), o.vy ?? rr(6, 20), o.vz ?? rr(-12, 12),
       (o.life ?? 1100) / 1000 * rr(0.85, 1.15), size * 0.38, size, o.hot ? R_SMOKE : R_SMOKE_PLAIN,
-      (c ? c[0] : g) * sh, (c ? c[1] : g) * sh, (c ? c[2] : g * 1.03) * sh, C_SMOKE0 + ((rnd() * 4) | 0));
-    K.drag[i] = 1.2; K.turb[i] = 30; K.spin[i] = rr(-0.9, 0.9);
+      (c ? c[0] : g) * sh, (c ? c[1] : g) * sh, (c ? c[2] : g * 1.03) * sh, rnd() < 0.3 ? wispCell() : C_SMOKE0 + ((rnd() * 4) | 0));
+    // it rolls and is torn as it trails away (a puff that only grows reads as a ball)
+    K.drag[i] = 1.2; K.turb[i] = 30 + size * 0.5; K.spin[i] = rr(0.5, 1.6) * (rnd() < 0.5 ? -1 : 1);
     if (o.drift !== false) { K.wx[i] = tn.worldDriftX; K.wy[i] = tn.smokeRise * 0.6; }
     K.ta[i] = o.alpha ?? 1;
-    if (o.hot) K.aux[i] = typeof o.hot === 'number' ? o.hot : 0.8;
+    if (o.hot) {
+      K.aux[i] = typeof o.hot === 'number' ? o.hot : 0.8;
+      // a lick of flame still inside it
+      if (rnd() < 0.5) {
+        const F = this.fire, s1 = size * rr(0.3, 0.5);
+        const j = F.spawn(x + rr(-0.1, 0.1) * size, y, z + rr(-0.1, 0.1) * size, rr(-14, 14) + tn.worldDriftX * 0.6, rr(14, 40), rr(-14, 14), rr(0.2, 0.4), s1 * 0.5, s1, R_FIRE, 0.8, 0.8, 0.8, C_LICK0 + (rnd() < 0.5 ? 1 : 0));
+        F.drag[j] = 2.5; F.turb[j] = 50; F.aux[j] = 1.1; F.ta[j] = 0.8; F.occ(j, tn.fireOcclusion * 0.6);
+      }
+    } else if (dark > 0.5 && rnd() < 0.12 * this.quality) {
+      // smouldering: the odd ember carried off with the smoke
+      const e = this.palette.ember;
+      this._spark(x, y, z, rr(-30, 30) + tn.worldDriftX * 0.5, rr(15, 60), rr(-30, 30), rr(0.4, 1.0), rr(1.0, 1.6), e[0] * 0.8, e[1] * 0.8, e[2] * 0.8, 1.4, 20, 0.012, 1 + rnd() * 5, 1, 0.7);
+    }
   }
 
-  /** Rock dust burst. opts: count, color [r,g,b], speed, life (ms), chips (extra rock shrapnel count) */
+  /** Rock dust burst. opts: count, color [r,g,b], speed, life (ms), chips (extra rock shrapnel count), grit (false = no thrown grains) */
   dust(x, y, z, size, opts) {
     const o = opts || EMPTY, tn = this.tuning;
     const c = this._col(o.color, this.palette.dust);
@@ -2717,9 +2888,19 @@ export class Fx3D {
       const sp = speed * rr(0.3, 1.4), off = size * rr(0.05, 0.3), sh = rr(0.75, 1.2);
       const s1 = size * rr(0.6, 1.1);
       const i = K.spawn(x + DX * off, y + DY * off * 0.5, z + DZ * off, DX * sp, DY * sp * 0.5 + 8, DZ * sp,
-        life * rr(0.7, 1.3), s1 * 0.3, s1, R_DUST, c0 * sh, c1 * sh, c2 * sh, C_SMOKE0 + ((rnd() * 4) | 0));
+        life * rr(0.7, 1.3), s1 * 0.3, s1, R_DUST, c0 * sh, c1 * sh, c2 * sh, rnd() < 0.25 ? wispCell() : C_SMOKE0 + ((rnd() * 4) | 0));
       K.drag[i] = 2.6; K.turb[i] = 25; K.spin[i] = rr(-1.2, 1.2);
       K.wx[i] = tn.worldDriftX * 0.6; K.wy[i] = 6;
+    }
+    // grit: fine grains thrown clear of the cloud, and the odd crystal face that catches the sun
+    if (o.grit !== false) {
+      const m = this._n(n * 0.9), fc = this.palette.fleck;
+      for (let k = 0; k < m; k++) {
+        randSphere();
+        const sp = speed * rr(0.8, 2.6);
+        if (k % 5 === 4) this._spark(x, y, z, DX * sp, DY * sp * 0.6 + 16, DZ * sp, life * rr(0.6, 1.2), rr(0.9, 1.6), fc[0], fc[1], fc[2], 2, 30, 0.005, -(1 + rnd() * 5), 0, 1.4);
+        else this._spark(x, y, z, DX * sp, DY * sp * 0.6 + 16, DZ * sp, life * rr(0.3, 0.8), rr(0.8, 1.5), c0 * 1.1 + 0.05, c1 * 1.1 + 0.05, c2 * 1.1 + 0.05, 3, 40, 0.012, 0, 0, 0.4);
+      }
     }
     if (o.chips) {
       CHIP_COL[0] = c0; CHIP_COL[1] = c1; CHIP_COL[2] = c2;
@@ -2780,6 +2961,12 @@ export class Fx3D {
       // hold them back until the flash
       if (i < this.sparkCap) this.sparkS[i * SP + 6] = -life * 0.9;
     }
+    // the tear closes: a vertical blade of light, discharges crackling over the new hull, a ring of disturbed dust
+    i = F.spawn(x, y + 2, z, 0, 0, 0, 0.16, size * 2.5, size * 5, R_FLASH, c0 * 0.6, c1 * 0.6, c2 * 0.6, C_STREAK);
+    F.delay(i, life * 0.9); F.rot(i, Math.PI / 2);
+    const na = this._n(3);
+    for (let k = 0; k < na; k++) this._arcBurst(x, y, z, size * 0.5, c0 + 0.4, c1 + 0.4, c2 + 0.4, 1.6, false, true, life * (0.88 + 0.12 * k));
+    this._ring(x, y + 1, z, R * 0.9, 0.45, c0 * 0.6, c1 * 0.6, c2 * 0.6, 1, R * 0.09, 0, 1, 0, 0, 4, 0.8, life * 0.9);
     if (o.light !== false) this._lightTimed(x, y + 40, z, c0, c1, c2, 0.45, life / 0.7 * 0.92, 0, 1, 0);
   }
 
@@ -2794,7 +2981,18 @@ export class Fx3D {
     let i = F.spawn(x, y + 2, z, 0, 0, 0, 0.16, 26, 80, R_FLASH, c0 * 0.6, c1 * 0.6, c2 * 0.6, C_DOT);
     i = F.spawn(x, y + 2, z, 0, 0, 0, 0.24, 90, 210, R_FLASH, c0 * 0.6, c1 * 0.6, c2 * 0.6, C_FLARE);
     F.rot(i, 0);
-    let n = this._n(14);
+    // a shaft of light standing on the spot for a moment
+    i = F.spawn(x, y + 30, z, 0, 60, 0, 0.3, 80, 190, R_FLASH, c0 * 0.45, c1 * 0.45, c2 * 0.45, C_STREAK);
+    F.rot(i, Math.PI / 2);
+    // a helix of motes winding up around it
+    let n = this._n(10);
+    const a00 = rnd() * TAU;
+    for (let k = 0; k < n; k++) {
+      const a = a00 + k * 1.1, ca = Math.cos(a), sa = Math.sin(a), d = 16 + k * 1.5, sp = 150;
+      const so = this._spark(x + ca * d, y + 2 + k * 2, z + sa * d, -sa * sp - ca * 40, rr(120, 200), ca * sp - sa * 40, rr(0.4, 0.65), rr(1.6, 2.4), c0 + 0.4, c1 + 0.4, c2 + 0.4, 2.4, -40, 0.05, 0, 0, 1.4);
+      this.sparkS[so + 6] = -k * 0.016;
+    }
+    n = this._n(14);
     for (let k = 0; k < n; k++) {
       const a = rnd() * TAU, d = rr(4, 26), sp = rr(20, 90);
       this._spark(x + Math.cos(a) * d, y + rr(-4, 8), z + Math.sin(a) * d, Math.cos(a) * sp, rr(90, 300), Math.sin(a) * sp,
@@ -2843,6 +3041,21 @@ export class Fx3D {
     let i = F.spawn(hx, y, hz, 0, 0, 0, 0.09, radius * 0.22, radius * 0.55, R_FLASH, c0 * 0.9, c1 * 0.9, c2 * 0.9, C_DOT);
     i = F.spawn(hx, y, hz, 0, 0, 0, 0.12, radius * 0.9, radius * 1.8, R_FLASH, c0 * 0.5, c1 * 0.5, c2 * 0.5, C_SPARKLE);
     F.spin[i] = rr(-2, 2);
+    // a ring of light racing over the bubble from the hit (in the plane tangent to it) + discharges crawling away
+    this._ring(hx - dx * radius * 0.1, y, hz - dz * radius * 0.1, radius * 0.85, 0.3, c0 * 1.2, c1 * 1.2, c2 * 1.2, 0, 1.5, dx, 0, dz, 0, radius * 0.1, 0.7, 0);
+    {
+      const m = this._n(2.6), a0 = Math.atan2(dz, dx);
+      for (let k = 0; k < m; k++) {
+        const sg = rnd() < 0.5 ? -1 : 1, sweep = rr(0.4, 1.0) * sg, lift = rr(-0.5, 0.5), seed = rnd() * 100, life = rr(0.07, 0.13);
+        let px = hx, py = y, pz = hz;
+        for (let j = 1; j <= 3; j++) {
+          const t = j / 3, a = a0 + sweep * t + rr(-0.12, 0.12), e = lift * t + rr(-0.08, 0.08), ce = Math.cos(e);
+          const qx = x + Math.cos(a) * ce * radius, qy = y + Math.sin(e) * radius, qz = z + Math.sin(a) * ce * radius;
+          this._arc(px, py, pz, qx, qy, qz, 1.5, life, c0 * 1.3 + 0.3, c1 * 1.3 + 0.3, c2 * 1.3 + 0.3, seed, 2.2);
+          px = qx; py = qy; pz = qz;
+        }
+      }
+    }
     // sparks skitter along the surface (tangent) and out
     const n = this._n(9);
     for (let k = 0; k < n; k++) {
@@ -2921,26 +3134,94 @@ export class Fx3D {
   // Called every frame per source. Particle emission = rate x (dt of the last update()),
   // stochastically rounded, so density is fps-independent and no particle is emitted while paused.
 
+  // Engines have no ids in this API, so a nozzle is recognised from frame to frame by its place in the call order
+  // (stable while nothing spawns or dies) and, failing that, by position. Returns the offset of its record in
+  // this.nzS, or -1 when all slots are busy; this._nzNew tells whether the record was just started.
+  _nozzle(x, y, z) {
+    const S = this.nzS, tk = this._tick, k = this.exhN++;
+    let slot = -1;
+    if (k < NZ_SLOTS) {
+      const q = k * NZ, f = S[q + 3];
+      if (f === tk - 1) { const ex = S[q] - x, ez = S[q + 2] - z; if (ex * ex + ez * ez < 3600) slot = k; }
+    }
+    if (slot < 0) {
+      let bd = 8100, stale = -1, st = tk;
+      for (let j = 0; j < NZ_SLOTS; j++) {
+        const q = j * NZ, f = S[q + 3];
+        if (f < st) { st = f; stale = j; }
+        if (f !== tk - 1) continue;
+        const ex = S[q] - x, ez = S[q + 2] - z, d2 = ex * ex + ez * ez;
+        if (d2 < bd) { bd = d2; slot = j; }
+      }
+      if (slot < 0) {
+        this._nzNew = true;
+        if (stale < 0) return -1;
+        const q = stale * NZ;
+        S[q] = x; S[q + 1] = y; S[q + 2] = z; S[q + 3] = tk; S[q + 4] = 0; S[q + 5] = -1e3; S[q + 6] = 0; S[q + 7] = 0;
+        return q;
+      }
+    }
+    this._nzNew = false;
+    S[slot * NZ + 3] = tk;
+    return slot * NZ;
+  }
+
   /**
-   * Engine plume. (dirX,dirZ) = direction the exhaust travels. size = plume width at the nozzle.
-   * The plume itself is an immediate-mode shader ribbon (drawn even while paused); wisps are particles.
+   * Jet engine. (dirX,dirZ) = direction the exhaust travels. size = plume width at the nozzle.
+   * The flame itself is an immediate-mode shader ribbon (drawn even while paused): white-hot core with shock
+   * diamonds, coloured outer flame, heat veil. Seen from behind it becomes the nozzle ring and the mach disks.
+   * It remembers each nozzle between frames (by call order / position), so the flame lags behind a strafing ship
+   * and a boost that has just been lit kicks: an ignition ring, a puff, a spray of sparks.
+   * Embers, edge turbulence (big engines) and the ion trail are particles.
    * opts: color ('player' | 'enemy' | [r,g,b]), boost (0..1+ or true), vx/vz (ship velocity, units/s),
-   *       intensity, length (multiplier), seed (stable flicker phase per nozzle), light (false = no afterburner light)
+   *       intensity, length (multiplier), seed (stable flicker phase per nozzle), light (false = casts no light),
+   *       trail (0..1: faint ion trail left behind; default 1 for 'player', 0 otherwise),
+   *       embers (multiplier on the sparks shed, default 1; 0 = none), kick (false = no ignition burst)
    */
   exhaust(x, y, z, dirX, dirZ, size, opts) {
     const dt = this._dt;
     const o = opts || EMPTY, pal = this.palette, tn = this.tuning;
-    const boost = o.boost === true ? 1 : (o.boost || 0);
+    const boostRaw = o.boost === true ? 1 : (o.boost > 0 ? +o.boost : 0);
     let l = Math.hypot(dirX, dirZ);
-    if (l < 1e-5) { dirX = -1; dirZ = 0; l = 1; }
+    if (!(l > 1e-5)) { dirX = -1; dirZ = 0; l = 1; }
+    if (!(size > 0)) return;
     const dx = dirX / l, dz = dirZ / l;
-    let ramp = R_EXH_PLAYER, r = 1, g = 1, b = 1, pc = pal.plumePlayer;
+    let ramp = R_EXH_PLAYER, r = 1, g = 1, b = 1, pc = pal.plumePlayer, fam = 0;
     const col = o.color;
-    if (col === 'enemy') { ramp = R_EXH_ENEMY; pc = pal.plumeEnemy; }
-    else if (col != null && col !== 'player') { const c = this._col(col, WHITE); ramp = R_TINT; r = c[0]; g = c[1]; b = c[2]; pc = c; }
+    if (col === 'enemy') { ramp = R_EXH_ENEMY; pc = pal.plumeEnemy; fam = 1; }
+    else if (col != null && col !== 'player') { const c = this._col(col, WHITE); ramp = R_TINT; r = c[0]; g = c[1]; b = c[2]; pc = c; fam = 2; }
     const p0 = pc[0], p1 = pc[1], p2 = pc[2];
     const a = o.intensity ?? 1;
     const seed = o.seed ?? (this.plumeN++ * 0.731) % 7;
+    const big = size >= 15 ? 2 : size >= 9 ? 1 : 0;   // engine class: fighter, heavy, capital
+    const now = this._clock;
+
+    // ---- memory: sideways lag, smoothed thrust, ignition ----
+    let lag = 0, thr = boostRaw, kick = 0, lit = false;
+    const q = this._nozzle(x, y, z);
+    if (q >= 0) {
+      const S = this.nzS;
+      if (this._nzNew) { S[q + 6] = boostRaw; S[q + 7] = boostRaw; }
+      else if (dt > 0) {
+        // the gas keeps the velocity the ship had when it left the nozzle: the tip trails the sideways motion
+        const lat = ((x - S[q]) * -dz + (z - S[q + 2]) * dx) / dt;
+        let want = -lat * 0.055;
+        const lim = size * 1.15;
+        if (want > lim) want = lim; else if (want < -lim) want = -lim;
+        S[q + 4] += (want - S[q + 4]) * (1 - Math.exp(-dt / 0.085));
+        S[q + 6] += (boostRaw - S[q + 6]) * (1 - Math.exp(-dt / (boostRaw > S[q + 6] ? 0.07 : 0.16)));
+        if (boostRaw > 0.3 && S[q + 7] <= 0.3) { S[q + 5] = now; lit = o.kick !== false; }
+        S[q + 7] = boostRaw;
+        S[q] = x; S[q + 1] = y; S[q + 2] = z;
+      }
+      lag = S[q + 4]; thr = S[q + 6];
+      if (!(lag === lag)) lag = S[q + 4] = 0;
+      if (!(thr === thr)) thr = S[q + 6] = boostRaw;
+      const since = now - S[q + 5];
+      if (since >= 0 && since < 0.6) kick = Math.exp(-since / 0.13);
+    }
+    const tb = thr > 1.5 ? 1.5 : thr;
+
     // how squarely the camera looks into the nozzle: 0 = from the side or the front, 1 = straight up the exhaust
     const cam = this._cam;
     let facing = 0;
@@ -2950,45 +3231,120 @@ export class Fx3D {
       if (facing < 0) facing = 0;
     }
     // seen from behind the plume is foreshortened: it is drawn longer, so it keeps about the same length on screen
-    const len = size * tn.plumeLength * (o.length ?? 1) * (1 + 0.8 * boost) * (1 + 1.1 * facing * facing);
-    const hw = size * (0.95 + 0.25 * boost);
-    this._beam(x, y, z, x + dx * len, y, z + dz * len, hw, K_PLUME, p0, p1, p2, 1, seed, boost, a * (1 + 0.5 * facing));
+    // (a fighter's nozzle is a couple of units wide: its flame is many nozzle widths long, a capital ship's only a few)
+    const len = size * tn.plumeLength * (1 + 7 / (size + 3)) * (o.length ?? 1) * (1 + 0.8 * thr + 0.3 * kick) * (1 + 1.1 * facing * facing);
+    const hw = size * (0.95 + 0.25 * tb);
+    const gain = a * (1 + 0.5 * facing) * (1 + 0.35 * kick) / (1 + 0.3 * big);   // (big flames are thick: less per pixel)
+    const px = -dz, pz = dx;                          // sideways
+    this._beam(x, y, z, x + dx * len + px * lag, y, z + dz * len + pz * lag, hw, K_PLUME, p0, p1, p2, 1, seed, thr + 4 * big, gain, lag / hw);
     // Seen from behind (the camera looks into the nozzle) the ribbon alone would be a flat smear: there the engine
-    // is drawn as what it is, a glowing ring with a hot well, plus two fainter cross-sections of the plume further
-    // down, so the exhaust reads as a short cone from any angle. Edge-on they vanish (the vertex shader fades them).
+    // is drawn as what it is, a glowing ring with a hot well, plus the mach disks standing in the plume behind it
+    // (at the same stations as the ribbon's shock diamonds), so the exhaust reads as a jet from any angle.
+    // Edge-on they vanish (the vertex shader fades them).
     if (facing > 0.1) {
-      const b1 = 1 + 0.25 * boost;
-      this._beam(x + dx * size * 0.22, y, z + dz * size * 0.22, dx, 0, dz, size * 0.8 * b1, K_NOZZLE, p0, p1, p2, 1, seed, 1, a * (0.9 + 0.4 * boost));
-      this._beam(x + dx * len * 0.2, y, z + dz * len * 0.2, dx, 0, dz, size * 0.62 * b1, K_NOZZLE, p0, p1, p2, 1, seed + 1.3, 0, a * (0.5 + 0.3 * boost));
-      this._beam(x + dx * len * 0.42, y, z + dz * len * 0.42, dx, 0, dz, size * 0.44 * b1, K_NOZZLE, p0, p1, p2, 1, seed + 2.6, 0, a * (0.3 + 0.25 * boost));
+      const b1 = 1 + 0.25 * tb;
+      this._beam(x + dx * size * 0.22, y, z + dz * size * 0.22, dx, 0, dz, size * 0.8 * b1, K_NOZZLE, p0, p1, p2, 1, seed, 1, a * (0.9 + 0.4 * tb));
+      const lam = hw * (0.62 + 0.3 * tb) / (1 + 0.3 * big) * Math.max(1, len / hw / 5);
+      const nd = (this.quality < 1 ? 1 : 2) + big;
+      const core = len * (0.52 + 0.16 * tb);
+      for (let k = 0; k < nd; k++) {
+        const d = lam * (0.52 + k), u = d / len;
+        if (d > core) break;
+        const f = 1 - d / core, off = lag * u * u;
+        this._beam(x + dx * d + px * off, y, z + dz * d + pz * off, dx, 0, dz, size * (0.2 + 0.3 * f) * b1, K_NOZZLE, p0, p1, p2, 1, seed + 1.3 * (k + 1), 0.25,
+          a * (0.2 + 0.4 * f) / (1 + 0.3 * big));
+      }
+      if (kick > 0.05) this._beam(x + dx * size * (0.3 + 2.2 * (1 - kick)), y, z + dz * size * (0.3 + 2.2 * (1 - kick)), dx, 0, dz,
+        size * (0.8 + 0.8 * (1 - kick)), K_NOZZLE, p0, p1, p2, 1, seed, 2, a * kick * 0.6);
     }
     // soft coloured haze around the nozzle (no white pin-point: seen from behind that was a round white blob)
-    this._glow(x + dx * size * 0.25, y, z + dz * size * 0.25, size * (1.4 + 0.8 * boost), p0, p1, p2, a * (0.3 + 0.24 * boost), G_SOFT, seed, 0, 1);
-    if (boost > 0.3 && o.light !== false) this._lightNow(x + dx * len * 0.35, y + 40, z + dz * len * 0.35, p0, p1, p2, 0.03 * boost * a * Math.min(2, size / 12), 0);
+    const T = this.uTime.value, fl = 0.88 + 0.12 * Math.sin(T * 37 + seed * 9) * Math.sin(T * 13 + seed * 4);
+    this._glow(x + dx * size * 0.25, y, z + dz * size * 0.25, size * (1.4 + 0.8 * tb), p0, p1, p2, a * (0.3 + 0.24 * tb + 0.3 * kick) * fl, G_SOFT, seed, 0, 1);
+    // the flame lights the hull it is bolted to: a small lamp just behind and above the nozzle. Cruising fighters
+    // of the enemy do not get one (there are dozens of them and eight real lights).
+    if (o.light !== false) {
+      const base = fam === 1 ? (big ? 0.012 : 0) : 0.004;
+      const rel = (base + 0.022 * thr + 0.04 * kick) * a * Math.min(1.6, Math.max(fam === 1 ? 0 : 0.5, size / 12)) * fl;
+      if (rel > 0) this._lightNow(x + dx * (8 + size), y + 16 + size * 0.5, z + dz * (8 + size), p0, p1, p2, rel, 0);
+    }
     if (dt <= 0) return;
-    const n = this._n(tn.exhaustRate * (1 + 1.2 * boost) * dt);
     const F = this.fire;
-    const speed = size * 20 * (1 + 0.6 * boost);
+    const speed = (40 + size * 18) * (1 + 0.6 * thr);
     const ivx = o.vx || 0, ivz = o.vz || 0;
     const jit = size * 2.6;
+    // faint wisps of glowing gas drifting off the flame
+    let n = this._n(tn.exhaustRate * (1 + 1.2 * thr) * dt);
     for (let k = 0; k < n; k++) {
       const sp = speed * rr(0.6, 1.1);
       const vx = dx * sp + rr(-jit, jit) + ivx, vz = dz * sp + rr(-jit, jit) + ivz, vy = rr(-jit, jit) * 0.6;
-      const d0 = rr(0.3, 0.9) * len;
-      const s0 = size * rr(0.5, 0.9) * (1 + 0.2 * boost);
-      const i = F.spawn(x + dx * d0, y, z + dz * d0, vx, vy, vz, rr(0.14, 0.3) * (1 + 0.4 * boost), s0, s0 * 1.8, ramp, r, g, b, C_GLOW);
+      const u = rr(0.3, 0.9), d0 = u * len, off = lag * u * u;
+      const s0 = size * rr(0.5, 0.9) * (1 + 0.2 * tb);
+      const i = F.spawn(x + dx * d0 + px * off, y, z + dz * d0 + pz * off, vx, vy, vz, rr(0.14, 0.3) * (1 + 0.4 * tb), s0, s0 * 1.8, ramp, r, g, b, C_GLOW);
       F.drag[i] = 2.2; F.ta[i] = a * 0.11; F.aux[i] = 1.6;
     }
-    // afterburner: tiny bright specks spat down the plume
-    if (boost > 0.3 && o.specks !== false) {
-      const m = this._n(34 * boost * dt * Math.min(1.6, size / 9));
-      for (let k = 0; k < m; k++) {
-        const sp = speed * rr(1.0, 2.2), j = size * 4.5;
-        this._spark(x + dx * size * rr(0.2, 1.2), y + rr(-0.2, 0.2) * size, z + dz * size * rr(0.2, 1.2),
-          dx * sp + rr(-j, j) + ivx, rr(-j, j) * 0.6, dz * sp + rr(-j, j) + ivz,
-          rr(0.12, 0.34), rr(0.7, 1.3) * Math.min(1.6, 0.6 + size * 0.05), p0 * 1.6 + 0.9, p1 * 1.6 + 0.9, p2 * 1.6 + 0.9, 2.5, 0, 0.02, 0, 0, 1.5);
+    // big engines: the edge of the flame rolls up into torn tongues that fall behind
+    if (big) {
+      n = this._n((5 + 5 * big) * (1 + 0.6 * tb) * dt);
+      for (let k = 0; k < n; k++) {
+        const u = rr(0.12, 0.7), d0 = u * len, side = rnd() < 0.5 ? -1 : 1, e = size * rr(0.2, 0.42) * (1 - 0.5 * u);
+        const sp = speed * rr(0.35, 0.7), s1 = size * rr(0.55, 1.0);
+        const i = F.spawn(x + dx * d0 + px * (e * side + lag * u * u), y + rr(-0.3, 0.3) * size, z + dz * d0 + pz * (e * side + lag * u * u),
+          dx * sp + px * side * size * rr(1, 4) + ivx, rr(-2, 2) * size, dz * sp + pz * side * size * rr(1, 4) + ivz,
+          rr(0.14, 0.3), s1 * 0.5, s1, ramp, r, g, b, C_LICK0 + (k & 1));
+        F.drag[i] = 2.4; F.turb[i] = size * 5; F.ta[i] = a * 0.2; F.aux[i] = rr(1.2, 2.2);
       }
     }
+    // embers: sparse hot specks shed backwards, a hail of them on the afterburner
+    const em = o.embers ?? 1;
+    if (em > 0) {
+      const wk = Math.min(1.8, 0.6 + size * 0.05), cool = fam === 0 ? 0 : 1;
+      n = this._n((2.5 + 18 * thr) * em * dt * Math.min(1.8, size / 9));
+      for (let k = 0; k < n; k++) {
+        const hot = rnd() < 0.3 + 0.5 * tb;
+        const sp = speed * (hot ? rr(1.0, 2.2) : rr(0.35, 0.9)), j = size * (hot ? 4.5 : 3);
+        const d0 = size * rr(0.2, 1.4), ck = hot ? 1.6 : 1.0, ca = hot ? 0.9 : 0.3;
+        this._spark(x + dx * d0, y + rr(-0.2, 0.2) * size, z + dz * d0,
+          dx * sp + rr(-j, j) + ivx, rr(-j, j) * 0.6, dz * sp + rr(-j, j) + ivz,
+          hot ? rr(0.12, 0.34) : rr(0.35, 0.85), rr(0.7, 1.3) * wk * (hot ? 1 : 0.7), p0 * ck + ca, p1 * ck + ca, p2 * ck + ca,
+          hot ? 2.5 : 1.6, 0, hot ? 0.02 : 0.014, hot ? 0 : 1 + rnd() * 5, cool, hot ? 1.5 : 0.5);
+      }
+    }
+    // ion trail: a faint thread of glowing gas left hanging behind the ship, fading over most of a second
+    const trail = o.trail ?? (fam === 0 ? 1 : 0);
+    if (trail > 0) {
+      n = this._n(24 * trail * dt);
+      for (let k = 0; k < n; k++) {
+        const u = rr(0.55, 0.95), d0 = u * len, off = lag * u * u, sp = (50 + size * 8) * rr(0.8, 1.2) * (1 + 0.8 * thr), s0 = Math.max(1.5, size * 0.42) * rr(0.8, 1.2);
+        const i = F.spawn(x + dx * d0 + px * off, y, z + dz * d0 + pz * off, dx * sp + ivx, rr(-1, 1), dz * sp + ivz,
+          rr(0.55, 0.95) * (1 + 0.3 * tb), s0, s0 * 0.45, ramp, r, g, b, C_GLOW);
+        F.drag[i] = 0.9; F.wx[i] = tn.worldDriftX; F.ta[i] = a * trail * (0.07 + 0.05 * tb); F.aux[i] = 3.2; F.turb[i] = size * 0.8;
+      }
+    }
+    // ignition: the afterburner lights with a bang
+    if (lit) this._ignite(x, y, z, dx, dz, size, p0, p1, p2, a, ramp, r, g, b, ivx, ivz);
+  }
+
+  // afterburner light-up: a ring thrown off the nozzle, a puff of unburnt fuel flashing over, a spray of sparks
+  _ignite(x, y, z, dx, dz, size, p0, p1, p2, a, ramp, r, g, b, ivx, ivz) {
+    const F = this.fire, m = Math.max(p0, p1, p2, 1e-3), k = 1.4 / m;
+    this._ring(x + dx * size * 0.6, y, z + dz * size * 0.6, size * 2.1, 0.24, p0 * k + 0.3, p1 * k + 0.3, p2 * k + 0.3, 0, Math.max(1, size * 0.07), dx, 0, dz, 0, size * 0.5, 0.28 * a, 0);
+    let i = F.spawn(x + dx * size * 0.5, y, z + dz * size * 0.5, 0, 0, 0, 0.09, size * 1.4, size * 3.4, R_FLASH, (p0 * k + 0.5) * a * 0.6, (p1 * k + 0.5) * a * 0.6, (p2 * k + 0.5) * a * 0.6, C_BURST + 1);
+    F.spin[i] = rr(-2, 2);
+    let n = Math.max(2, this._n(4));
+    for (let j = 0; j < n; j++) {
+      const sp = size * rr(14, 34), s1 = size * rr(1.3, 2.2);
+      i = F.spawn(x + dx * size * rr(0.4, 1.6), y, z + dz * size * rr(0.4, 1.6), dx * sp + rr(-3, 3) * size + ivx, rr(-3, 3) * size, dz * sp + rr(-3, 3) * size + ivz,
+        rr(0.14, 0.28), s1 * 0.4, s1, ramp, r, g, b, flameCell());
+      F.drag[i] = 4; F.turb[i] = size * 6; F.spin[i] = rr(-3, 3); F.ta[i] = 0.55 * a;
+    }
+    n = this._n(8);
+    for (let j = 0; j < n; j++) {
+      randCone(dx, dz, 0.5, 0.7);
+      const sp = size * rr(25, 70);
+      this._spark(x, y, z, DX * sp + ivx, DY * sp, DZ * sp + ivz, rr(0.12, 0.4), rr(0.8, 1.5) * Math.min(1.8, 0.6 + size * 0.05),
+        p0 * 1.6 + 0.9, p1 * 1.6 + 0.9, p2 * 1.6 + 0.9, 3, 0, 0.022, 0, 0, 1.5);
+    }
+    this._lightTimed(x + dx * size, y + 30, z + dz * size, p0, p1, p2, 0.07 * a * Math.min(1.6, size / 12), 0.2, 0, 0, 0);
   }
 
   /**
@@ -3107,20 +3463,23 @@ export class Fx3D {
       F.drag[i] = 2.5; F.turb[i] = 70; F.spin[i] = rr(-2, 2);
       F.wx[i] = tn.worldDriftX * 0.8; F.wy[i] = 40;
       F.ta[i] = 0.8; F.occ(i, tn.fireOcclusion * 0.8);
-      if (lick) F.aux[i] = 0.9;
+      if (lick) F.aux[i] = rr(1.0, 1.7);
     }
     const sm = o.smoke ?? 1;
     if (sm > 0) {
       const g = pal.smokeGrey;
       n = this._n(20 * sm * dt);
       for (let k = 0; k < n; k++) {
-        const s1 = rr(42, 68) * sc, sh = rr(0.8, 1.2);
+        // a rolling column, not a string of balls: dense dark billows that turn over as they rise, torn wisps
+        // between them, every one lit from below by the fire while it is young
+        const wisp = rnd() < 0.35;
+        const s1 = (wisp ? rr(30, 52) : rr(42, 68)) * sc, sh = wisp ? rr(0.9, 1.4) : rr(0.6, 1.15);
         const i = K.spawn(x + rr(-4, 4) * sc, y + rr(2, 8) * sc, z + rr(-4, 4) * sc,
           rr(-16, 16) + ivx, rr(8, 30) + ivy, rr(-16, 16) + ivz,
-          rr(1.0, 1.7), s1 * 0.28, s1, R_SMOKE, g[0] * sh, g[1] * sh, g[2] * sh, C_SMOKE0 + ((rnd() * 4) | 0));
-        K.drag[i] = 1.5; K.turb[i] = 40; K.spin[i] = rr(-1, 1);
-        K.wx[i] = tn.worldDriftX; K.wy[i] = tn.smokeRise;
-        K.aux[i] = 0.7;
+          rr(1.0, 1.7), s1 * 0.28, s1, R_SMOKE, g[0] * sh, g[1] * sh, g[2] * sh, wisp ? wispCell() : C_SMOKE0 + ((rnd() * 4) | 0));
+        K.drag[i] = 1.5; K.turb[i] = wisp ? 70 : 46; K.spin[i] = rr(0.5, 1.7) * (rnd() < 0.5 ? -1 : 1);
+        K.wx[i] = tn.worldDriftX; K.wy[i] = tn.smokeRise * rr(0.8, 1.3);
+        K.aux[i] = rr(0.6, 1.05); K.ta[i] = wisp ? 0.75 : 1;
         K.delay(i, rr(0.02, 0.12));
       }
     }
@@ -3161,7 +3520,8 @@ export class Fx3D {
   }
 
   // one short jagged arc between two random points on a flattened shell of the given radius
-  _arcBurst(x, y, z, radius, c0, c1, c2, width, noSparks, noLight) {
+  _arcBurst(x, y, z, radius, c0, c1, c2, width, noSparks, noLight, delay) {
+    const first = this.arcN, dl = delay || 0;
     randSphere();
     const ax = x + DX * radius, ay = y + DY * radius * 0.35 + 2, az = z + DZ * radius * 0.7;
     const a0 = DX, a2 = DZ;
@@ -3179,16 +3539,18 @@ export class Fx3D {
       px = qx; py = qy; pz = qz;
     }
     const F = this.fire;
-    F.spawn(bx, by, bz, 0, 0, 0, life, width * 3, width * 7, R_FLASH, c0 * 0.6, c1 * 0.6, c2 * 0.6, C_DOT);
+    const fi = F.spawn(bx, by, bz, 0, 0, 0, life, width * 3, width * 7, R_FLASH, c0 * 0.6, c1 * 0.6, c2 * 0.6, C_DOT);
+    if (dl > 0) { F.delay(fi, dl); for (let j = first; j < this.arcN; j++) this.arcS[j * AR + 7] = -dl; }
     if (!noSparks) {
       const m = this._n(3);
       for (let j = 0; j < m; j++) {
         randSphere();
         const sp = rr(90, 300);
-        this._spark(bx, by, bz, DX * sp, DY * sp * 0.6 + 20, DZ * sp, rr(0.1, 0.28), rr(0.7, 1.2), c0 * 1.3, c1 * 1.3, c2 * 1.3, 3.5, 80, 0.024, 0, 0, 1.5);
+        const so = this._spark(bx, by, bz, DX * sp, DY * sp * 0.6 + 20, DZ * sp, rr(0.1, 0.28), rr(0.7, 1.2), c0 * 1.3, c1 * 1.3, c2 * 1.3, 3.5, 80, 0.024, 0, 0, 1.5);
+        if (dl > 0) this.sparkS[so + 6] = -dl;
       }
     }
-    if (!noLight) this._lightTimed(bx, by + 30, bz, c0, c1, c2, 0.035, life * 1.5, 0, 0, 0);
+    if (!noLight) this._lightTimed(bx, by + 30, bz, c0, c1, c2, 0.035, life * 1.5, 0, 0, dl);
   }
 
   /* --------------------------- immediate geometry ------------------------ */

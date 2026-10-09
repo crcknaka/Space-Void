@@ -37,7 +37,8 @@
   &steer=-1..1 &throttle=-1..1 &bank=rad &fire=1 (shot on the last frame) &tier=1..3 &laser=0..1 &ext=0..1 (explosion light) &extside=-1..1
   &sun=x,y,z              sun direction in cockpit space
   &t=ms                   freeze: simulate 0..t in 60 Hz steps and render once (default: run live)
-  &q=0.5                  low quality   &fov=62   &noworld=1   &nopost=1
+  &sunspin=1              live mode: the sun circles the ship (frame shadows sweep the cabin)
+  &q=0.5                  low quality   &fov=58   &noworld=1   &nopost=1
   &dbg=1                  look at the cockpit from outside (orbit with &yaw=deg &pitch=deg &dist=m)
   &stats=0                hide the read-out
 */
@@ -55,7 +56,7 @@ const P = {
   shield: num('shield', 0), shieldhit: num('shieldhit', 0), dead: num('dead', -1), warp: num('warp', 0), boost: num('boost', 0), ion: num('ion', 0),
   boss: num('boss', -1), warning: num('warning', 0), od: num('od', 0.4), odon: num('odon', 0), steer: num('steer', 0), throttle: num('throttle', 0), bank: num('bank', 0),
   fire: num('fire', 0), tier: num('tier', 1), laser: num('laser', 0), ext: num('ext', 0), extside: num('extside', 0.7),
-  t: Q.has('t') ? num('t', 4000) : null, q: num('q', 1), fov: num('fov', 62), dbg: num('dbg', 0),
+  t: Q.has('t') ? num('t', 4000) : null, q: num('q', 1), fov: num('fov', 58), dbg: num('dbg', 0),
 };
 const VW = window.innerWidth, VH = window.innerHeight;
 
@@ -69,7 +70,7 @@ document.body.appendChild(gl.domElement);
 const world = new THREE.Scene();
 world.background = new THREE.Color(0x04060b);
 const wcam = new THREE.PerspectiveCamera(P.fov + (P.boost ? 6 : 0) + P.warp * 16, VW / VH, 5, 60000);
-const EYE_H = 96, PITCH = 11.5 * Math.PI / 180;
+const EYE_H = 96, PITCH = 9 * Math.PI / 180;
 wcam.position.set(0, EYE_H, 0);
 wcam.up.set(0, 1, 0);
 wcam.lookAt(Math.cos(PITCH) * 1000, EYE_H - Math.sin(PITCH) * 1000, 0);
@@ -128,8 +129,9 @@ composer.setPixelRatio(1); composer.setSize(VW, VH);
 const dbgCam = new THREE.PerspectiveCamera(50, VW / VH, 0.02, 50);
 if (P.dbg) {
   const yaw = num('yaw', 150) * Math.PI / 180, pitch = num('pitch', 25) * Math.PI / 180, dist = num('dist', 2.6);
-  dbgCam.position.set(0.5 + Math.cos(yaw) * Math.cos(pitch) * dist, -0.15 + Math.sin(pitch) * dist, Math.sin(yaw) * Math.cos(pitch) * dist);
-  dbgCam.lookAt(0.5, -0.15, 0);
+  const tg = (Q.get('look') || '0.5,-0.15,0').split(',').map(Number);      // &look=x,y,z orbit target
+  dbgCam.position.set(tg[0] + Math.cos(yaw) * Math.cos(pitch) * dist, tg[1] + Math.sin(pitch) * dist, tg[2] + Math.sin(yaw) * Math.cos(pitch) * dist);
+  dbgCam.lookAt(tg[0], tg[1], tg[2]);
   cp.scene.background = new THREE.Color(0x20242c);
   composer.addPass(new RenderPass(cp.scene, dbgCam));
 } else {
@@ -178,6 +180,7 @@ function step(dt) {
   S.extLight.i = P.ext * (simT >= T_END - 120 ? 1 : 0);
   if (P.fire) S.fireStamp = Math.floor(simT / 140) + (simT >= T_END - 20 ? 1000 : 0);      // a steady burst, one shot on the frame itself
   if (!P.dbg) { cp.camera.fov = wcam.fov; cp.camera.aspect = wcam.aspect; }
+  if (Q.get('sunspin')) sunDir.set(Math.cos(simT * 0.0006), 0.55, Math.sin(simT * 0.0006)).normalize();
   cp.update(dt, simT, S);
 }
 const hud = document.getElementById('hud');

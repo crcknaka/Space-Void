@@ -49,6 +49,7 @@ export function saveName(n) {
 
 // Shared look of the two name dialogs — same language as the canvas UI kit
 // (ui.js): system type, tracked caps, glass panel, cyan primary action.
+export const OV = {};
 const OV_FONT = 'system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif';
 const OV_WRAP = `position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(2,5,10,.74);z-index:10;font-family:${OV_FONT};`;
 const OV_BOX = 'background:rgba(8,16,28,.94);border:1px solid rgba(104,214,255,.45);border-radius:3px;'
@@ -61,6 +62,8 @@ const OV_INPUT = 'width:240px;max-width:70vw;background:rgba(4,9,16,.85);color:#
 const OV_BTN = `border-radius:2px;padding:12px 24px;min-height:44px;font:700 12px ${OV_FONT};letter-spacing:.18em;cursor:pointer`;
 const OV_OK = `background:#68d6ff;color:#06101c;border:1px solid #68d6ff;${OV_BTN}`;
 const OV_ALT = `background:transparent;color:#bcd0e6;border:1px solid rgba(188,208,230,.35);${OV_BTN}`;
+
+Object.assign(OV, { WRAP: OV_WRAP, BOX: OV_BOX, TITLE: OV_TITLE, INPUT: OV_INPUT, OK: OV_OK, ALT: OV_ALT }); // reused by the room-code dialog (online.js)
 
 // DOM overlay to set the persistent player name (used by SETTINGS)
 let nameEditor = null;

@@ -31,7 +31,7 @@
   ?level=1..N  (&mega=0|1 overrides level % 5)
   &view=top|tilt|chase|cockpit          the four game cameras, boss at in-game scale and position (world 1564x880)
        |beauty|front|nose|under|rear|side|plan   close-ups
-  &sheet=1        contact sheet of levels 1..12 (&from=13 for the next twelve, &sv=beauty|plan|nose…)
+  &sheet=1        contact sheet of levels 1..12 (&from=13 for the next twelve, &cols=5&rows=3 for fifteen, &sv=beauty|plan|nose…)
   &states=1       one boss through its states (&sv=beauty)
   state: &damage=0..1  &blown=2 (the first two) | &blown=0,3 (those; &ago=ms since they went)  &charge=laser:1,bay:0.6  &flash=0..1  &shield=1
          &arrive=0..1  &phase2=ms since the shell blew  &death=0..1 (&after=ms past the end)
@@ -204,7 +204,7 @@ function drawOne(T) {
   hud.textContent = fmt(b) + (Q.get('timings') ? `\nbuild ${buildMs.toFixed(0)} ms in ${slices + 1} slices` : '') + (window.lifeReport ? '\n' + window.lifeReport : '') + `\nprograms ${gl.info.programs.length}`;
 }
 function drawSheet(T) {
-  const from = num('from', 1), cols = 4, rows = 3, tw = Math.floor(VW / cols), th = Math.floor(VH / rows), sv = Q.get('sv') || 'beauty';
+  const from = num('from', 1), cols = num('cols', 4), rows = num('rows', 3), tw = Math.floor(VW / cols), th = Math.floor(VH / rows), sv = Q.get('sv') || 'beauty';
   for (let i = 0; i < cols * rows; i++) {
     root.clear();
     const b = makeBoss(from + i);
@@ -273,7 +273,7 @@ try {
   const lv = P.level;
   document.getElementById('nav').innerHTML = [...Array(12).keys()].map((i) => `<a href="?level=${i + 1}&view=${P.view}">${i + 1}</a>`).join('') + '<br>' +
     [...GAME_VIEWS, ...Object.keys(CLOSE)].map((v) => `<a href="?level=${lv}&view=${v}">${v}</a>`).join('') + '<br>' +
-    `<a href="?sheet=1">sheet</a><a href="?sheet=1&sv=plan">sheet plan</a><a href="?states=1&level=${lv}">states</a><a href="?level=${lv}&view=${P.view}&t=">live</a>`;
+    `<a href="?sheet=1">sheet</a><a href="?sheet=1&sv=plan&cols=5">plan 1-15</a><a href="?states=1&level=${lv}">states</a><a href="?level=${lv}&view=${P.view}&t=">live</a>`;
 } catch (e) { showErr('FATAL: ' + (e.stack || e)); }
 </script>
 </body>

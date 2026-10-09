@@ -390,7 +390,12 @@ export class Player {
       if (Math.abs(ay) > 0.3) dy = Math.sign(ay);
     }
 
-    this.x = clamp(this.x, this.w / 2, W - this.w / 2);
+    // forward limit: the whole field, or (first-person view) its rear third, so the
+    // fight is always ahead of the canopy. A tighter limit closes in gradually.
+    let xr = this.xLimit ? Math.max(this.w * 2, W * this.xLimit) : W - this.w / 2;
+    if (this._xr > xr) xr = Math.max(xr, this._xr - 9 * world.k);
+    this._xr = xr;
+    this.x = clamp(this.x, this.w / 2, xr);
     this.y = clamp(this.y, this.h / 2, H - this.h / 2);
 
     // boost trail
@@ -1737,7 +1742,7 @@ export class Boss {
     this.img = tint ? tinted(images.boss, tint, `boss_tint_${(level - 1) % BOSS_TINTS.length}`) : images.boss;
     this.whiteImg = tinted(images.boss, 'rgba(255,255,255,1)', 'boss_white');
     this.bulletImg = images.enemy_bullet;
-    const size = Math.min(210, 150 * (1 + (level - 1) * 0.06)); // bosses grow with level
+    const size = Math.min(285, 200 * (1 + (level - 1) * 0.06)); // bosses grow with level (capital ships: they should fill the lane)
     this.w = size; this.h = size;
     this.x = W + this.w / 2;
     this.y = H / 2;
@@ -1764,7 +1769,7 @@ export class Boss {
     this.mega = level % 5 === 0;
     this.phase2 = false;
     this.coreBeams = null; // { ang, activeAt }
-    this.health = 5 + (level - 1) * 5;
+    this.health = 10 + (level - 1) * 7; // long enough for every attack pattern to come round
     if (this.mega) this.health = Math.round(this.health * 1.5); // tougher (must run AFTER base health is set)
     this.maxHealth = this.health;
     this.shieldUntil = 0;                                  // invulnerable phase
@@ -2236,13 +2241,7 @@ export class Boss {
       drawShieldBubble(g, this.x, this.y, this.w / 2 + 14, t, 'rgb(90,220,255)', rip && rip.p < 1 ? rip : null);
     }
 
-    // health bar
-    const bw = 120, bh = 8;
-    const px = this.x - bw / 2, py = this.y - this.h / 2 - 14;
-    g.fillStyle = 'rgba(255,255,255,0.25)';
-    g.fillRect(px, py, bw, bh);
-    g.fillStyle = this.shieldUntil > t ? 'rgb(90,220,255)' : this.flash > 0.05 ? '#fff' : '#f33';
-    g.fillRect(px, py, (bw * Math.max(0, this.health)) / this.maxHealth, bh);
+    // (the health bar lives in the HUD)
   }
 }
 
@@ -2404,7 +2403,7 @@ export class ScorePopup {
   draw(g, world) {
     const t = (world.time - this.spawn) / this.life;
     g.globalAlpha = t < 0.7 ? 1 : 1 - (t - 0.7) / 0.3;
-    g.font = `bold 16px "Orbitron", sans-serif`;
+    g.font = `700 16px system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif`;
     g.fillStyle = this.color;
     g.textAlign = 'center';
     g.fillText(this.text, this.x, this.y - t * 34); // floats upward

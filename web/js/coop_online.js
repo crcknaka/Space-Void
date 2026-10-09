@@ -5,7 +5,8 @@
 import { W, H, STEP, clamp } from './const.js';
 import * as input from './input.js';
 import * as audio from './audio.js';
-import { Button, ButtonGroup, drawText } from './ui.js';
+import { Button, ButtonGroup } from './ui.js';
+import * as ui from './ui.js';
 import { BaseWorld } from './world.js';
 import { GameState, PLAYER_COLORS, playerShip, spawnY } from './game.js';
 import { Player, Explosion, RocketTrailParticle, SmokeParticle, Spark, LaserBeam, ScorePopup, WarpStreak, Comet, DistantConvoy, Freighter, Lightning, drawFlames, drawMine, VIS } from './entities.js';
@@ -26,7 +27,7 @@ const SEND_MS = 33; // ~30Hz snapshots (mobile-friendly; guest extrapolates)
 function drawPing(g, rtt, label) {
   if (!rtt) return;
   const col = rtt < 80 ? 'rgb(0,220,130)' : rtt < 160 ? 'rgb(255,210,60)' : 'rgb(255,90,90)';
-  drawText(g, `${label || ''}${rtt} ms`, W / 2, H - 34, 13, col);
+  ui.hudLabel(g, `${label || ''}${rtt} MS`, W / 2, H - 34, { size: 10, weight: 700, track: 0.16, align: 'center', color: col });
 }
 
 /* ------------------------------------ HOST ------------------------------------ */
@@ -243,9 +244,9 @@ export class CoopHost {
     // names above each living ship
     for (const p of this.g.playerList) {
       if (p.gone || !p.alive) continue;
-      const nm = this.names[p.slot]; if (nm) drawText(gg, nm, p.x, p.y - 26, 12, p.color);
+      const nm = this.names[p.slot]; if (nm) ui.hudLabel(gg, nm, p.x, p.y - 26, { size: 10, weight: 700, track: 0.14, align: 'center', color: p.color });
     }
-    drawText(gg, `ONLINE · HOST · ${this.g.playerList.length}P`, W / 2, H - 16, 13, 'rgb(0,200,255)');
+    ui.hudLabel(gg, `ONLINE · HOST · ${this.g.playerList.length}P`, W / 2, H - 16, { size: 10, weight: 700, track: 0.22, align: 'center', color: ui.rgba(ui.C.cyan) });
     drawPing(gg, this.hub.avgPing(), '~');
     if (this.overMenu && this.g.over) this.overMenu.draw(gg);
   }
@@ -313,7 +314,7 @@ export class CoopGuest extends BaseWorld {
 
   rocketBtn() { return { x: W - 70, y: H - 80, r: 44 }; }
   laserBtn() { return { x: W - 70, y: H - 185, r: 38 }; }
-  leaveBtn() { return { x: 34, y: 122, r: 22 }; }
+  leaveBtn() { return { x: W - 34, y: 78, r: 22 }; } // top-right, under the level plate
 
   tryLaser() {
     if (this.meLasers <= 0 || this.time < this._lzCd) return;
@@ -658,13 +659,13 @@ export class CoopGuest extends BaseWorld {
         if (p[2]) {
           this.drawShip(g, this.shipImg[i], thrOf(i), p[0], p[1], p[5]);
           if (p[7]) this.drawShieldRing(g, p[0], p[1]);
-          if (nameOf(i)) drawText(g, nameOf(i), p[0], p[1] - 26, 12, PLAYER_COLORS[i % 4]);
+          if (nameOf(i)) ui.hudLabel(g, nameOf(i), p[0], p[1] - 26, { size: 10, weight: 700, track: 0.14, align: 'center', color: PLAYER_COLORS[i % 4] });
         }
       });
       if (this.meAlive) {
         this.drawShip(g, this.shipImg[this.meIndex], this.me.thrusters, this.me.x, this.me.y, this.meInv);
         if (this.meShield) this.drawShieldRing(g, this.me.x, this.me.y);
-        if (nameOf(this.meIndex)) drawText(g, nameOf(this.meIndex), this.me.x, this.me.y - 26, 12, this.myColor);
+        if (nameOf(this.meIndex)) ui.hudLabel(g, nameOf(this.meIndex), this.me.x, this.me.y - 26, { size: 10, weight: 700, track: 0.14, align: 'center', color: this.myColor });
       }
 
       if (s.slow) { g.fillStyle = 'rgba(80,150,255,0.08)'; g.fillRect(0, 0, W, H); }
@@ -676,7 +677,7 @@ export class CoopGuest extends BaseWorld {
         }
         const blink = 0.55 + 0.45 * Math.sin(this.time / 110);
         g.globalAlpha = blink;
-        drawText(g, s.ion === 2 ? '⚡ ION STORM — WEAPONS OFFLINE ⚡' : '⚡ ION STORM INCOMING ⚡', W / 2, 90, 20, 'rgb(150,205,255)');
+        ui.hudLabel(g, s.ion === 2 ? 'ION STORM — WEAPONS OFFLINE' : 'ION STORM INCOMING', W / 2, 150, { size: 12, weight: 700, track: 0.3, align: 'center', color: 'rgb(150,205,255)' });
         g.globalAlpha = 1;
       }
 
@@ -690,53 +691,55 @@ export class CoopGuest extends BaseWorld {
         g.fillRect(0, 0, W, H);
       }
 
-      // HUD — all players, colour-coded, own marked
-      drawText(g, `Score: ${s.sc}`, 10, 24, 26, '#fff', 'left');
-      drawText(g, `Level: ${s.lv}`, W - 10, 24, 26, '#fff', 'right');
-      const many = s.ps.length > 2, fs = many ? 18 : 22;
+      // HUD — all players, colour-coded, own marked (same plates as the host's HUD)
+      const { C, rgba } = ui;
+      ui.begin(g);
+      ui.scrim(g, 'top', 100, 0.3);
+      const many = s.ps.length > 2, rowH = many ? 21 : 25, lh = 56 + s.ps.length * rowH + 5;
+      ui.hudPanel(g, 8, 8, 200, lh, { alpha: 0.5 });
+      ui.text(g, 'SCORE', 22, 22, { size: 9, weight: 700, track: 0.28, color: rgba(C.low) });
+      ui.text(g, ui.fmt(s.sc), 22, 44, { size: 24, weight: 600, track: 0.03, color: '#fff' });
+      g.fillStyle = rgba(C.mid, 0.14); g.fillRect(22, 64, 172, ui.hair());
       s.ps.forEach((p, i) => {
-        const y = 58 + i * (many ? 26 : 32);
-        const lives = i === this.meIndex ? this.meLives : p[3];
-        drawText(g, i === this.meIndex ? 'YOU' : `P${i + 1}`, 10, y, fs, PLAYER_COLORS[i % 4], 'left');
-        drawText(g, '♥'.repeat(Math.max(0, lives)), i === this.meIndex ? 62 : 44, y, fs, 'rgb(255,80,90)', 'left');
+        const y = 67 + rowH * (i + 0.5);
+        const lives = Math.max(0, i === this.meIndex ? this.meLives : p[3]);
+        ui.text(g, i === this.meIndex ? 'YOU' : `P${i + 1}`, 22, y + 0.5, { size: 11, weight: 700, track: 0.08, color: PLAYER_COLORS[i % 4] });
+        ui.hudIconPips(g, 62, y, Math.min(lives, 8), Math.min(8, Math.max(lives, 3)), { color: '255,96,108', size: 9, gap: 4 });
       });
-      if (s.warn) { const bl = 0.5 + 0.5 * Math.sin(this.time / 90); g.globalAlpha = 0.6 + 0.4 * bl; drawText(g, '!! BOSS APPROACHING !!', W / 2, H / 2 - 200, 30, 'rgb(255,60,60)'); g.globalAlpha = 1; }
-      if (s.over) { g.fillStyle = 'rgba(0,0,0,0.6)'; g.fillRect(0, 0, W, H); drawText(g, 'GAME OVER', W / 2, H / 2 - 20, 52, 'rgb(255,0,0)'); drawText(g, 'waiting for host…', W / 2, H / 2 + 40, 16, 'rgb(180,180,180)'); }
+      ui.hudPanel(g, W - 8 - 120, 8, 120, 44, { alpha: 0.5, edge: 'right' });
+      ui.text(g, 'LEVEL', W - 22, 20, { size: 9, weight: 700, track: 0.28, align: 'right', color: rgba(C.low) });
+      ui.text(g, String(s.lv).padStart(2, '0'), W - 22, 38, { size: 22, weight: 600, align: 'right', color: '#fff' });
+      if (s.warn) { const bl = 0.5 + 0.5 * Math.sin(this.time / 90); g.globalAlpha = 0.6 + 0.4 * bl; ui.notice(g, 'WARNING', { dim: 0, y: H / 2 - 200, size: 40, color: C.danger, sub: 'BOSS APPROACHING' }); g.globalAlpha = 1; }
+      if (s.over) ui.notice(g, 'GAME OVER', { y: H / 2 - 20, size: 42, color: C.danger, sub: 'WAITING FOR HOST…' });
     }
 
     if (input.isTouch && !this.disconnected) {
+      const { C, rgba } = ui;
       const rb = this.rocketBtn(), lb = this.leaveBtn(), zb = this.laserBtn();
-      g.globalAlpha = 0.35; g.fillStyle = '#fff'; g.beginPath(); g.arc(rb.x, rb.y, rb.r, 0, Math.PI * 2); g.fill();
-      g.globalAlpha = 0.9; g.drawImage(images.rocket, rb.x - 20, rb.y - 18, 40, 20); drawText(g, `${this.meRockets}`, rb.x, rb.y + 16, 22, '#000');
+      const hasRk = this.meRockets > 0;
+      ui.touchDisc(g, rb.x, rb.y, rb.r, hasRk ? C.hi : C.low, hasRk ? 0.8 : 0.4);
+      g.globalAlpha = hasRk ? 0.95 : 0.4; g.drawImage(images.rocket, rb.x - 20, rb.y - 20, 40, 20); g.globalAlpha = 1;
+      ui.text(g, String(this.meRockets), rb.x, rb.y + 17, { size: 17, weight: 700, align: 'center', color: rgba(hasRk ? C.hi : C.low) });
       // laser button with cooldown arc
       const cd = Math.max(0, this._lzCd - this.time) / 1200;
       const ready = this.meLasers > 0 && cd <= 0;
-      g.globalAlpha = ready ? 0.4 : 0.22;
-      g.fillStyle = ready ? 'rgb(120,220,255)' : '#888';
-      g.beginPath(); g.arc(zb.x, zb.y, zb.r, 0, Math.PI * 2); g.fill();
-      if (cd > 0) { g.globalAlpha = 0.5; g.strokeStyle = '#fff'; g.lineWidth = 4; g.beginPath(); g.arc(zb.x, zb.y, zb.r - 3, -Math.PI / 2, -Math.PI / 2 + (1 - cd) * Math.PI * 2); g.stroke(); }
-      g.globalAlpha = 0.95;
-      drawText(g, '⚡', zb.x, zb.y - 4, 26, '#000');
-      drawText(g, `${this.meLasers}`, zb.x, zb.y + 18, 20, '#000');
-      g.globalAlpha = 0.3; g.fillStyle = '#fff'; g.beginPath(); g.arc(lb.x, lb.y, lb.r, 0, Math.PI * 2); g.fill();
-      g.globalAlpha = 0.85; g.strokeStyle = '#000'; g.lineWidth = 3;
+      ui.touchDisc(g, zb.x, zb.y, zb.r, ready ? C.cyan : C.low, ready ? 0.9 : 0.4);
+      if (cd > 0) { g.strokeStyle = rgba(C.cyan, 0.9); g.lineWidth = 3; g.beginPath(); g.arc(zb.x, zb.y, zb.r - 2, -Math.PI / 2, -Math.PI / 2 + (1 - cd) * Math.PI * 2); g.stroke(); }
+      ui.hudGlyph(g, 'bolt', zb.x, zb.y - 9, 20, rgba(ready ? C.cyan : C.low));
+      ui.text(g, String(this.meLasers), zb.x, zb.y + 16, { size: 17, weight: 700, align: 'center', color: rgba(ready ? C.hi : C.low) });
+      ui.touchDisc(g, lb.x, lb.y, lb.r - 2);
+      g.strokeStyle = rgba(C.hi); g.lineWidth = 2;
       g.beginPath(); g.moveTo(lb.x - 6, lb.y - 6); g.lineTo(lb.x + 6, lb.y + 6); g.moveTo(lb.x + 6, lb.y - 6); g.lineTo(lb.x - 6, lb.y + 6); g.stroke();
-      g.globalAlpha = 1;
     }
 
-    drawText(g, `ONLINE · P${this.meIndex + 1}`, W / 2, H - 16, 13, this.myColor);
+    ui.hudLabel(g, `ONLINE · P${this.meIndex + 1}`, W / 2, H - 16, { size: 10, weight: 700, track: 0.22, align: 'center', color: this.myColor });
     drawPing(g, this.net.rtt);
 
     if (this.reconnecting && !this.disconnected) {
-      g.fillStyle = 'rgba(0,0,0,0.5)'; g.fillRect(0, 0, W, H);
       const dots = '.'.repeat(1 + (Math.floor(this.time / 400) % 3));
-      drawText(g, `RECONNECTING${dots}`, W / 2, H / 2, 30, 'rgb(255,210,80)');
+      ui.notice(g, `RECONNECTING${dots}`, { dim: 0.5, size: 26, color: ui.C.gold });
     }
-    if (this.disconnected) {
-      g.fillStyle = 'rgba(0,0,0,0.6)'; g.fillRect(0, 0, W, H);
-      drawText(g, 'HOST DISCONNECTED', W / 2, H / 2, 26, 'rgb(255,90,90)');
-      drawText(g, 'press any key to return', W / 2, H / 2 + 40, 15, 'rgb(180,180,180)');
-    }
+    if (this.disconnected) ui.notice(g, 'HOST DISCONNECTED', { size: 26, color: ui.C.danger, sub: 'PRESS ANY KEY TO RETURN' });
   }
 
   onResize() { super.onResize(); }

@@ -493,9 +493,10 @@ const rivetT = (r = 0.0022) => lathe([[0, r], [r * 0.45, r * 0.8], [r * 0.6, 0.0
 
 // Right hand closed round a vertical grip of radius r (axis Y through the
 // origin): palm on the +Z side, fingers wrapping the front, wrist toward −X.
-// Returns { glove, plate, wrist } soups / point; mirror and rotate as needed.
+// The index finger (on the trigger) and the thumb come back as separate soups
+// with their knuckle pivots so they can move; mirror and rotate as needed.
 function handModel(r = 0.019) {
-  const glove = [], plate = [];
+  const glove = [], plate = [], seam = [], index = [];
   const zc = r + 0.017;
   // back of the hand → wrist
   glove.push(...loft([
@@ -504,45 +505,67 @@ function handModel(r = 0.019) {
   ]));
   // palm heel filling the gap to the grip
   glove.push(...box(-0.07, 0.0, -0.036, 0.03, r - 0.004, r + 0.01, 0.004));
-  // four fingers wrapping round the front of the grip
+  // four fingers: three phalanges each, creased at the joints, wrapping the front of the grip
+  let idxPiv = null;
   for (let f = 0; f < 4; f++) {
-    const y = -0.0315 + f * 0.0213, hw = 0.0098, len = f === 0 ? 0.9 : f === 3 ? 0.94 : 1;
-    const rings = [], n = 9, p0 = 66 * DEG, p1 = lerp(66, -150, len) * DEG;
+    const isIdx = f === 3, y = -0.0315 + f * 0.0213, hw = 0.0096, len = f === 0 ? 0.88 : isIdx ? 0.62 : f === 2 ? 1 : 0.96;
+    const rings = [], n = 14, p0 = 66 * DEG, p1 = lerp(66, -150, len) * DEG, out = isIdx ? index : glove;
     for (let i = 0; i <= n; i++) {
       const t = i / n, ph = lerp(p0, p1, t);
-      const joint = Math.exp(-Math.pow((t - 0.02) * 9, 2)) + Math.exp(-Math.pow((t - 0.42) * 9, 2)) * 0.7 + Math.exp(-Math.pow((t - 0.78) * 10, 2)) * 0.5;
-      const th = (0.0092 + joint * 0.0016) * (t > 0.9 ? 0.82 : 1), rad = r + th + 0.0012, hh = hw * (t > 0.9 ? 0.85 : 1);
-      const cx = Math.cos(ph), sz = Math.sin(ph), c = 0.0034;
+      // swell at the knuckles, pinch at the creases between phalanges
+      const kn = Math.exp(-Math.pow((t - 0.03) * 8, 2)) * 1.0 + Math.exp(-Math.pow((t - 0.44) * 9, 2)) * 0.6 + Math.exp(-Math.pow((t - 0.78) * 10, 2)) * 0.45;
+      const cr = Math.exp(-Math.pow((t - 0.25) * 16, 2)) + Math.exp(-Math.pow((t - 0.62) * 16, 2));
+      const tip = t > 0.9 ? 1 - (t - 0.9) * 2.6 : 1;
+      const th = (0.0088 + kn * 0.0019 - cr * 0.0009) * tip, rad = r + th + 0.0012 + (isIdx ? t * 0.004 : 0), hh = hw * tip * (1 - cr * 0.06);
+      const cx = Math.cos(ph), sz = Math.sin(ph), c = 0.0036 * tip;
       const P = (dr, dy) => [(rad + dr) * cx, y + dy, (rad + dr) * sz];
       rings.push([P(-th, -hh + c), P(-th, hh - c), P(-th + c, hh), P(th - c, hh), P(th, hh - c), P(th, -hh + c), P(th - c, -hh), P(-th + c, -hh)]);
     }
-    glove.push(...loft(rings));
+    out.push(...loft(rings));
+    // armour pad over the first phalanx and a dome on the knuckle
+    const pad = [];
+    for (let i = 0; i <= 4; i++) {
+      const ph = lerp(58, 22, i / 4) * DEG, ro = r + 0.0205 + Math.sin((i / 4) * Math.PI) * 0.0012, ri = ro - 0.003, cx = Math.cos(ph), sz = Math.sin(ph), h2 = hw * 0.72;
+      pad.push([[ri * cx, y - h2, ri * sz], [ri * cx, y + h2, ri * sz], [ro * cx, y + h2 * 0.8, ro * sz], [ro * cx, y - h2 * 0.8, ro * sz]]);
+    }
+    (isIdx ? index : plate).push(...loft(pad));
+    const ka = 66 * DEG, kr = r + 0.019;
+    (isIdx ? index : glove).push(...tube([[kr * Math.cos(ka) - 0.004, y, kr * Math.sin(ka) + 0.002], [kr * Math.cos(ka) + 0.001, y, kr * Math.sin(ka) + 0.006], [kr * Math.cos(ka) + 0.006, y, kr * Math.sin(ka) + 0.004]], [0.006, 0.0082, 0.006], 7));
+    if (isIdx) idxPiv = [(r + 0.011) * Math.cos(p0), y, (r + 0.011) * Math.sin(p0)];
   }
-  // thumb lying over the top of the grip
-  glove.push(...tube([[-0.05, 0.03, r + 0.014], [-0.026, 0.047, r + 0.008], [0.0, 0.056, r - 0.008], [0.022, 0.058, r - 0.026], [0.03, 0.057, r - 0.034]], [0.014, 0.0125, 0.0112, 0.0098, 0.006], 7));
-  // knuckle guard and a strap across the back
-  plate.push(...box(-0.05, 0.006, -0.031, 0.031, r + 0.0335, r + 0.038, 0.003));
-  plate.push(...box(-0.074, -0.062, -0.033, 0.031, r + 0.002, r + 0.0365, 0.003));
-  return { glove, plate, wrist: [-0.088, -0.001, zc] };
+  // thumb: two joints, lying along the top of the grip
+  const thPiv = [-0.05, 0.03, r + 0.014];
+  const thumb = tube([thPiv, [-0.03, 0.045, r + 0.01], [-0.012, 0.053, r + 0.002], [0.004, 0.056, r - 0.008], [0.016, 0.056, r - 0.017], [0.024, 0.054, r - 0.022]], [0.0142, 0.0128, 0.0112, 0.0118, 0.0098, 0.0055], 8);
+  // back plate, wrist strap, stitched seams between the tendons
+  plate.push(...loft([ringRect(-0.052, -0.027, 0.029, r + 0.0335, r + 0.0345, 0.004), ringRect(-0.048, -0.031, 0.032, r + 0.0335, r + 0.0385, 0.005), ringRect(0.002, -0.03, 0.03, r + 0.0325, r + 0.0375, 0.005), ringRect(0.007, -0.026, 0.026, r + 0.0325, r + 0.0335, 0.004)]));
+  plate.push(...box(-0.076, -0.063, -0.034, 0.032, r + 0.0015, r + 0.037, 0.003));
+  plate.push(...box(-0.074, -0.065, -0.012, 0.008, r + 0.0365, r + 0.0395, 0.0012));
+  for (const y of [-0.0205, 0.0008, 0.022]) seam.push(...tube([[-0.062, y * 0.8, r + 0.0352], [-0.052, y * 0.9, r + 0.0356]], 0.0011, 4), ...tube([[0.007, y, r + 0.0325], [0.016, y, r + 0.029]], 0.0011, 4));
+  return { glove, plate, seam, index, thumb, idxPiv, thPiv, wrist: [-0.088, -0.001, zc] };
 }
-// forearm from the wrist along unit direction `a`: glove gauntlet + suit sleeve
+// forearm from the wrist along unit direction `a`: gauntlet, locking ring, suit sleeve
 function forearm(wrist, a, len, up = [0, 1, 0]) {
   const U = vnorm(vcross(a, up)), W = vcross(U, a);
-  const ring = (s, ru, rw, n = 12) => {
+  const ring = (s, ru, rw, n = 14) => {
     const R = [], o = vadd(wrist, a, s);
     for (let j = 0; j < n; j++) { const an = (j / n) * TAU, c = Math.cos(an) * ru, sn = Math.sin(an) * rw; R.push([o[0] + U[0] * c + W[0] * sn, o[1] + U[1] * c + W[1] * sn, o[2] + U[2] * c + W[2] * sn]); }
     return R;
   };
-  const cuff = loft([ring(-0.012, 0.024, 0.03), ring(0.012, 0.027, 0.033), ring(0.05, 0.036, 0.042), ring(0.066, 0.038, 0.044), ring(0.07, 0.034, 0.04)]);
-  const sl = [[0.062, 0.033, 0.038]];
-  const nW = Math.round(len / 0.045);
+  const cuff = loft([ring(-0.012, 0.024, 0.03), ring(0.012, 0.027, 0.033), ring(0.03, 0.031, 0.037), ring(0.05, 0.035, 0.041), ring(0.058, 0.036, 0.042)]);
+  // suit-side ring connector: a machined collar with a locking band
+  const collar = loft([ring(0.056, 0.037, 0.043), ring(0.059, 0.0405, 0.0465), ring(0.07, 0.0405, 0.0465), ring(0.073, 0.0385, 0.0445), ring(0.078, 0.0385, 0.0445), ring(0.081, 0.0405, 0.0465), ring(0.086, 0.0405, 0.0465), ring(0.089, 0.036, 0.042)]);
+  const band = loft([ring(0.0735, 0.039, 0.045), ring(0.0775, 0.039, 0.045)]);
+  const lugs = [];
+  for (let i = 0; i < 6; i++) { const an = (i / 6) * TAU + 0.3, o = vadd(wrist, a, 0.0645), c = Math.cos(an) * 0.0405, sn = Math.sin(an) * 0.0465; const p = [o[0] + U[0] * c + W[0] * sn, o[1] + U[1] * c + W[1] * sn, o[2] + U[2] * c + W[2] * sn]; lugs.push(...tube([vadd(p, a, -0.004), vadd(p, a, 0.004)], 0.0032, 5)); }
+  const sl = [[0.086, 0.035, 0.041]];
+  const nW = Math.round(len / 0.04);
   for (let i = 1; i <= nW; i++) {
-    const s = 0.062 + (len - 0.062) * (i / nW), g = 0.034 + 0.02 * (i / nW);
-    sl.push([s - 0.012, g * 1.0, g * 1.12], [s, g * 1.09, g * 1.2]);
+    const s = 0.086 + (len - 0.086) * (i / nW), g = 0.036 + 0.02 * (i / nW);
+    sl.push([s - 0.014, g * 0.98, g * 1.1], [s, g * 1.1, g * 1.22]);
   }
   const sleeve = loft(sl.map(([s, ru, rw]) => ring(s, ru, rw)));
-  const strap = loft([ring(0.026, 0.0315, 0.0375), ring(0.04, 0.0345, 0.0405)]);
-  return { cuff, sleeve, strap };
+  const strap = loft([ring(0.022, 0.0305, 0.0365), ring(0.036, 0.0335, 0.0395)]);
+  return { cuff, sleeve, strap, collar, band, lugs };
 }
 
 /* ========================================================================== */
@@ -574,7 +597,7 @@ const HULLS = {
       hull: M(0x1d97a6, 0.42, 0.35), hull2: M(0x0f5f6c, 0.5, 0.35), stripe: M(0xbfcdd0, 0.4, 0.3),
     },
     ui: { main: 0x5cffd6, dim: 0x18705f, bg: 0x020d0b, hi: 0xeafff9 },
-    dash: { cz: 0.2, wing: 0.21, toe: 26, tac: 'oct', gauge: 'round', stick: 'centre', chunk: 0.85, hud: 'holo' },
+    dash: { cz: 0.2, wing: 0.245, toe: 26, tac: 'oct', gauge: 'round', stick: 'centre', chunk: 0.85, hud: 'holo' },
     nose: {
       keys: [{ x: 1.2, w: 0.3, t: 0.12, b: 0.24, y: -0.46 }, { x: 2.0, w: 0.2, t: 0.09, b: 0.16, y: -0.5 }, { x: 3.2, w: 0.075, t: 0.04, b: 0.05, y: -0.655 }, { x: 4.3, w: 0.008, t: 0.006, b: 0.006, y: -0.835 }],
       guns: [{ z: 0.26, y: -0.515, x0: 1.2, x1: 2.55, r: 0.015 }], stripe: 0.03, pitot: true,
@@ -803,16 +826,24 @@ function buildInterior(b, H) {
 
   // ambient gauges flanking the tactical display
   const gr = Math.min(0.034, (D.cz - 0.02 - TZ - bz) / 2.3), gz = TZ + bz + 0.004 + gr * 1.16;
-  [[0.07, -gz], [-0.01, -gz], [0.07, gz], [-0.01, gz]].forEach(([y, z], i) => {
-    scr(FC, 'A', y - gr, y + gr, z - gr, z + gr, R_GAUGE[i], SID.GAUGE);
-    if (D.gauge === 'round') b.add(FC.place(lathe([[0, gr * 1.24], [bh * 0.8, gr * 1.24], [bh, gr * 1.14], [bh, gr * 1.04], [0.001, gr * 0.985]], b.seg(22), { y, z, capA: false, capB: false })), P.trim, { crease: 50 });
-    else b.add(FC.place(bezel(y - gr * 0.96, y + gr * 0.96, z - gr * 0.96, z + gr * 0.96, bz * 0.6, bh * 0.8, 0.003)), P.panel2, { crease: 50 });
+  const centre = D.stick === 'centre';      // the starboard gauge pair gives way to the offset stick
+  const gSpots = centre ? [[FC, 0.07, -gz, gr], [FC, -0.01, -gz, gr]]
+    : [[FC, 0.07, -gz, gr], [FC, -0.01, -gz, gr], [FC, 0.07, gz, gr], [FC, -0.01, gz, gr]];
+  gSpots.forEach(([F, y, z, g2], i) => {
+    scr(F, 'A', y - g2, y + g2, z - g2, z + g2, R_GAUGE[i], SID.GAUGE);
+    if (D.gauge === 'round') b.add(F.place(lathe([[0, g2 * 1.24], [bh * 0.8, g2 * 1.24], [bh, g2 * 1.14], [bh, g2 * 1.04], [0.001, g2 * 0.985]], b.seg(22), { y, z, capA: false, capB: false })), P.trim, { crease: 50 });
+    else b.add(F.place(bezel(y - g2 * 0.96, y + g2 * 0.96, z - g2 * 0.96, z + g2 * 0.96, bz * 0.6, bh * 0.8, 0.003)), P.panel2, { crease: 50 });
   });
-
+  if (centre) {      // what is left beside the scope: a small arming panel above the hand
+    b.add(FC.place(box(0, 0.003, 0.05, 0.112, TZ + bz + 0.008, D.cz - 0.03, 0.0015)), P.panel2);
+    for (let i = 0; i < 2; i++) { const [tb, tl] = toggleT(0.42 * (i ? 1 : -1), k); const z = TZ + bz + 0.03 + i * 0.032; b.add(FC.place(move(tb, 0.003, 0.072, z)), M_SCREW); b.add(FC.place(move(tl, 0.003, 0.072, z)), M_RED); }
+    b.decalQuad(FC.pt(0.0034, 0.094, TZ + bz + 0.012), FC.pt(0.0034, 0.094, D.cz - 0.034), FC.pt(0.0034, 0.107, D.cz - 0.034), FC.pt(0.0034, 0.107, TZ + bz + 0.012), 'hazard');
+  }
   // MFDs, annunciators and switchgear on the wings
-  const MY0 = -0.047, MY1 = 0.079, MZ0 = 0.03, MZ1 = Math.min(0.03 + 0.132, D.wing - 0.03);
-  const mfdW = MZ1 - MZ0;
+  const MY0 = -0.047, MY1 = 0.079, MZa = 0.03;
   for (const s of [1, -1]) {
+    // beside an offset stick the starboard display moves outboard, clear of the hand
+    const MZ0 = MZa + (centre && s > 0 ? 0.045 : 0), MZ1 = Math.min(MZ0 + 0.132, D.wing - 0.03), mfdW = MZ1 - MZ0;
     const F = s > 0 ? FR : FL, z0 = s > 0 ? MZ0 : -MZ1, z1 = s > 0 ? MZ1 : -MZ0;
     scr(F, 'B', MY0, MY1, z0, z1, s > 0 ? R_MFD_R : R_MFD_L, s > 0 ? SID.MFD_R : SID.MFD_L);
     b.add(F.place(bezel(MY0, MY1, z0, z1, bz, bh, 0.0035)), P.panel2, { crease: 50 });
@@ -928,7 +959,8 @@ function buildInterior(b, H) {
     // seat bolster
     b.add(box(-0.3, 0.22, -0.56, -0.46, s * 0.2 - 0.03, s * 0.2 + 0.03, 0.012), M(0x1a1b1f, 0.85), { crease: 50 });
     // thigh and shin
-    b.add(tube([[-0.12, -0.5, s * 0.11], [0.15, -0.47, s * 0.125], [0.37, -0.43, s * 0.14], [0.5, -0.56, s * 0.135], [0.6, -0.8, s * 0.13]], [0.085, 0.078, 0.066, 0.058, 0.05], 10), P.suit, { crease: 70 });
+    const lg = D.stick === 'centre' ? -0.09 : 0;      // knees sit lower under the offset stick
+    b.add(tube([[-0.12, -0.5 + lg * 0.3, s * 0.11], [0.15, -0.47 + lg * 0.7, s * 0.125], [0.37, -0.43 + lg, s * 0.14], [0.5, -0.56 + lg, s * 0.135], [0.6, -0.8, s * 0.13]], [0.085, 0.078, 0.066, 0.058, 0.05], 10), P.suit, { crease: 70 });
     // rudder pedal
     b.add(box(0.64, 0.66, -0.78, -0.62, s * 0.13 - 0.05, s * 0.13 + 0.05, 0.004), P.trim);
   }
@@ -950,21 +982,29 @@ function buildInterior(b, H) {
 
   /* ---- controls and hands ---- */
   const addArm = (name, G, elbow, opt = {}) => {
-    const hm = handModel(0.0195);
-    let { glove, plate } = hm, wrist = hm.wrist.slice();
-    const apply = (fn) => { fn(glove); fn(plate); const w = fn([...wrist, ...wrist, ...wrist]); wrist = [w[0], w[1], w[2]]; };
-    if (opt.left) { mirrorZ(glove); mirrorZ(plate); wrist[2] = -wrist[2]; }
+    const hm = handModel(0.0195), soups = [hm.glove, hm.plate, hm.seam, hm.index, hm.thumb];
+    let pts = [...hm.wrist, ...hm.idxPiv, ...hm.thPiv];      // points carried through the same transforms
+    const apply = (fn) => { soups.forEach(fn); pts = fn(pts.slice()); };
+    if (opt.left) { soups.forEach(mirrorZ); for (let i = 2; i < 9; i += 3) pts[i] = -pts[i]; }
     if (opt.onTop) apply((t) => rotX(t, opt.left ? -Math.PI / 2 : Math.PI / 2));
     const d = vsub(elbow, G);
     if (opt.onTop) apply((t) => rotZ(t, Math.atan2(-d[1], -d[0]) * 0.75));
     else apply((t) => rotY(t, -Math.atan2(d[2], -d[0]) * 0.8));
+    const wrist = pts.slice(0, 3), idxPiv = pts.slice(3, 6), thPiv = pts.slice(6, 9);
     const a = vnorm(vsub(d, wrist));
     const fa = forearm(wrist, a, Math.hypot(d[0], d[1], d[2]) + 0.06, opt.onTop ? [0, 0, opt.left ? -1 : 1] : [0, 1, 0]);
+    const SEAM = M(0x6d7078, 0.6), anim = !!opt.anim, digits = [];
     b.part(name, [0, 0, 0]);
-    b.add(glove, P.glove, { crease: 62 }); b.add(plate, P.plate, { crease: 40 });
+    b.add(hm.glove, P.glove, { crease: 62 }); b.add(hm.plate, P.plate, { crease: 40 }); b.add(hm.seam, SEAM);
     b.add(fa.cuff, P.glove, { crease: 62 }); b.add(fa.strap, M_BLACK); b.add(fa.sleeve, P.suit, { crease: 62 });
+    b.add(fa.collar, M_STEEL, { crease: 40 }); b.add(fa.band, P.accent); b.add(fa.lugs, M_GUN);
+    if (anim) {
+      b.part(name + 'I', idxPiv); b.add(hm.index, P.glove, { crease: 62 });
+      b.part(name + 'T', thPiv); b.add(hm.thumb, P.glove, { crease: 62 });
+      digits.push({ part: name + 'I', piv: idxPiv, axis: [0, 1, 0], kind: 'trigger' }, { part: name + 'T', piv: thPiv, axis: [1, 0, 0], kind: 'thumb' });
+    } else { b.add(hm.index, P.glove, { crease: 62 }); b.add(hm.thumb, P.glove, { crease: 62 }); }
     b.part('st');
-    return { part: name, elbow };
+    return { part: name, elbow, digits };
   };
   const stickGeo = (name, piv, L) => {
     b.part(name, piv);
@@ -980,13 +1020,18 @@ function buildInterior(b, H) {
   };
   if (D.stick === 'side' || D.stick === 'centre') {
     const side = D.stick === 'side';
-    const L = side ? 0.125 : 0.26, piv = side ? [0.475, CY, 0.34] : [0.43, -0.57, 0];
+    const L = side ? 0.125 : 0.165, piv = side ? [0.475, CY, 0.34] : [0.47, -0.405, 0.135];
     stickGeo('stick', piv, L);
     const G = [piv[0], piv[1] + L, piv[2]];
-    const arm = addArm('armR', G, side ? [0.13, -0.45, 0.4] : [0.12, -0.5, 0.2]);
+    const arm = addArm('armR', G, side ? [0.13, -0.45, 0.4] : [0.12, -0.5, 0.33], { anim: true });
     out.controls.push({ part: 'stick', type: 'stick', piv, grips: [{ ...arm, at: [0, L, 0], G }] });
     if (side) b.add(latheY([[CY, 0.055], [CY + 0.004, 0.052]], 14, piv[0], piv[2]), P.trim);
-    else b.add(box(0.36, 0.5, -0.595, -0.565, -0.07, 0.07, 0.006), P.panel2);
+    else {
+      // the stick stands on a bracket off the pedestal, just right of the scope
+      b.add(box(0.435, 0.62, -0.432, -0.405, piv[2] - 0.04, piv[2] + 0.04, 0.007), P.panel2, { crease: 50 });
+      b.add(box(0.5, 0.62, -0.6, -0.42, piv[2] - 0.025, piv[2] + 0.025, 0.006), P.panel, { crease: 50 });
+      b.add(latheY([[-0.405, 0.05], [-0.401, 0.047]], 14, piv[0], piv[2]), P.trim);
+    }
   }
   // throttle quadrant on the port console
   {
@@ -1025,7 +1070,7 @@ function buildInterior(b, H) {
     b.part('st');
     for (const s of [1, -1]) {
       const G = [end[0], end[1] + up, s * gz];
-      grips.push({ ...addArm(s > 0 ? 'armR' : 'armL', G, [0.12, -0.47, s * 0.31], { left: s < 0 }), at: vsub(G, piv), G });
+      grips.push({ ...addArm(s > 0 ? 'armR' : 'armL', G, [0.12, -0.47, s * 0.31], { left: s < 0, anim: s > 0 }), at: vsub(G, piv), G });
     }
     out.controls.push({ part: 'yoke', type: 'yoke', piv, axis: n, grips });
   }
@@ -1173,44 +1218,37 @@ function paintDecals() {
   return cv;
 }
 
-// one impact on the canopy: R = fracture lines, G = crazing around the core
+// One impact in thick laminated glass. R = fracture lines, G = the crushed,
+// whitened glass along them: a small star at the point of impact, a few long
+// radial cracks with slight kinks, one or two rings stepping from ray to ray.
 function paintCrack(c, x, y, pw, R, sc) {
-  c.globalCompositeOperation = 'lighter';
-  const rad = (42 + pw * 62) * sc;
-  const g = c.createRadialGradient(x, y, 0, x, y, rad * 0.55);
-  g.addColorStop(0, 'rgba(0,255,0,0.8)'); g.addColorStop(0.2, 'rgba(0,255,0,0.22)'); g.addColorStop(1, 'rgba(0,255,0,0)');
+  c.globalCompositeOperation = 'lighter'; c.lineCap = 'round'; c.lineJoin = 'round';
+  const rad = (50 + pw * 68) * sc;
+  const g = c.createRadialGradient(x, y, 0, x, y, rad * 0.3);
+  g.addColorStop(0, 'rgba(0,255,0,0.75)'); g.addColorStop(0.3, 'rgba(0,255,0,0.2)'); g.addColorStop(1, 'rgba(0,255,0,0)');
   c.fillStyle = g; c.fillRect(x - rad, y - rad, rad * 2, rad * 2);
-  const nR = 7 + Math.round(pw * 6 + R() * 3), ends = [];
-  c.lineCap = 'round';
+  const nR = 4 + ((R() * 2.4) | 0) + (pw > 0.75 ? 1 : 0), rays = [], a0 = R() * TAU;
+  const path = (pts, w, style) => { c.strokeStyle = style; c.lineWidth = w; c.beginPath(); c.moveTo(pts[0][0], pts[0][1]); for (let i = 1; i < pts.length; i++) c.lineTo(pts[i][0], pts[i][1]); c.stroke(); };
   for (let i = 0; i < nR; i++) {
-    let an = (i / nR) * TAU + (R() - 0.5) * 0.5, px = x, py = y;
-    const len = rad * (0.45 + R() * 0.75), steps = 5 + ((R() * 4) | 0);
-    const pts = [[px, py]];
-    for (let k = 0; k < steps; k++) {
-      an += (R() - 0.5) * 0.32; px += Math.cos(an) * len / steps; py += Math.sin(an) * len / steps;
-      pts.push([px, py]);
-      if (R() < 0.18 && k > 0) {      // side branch
-        let ba = an + (R() < 0.5 ? 1 : -1) * (0.5 + R() * 0.6), bx = px, by = py;
-        c.strokeStyle = `rgba(255,0,0,${0.5 + R() * 0.3})`; c.lineWidth = 0.6 * sc + 0.3; c.beginPath(); c.moveTo(bx, by);
-        for (let m = 0; m < 3; m++) { ba += (R() - 0.5) * 0.6; bx += Math.cos(ba) * len * 0.12; by += Math.sin(ba) * len * 0.12; c.lineTo(bx, by); }
-        c.stroke();
-      }
-    }
-    for (let k = 0; k < pts.length - 1; k++) {
-      const t = k / (pts.length - 1);
-      c.strokeStyle = `rgba(255,0,0,${0.9 - t * 0.4})`; c.lineWidth = (1.5 - t * 0.9) * sc + 0.35;
-      c.beginPath(); c.moveTo(pts[k][0], pts[k][1]); c.lineTo(pts[k + 1][0], pts[k + 1][1]); c.stroke();
-    }
-    ends.push(pts);
+    let an = a0 + ((i + (R() - 0.5) * 0.55) / nR) * TAU, px = x + Math.cos(an) * 3 * sc, py = y + Math.sin(an) * 3 * sc;
+    const len = rad * (i % 2 ? 0.5 + R() * 0.35 : 0.8 + R() * 0.45), kinks = 2 + ((R() * 2) | 0), pts = [[px, py]];
+    for (let k = 0; k <= kinks; k++) { an += (R() - 0.5) * 0.3; const st = (len / (kinks + 1)) * (0.75 + R() * 0.5); px += Math.cos(an) * st; py += Math.sin(an) * st; pts.push([px, py]); }
+    path(pts, 9 * sc + 2, 'rgba(0,255,0,0.1)'); path(pts, 4.5 * sc + 1, 'rgba(0,255,0,0.22)');
+    for (let k = 0; k < pts.length - 1; k++) { const t = k / (pts.length - 1); path([pts[k], pts[k + 1]], (2.2 - t * 1.3) * sc + 0.45, `rgba(255,0,0,${0.95 - t * 0.3})`); }
+    rays.push(pts);
   }
-  // concentric chords linking neighbouring rays
-  for (let ring = 1; ring <= 3; ring++) for (let i = 0; i < nR; i++) {
-    if (R() < 0.4) continue;
-    const A = ends[i], B = ends[(i + 1) % nR], ka = Math.min(A.length - 1, ring + ((R() * 2) | 0)), kb = Math.min(B.length - 1, ring + ((R() * 2) | 0));
-    c.strokeStyle = `rgba(255,0,0,${0.45 + R() * 0.3})`; c.lineWidth = 0.6 * sc + 0.3;
-    c.beginPath(); c.moveTo(A[ka][0], A[ka][1]); c.lineTo(B[kb][0], B[kb][1]); c.stroke();
+  // point at a fraction of the way along a ray
+  const along = (pts, f) => { const n = pts.length - 1, u = clamp(f, 0, 0.999) * n, k = u | 0, t = u - k; return [lerp(pts[k][0], pts[k + 1][0], t), lerp(pts[k][1], pts[k + 1][1], t)]; };
+  for (const [f, p] of [[0.3, 0.85], [0.62, pw > 0.5 ? 0.55 : 0.25]]) for (let i = 0; i < nR; i++) {
+    if (R() > p) continue;
+    const A = along(rays[i], f + (R() - 0.5) * 0.08), B = along(rays[(i + 1) % nR], f + (R() - 0.5) * 0.08);
+    const m = [(A[0] + B[0]) / 2 + (A[0] + B[0] - 2 * x) * 0.05, (A[1] + B[1]) / 2 + (A[1] + B[1] - 2 * y) * 0.05];
+    if (Math.hypot(A[0] - B[0], A[1] - B[1]) > rad * 1.25) continue;
+    path([A, m, B], 4 * sc + 1, 'rgba(0,255,0,0.14)'); path([A, m, B], 1.5 * sc + 0.4, 'rgba(255,0,0,0.85)');
   }
-  c.fillStyle = 'rgba(255,255,0,1)'; c.beginPath(); c.arc(x, y, 2.5 * sc + 1, 0, TAU); c.fill();
+  // crushed star at the point of impact
+  for (let i = 0; i < 11; i++) { const an = R() * TAU, l0 = R() * 3 * sc, l1 = (5 + R() * 9) * sc; path([[x + Math.cos(an) * l0, y + Math.sin(an) * l0], [x + Math.cos(an) * l1, y + Math.sin(an) * l1]], 1.5 * sc + 0.4, 'rgba(255,90,0,0.9)'); }
+  c.fillStyle = 'rgba(255,255,0,1)'; c.beginPath(); c.arc(x, y, 3 * sc + 1, 0, TAU); c.fill();
   c.globalCompositeOperation = 'source-over';
 }
 
@@ -1219,7 +1257,7 @@ function paintCrack(c, x, y, pw, R, sc) {
 const COL_BLIP = ['#ff4b3a', '#ffb53a', '#b9a58a', '#ff2a6a', '#5dff8a', '#ffe04a', '#5ab4ff'];
 const TAC_S = 330, TAC_OX = 256, TAC_OY = 346;
 
-function paintTactical(c, s, th, t, ion) {
+function paintTactical(c, s, th, t, ion, hullStrip) {
   const { x: X, y: Y, w, h } = R_TAC;
   c.save(); c.beginPath(); c.rect(X, Y, w, h); c.clip(); c.translate(X, Y);
   c.fillStyle = css(th.bg); c.fillRect(0, 0, w, h);
@@ -1275,8 +1313,19 @@ function paintTactical(c, s, th, t, ion) {
   c.strokeStyle = rgba(th.hi, 0.35); c.lineWidth = 2; c.setLineDash([4, 10]); c.beginPath(); c.moveTo(TAC_OX, TAC_OY - 18); c.lineTo(TAC_OX, 0); c.stroke(); c.setLineDash([]);
   c.fillStyle = css(th.hi); c.beginPath(); c.moveTo(TAC_OX, TAC_OY - 17); c.lineTo(TAC_OX + 13, TAC_OY + 12); c.lineTo(TAC_OX, TAC_OY + 4); c.lineTo(TAC_OX - 13, TAC_OY + 12); c.closePath(); c.fill();
   // frame text
-  c.fillStyle = rgba(th.main, 0.9); c.font = `bold 17px ${FONT}`; c.textAlign = 'left'; c.fillText('TAC', 10, h - 14);
-  c.textAlign = 'right'; c.fillText('LV ' + String(s.level ?? 1).padStart(2, '0'), w - 10, h - 14);
+  if (hullStrip) {
+    // narrow screens lose the side displays: hull points ride along the bottom of the scope
+    const hp = Math.max(0, s.hp ?? 3), hpMax = Math.max(1, s.hpMax ?? 3), col = hp <= 1 ? '#ff4b3a' : hp / hpMax <= 0.5 ? '#ffb53a' : '#5dff8a';
+    c.fillStyle = 'rgba(0,0,0,0.72)'; c.fillRect(0, h - 40, w, 40);
+    c.fillStyle = col; c.font = `bold 22px ${FONT}`; c.textAlign = 'left'; c.fillText('HULL', 10, h - 19);
+    const x0 = 82, pw = Math.min(54, (w - x0 - 96 - (hpMax - 1) * 7) / hpMax);
+    for (let i = 0; i < hpMax; i++) { const x = x0 + i * (pw + 7); c.fillStyle = i < hp ? col : 'rgba(255,255,255,0.1)'; c.fillRect(x, h - 32, pw, 24); c.strokeStyle = col; c.lineWidth = 2.5; c.strokeRect(x, h - 32, pw, 24); }
+    if (s.shield) { c.fillStyle = '#5ab4ff'; c.textAlign = 'right'; c.fillText('SHLD', w - 10, h - 19); }
+    else { c.fillStyle = rgba(th.main, 0.9); c.textAlign = 'right'; c.fillText('R' + (s.rockets ?? 0), w - 10, h - 19); }
+  } else {
+    c.fillStyle = rgba(th.main, 0.9); c.font = `bold 17px ${FONT}`; c.textAlign = 'left'; c.fillText('TAC', 10, h - 14);
+    c.textAlign = 'right'; c.fillText('LV ' + String(s.level ?? 1).padStart(2, '0'), w - 10, h - 14);
+  }
   // boss health
   if ((s.bossHp ?? -1) >= 0) {
     const bw = w - 150, bx = 110, by = 12;
@@ -1391,7 +1440,7 @@ function paintStatus(c, s, th, t, lamps) {
   bar(r.x + 14, r.y + 266, r.w - 28, 46, s.overdriveOn ? 1 : od, odc);
   c.restore();
   // ---- annunciators ----
-  const L = [['MASTER', 'CAUTION', '#ff3b2a'], ['FIRE', '', '#ff3b2a'], ['BOSS', '', '#ff2a6a'], ['ION', '', '#ffb53a'], ['SHIELD', '', '#5ab4ff'], ['OVER', 'DRIVE', '#ffe04a']];
+  const L = [['MASTER', 'CAUTION', (s.hp ?? 3) <= 1 ? '#ff3b2a' : '#ffab2e'], ['FIRE', '', '#ff3b2a'], ['BOSS', '', '#ff2a6a'], ['ION', '', '#ffb53a'], ['SHIELD', '', '#5ab4ff'], ['OVER', 'DRIVE', '#ffe04a']];
   for (let i = 0; i < 6; i++) {
     const q = R_LAMP[i], on = lamps[i];
     c.fillStyle = on ? L[i][2] : '#0c0d10'; c.fillRect(q.x, q.y, q.w, q.h);
@@ -1416,6 +1465,7 @@ uniform vec3 uCkC, uCkR, uSunL;
 uniform vec4 uCkWin;
 uniform float uCkAz;
 uniform vec2 uCkStrut[6];
+float ckLit = 1.0;
 float ckShadow() {
   vec3 q = (vCk - uCkC) / uCkR;
   float qq = dot(q, q);
@@ -1427,13 +1477,14 @@ float ckShadow() {
   float e = asin(clamp(h.y, -1.0, 1.0)), A = atan(h.z, h.x), sA = sin(A);
   float s2 = abs(A) > 1.5708 ? 1.0 : sA * sA;
   float sill = uCkWin.x + uCkWin.y * s2, top = uCkWin.z + uCkWin.w * s2;
-  float lit = smoothstep(sill, sill + 0.025, e) * (1.0 - smoothstep(top - 0.025, top, e)) * (1.0 - smoothstep(uCkAz - 0.05, uCkAz, abs(A)));
+  float lit = smoothstep(sill, sill + 0.012, e) * (1.0 - smoothstep(top - 0.012, top, e)) * (1.0 - smoothstep(uCkAz - 0.05, uCkAz, abs(A)));
   float ce = cos(e);
   for (int i = 0; i < 6; i++) {
     vec2 s = uCkStrut[i];
-    if (s.y > 0.0) lit *= smoothstep(s.y, s.y + 0.014, abs(abs(A) - s.x) * ce);
+    if (s.y > 0.0) lit *= smoothstep(s.y, s.y + 0.007, abs(abs(A) - s.x) * ce);
   }
-  return mix(0.03, 0.92, lit);
+  ckLit = lit;
+  return mix(0.02, 1.0, lit);
 }`;
 
 const GLOW_VERT = `
@@ -1522,10 +1573,12 @@ void main() {
   col += extC * (dt.g * 0.5 + dt.r * 0.3 + 0.01);
   // fractures
   vec2 cuv = vec2(ang.x / 3.4907 + 0.5, (ang.y + 0.45) / 1.45);
-  vec4 ck = texture2D(uCrack, cuv), ck2 = texture2D(uCrack, cuv + vec2(0.0011, -0.0018));
-  vec3 ckc = uAmb * 0.55 + uSunC * (0.07 + 0.55 * pow(sd, 3.0)) + extC * 2.0 + uGlow * 0.25;
-  col += ckc * (ck.r * 0.42 + ck.g * 0.07);
-  float a = 0.03 + fr * 0.1 + dt.g * 0.025 + ck.g * 0.16 + ck.r * 0.2 + ck2.r * 0.3 * (1.0 - ck.r);
+  // the inner ply cracks along the same lines a few millimetres deeper: a fainter, offset twin
+  vec4 ck = texture2D(uCrack, cuv), ck2 = texture2D(uCrack, cuv + vec2(0.0016, -0.0024) * (0.6 + ndv));
+  float inner = ck2.r * (1.0 - ck.r);
+  vec3 ckc = uAmb * 0.5 + uSunC * (0.1 + 0.95 * sd * sd * sd) * (0.75 + 0.6 * dt.r) + extC * 2.0 + uGlow * 0.25;
+  col += ckc * (ck.r * 0.48 + inner * 0.14 + ck.g * 0.11);
+  float a = 0.03 + fr * 0.1 + dt.g * 0.025 + ck.g * 0.13 + ck.r * 0.3 + inner * 0.14;
   // hyperspace streaks sliding over the canopy
   if (uWarp > 0.0) {
     float rad = length(D.yz), an = atan(D.z, D.y) * 22.0;
@@ -1580,7 +1633,7 @@ void main() {
     vec3 vv = (modelViewMatrix * vec4(aVel, 0.0)).xyz;
     float sp = length(vv.xy);
     vec2 dir = sp > 1e-4 ? vv.xy / sp : vec2(1.0, 0.0);
-    off = dir * corner.x * aPar.x * (1.0 + aPar.y * sp / max(aPar.x, 1e-5)) + vec2(-dir.y, dir.x) * corner.y * aPar.x;
+    off = dir * corner.x * aPar.x * (1.0 + min(aPar.y * sp / max(aPar.x, 1e-5), 7.0)) + vec2(-dir.y, dir.x) * corner.y * aPar.x;
   }
   mv.xy += off;
   vC = corner; vCol = aCol; vPar = aPar;
@@ -1675,13 +1728,13 @@ export class Cockpit3D {
     this.A = {
       pos: new Float32Array(5), vel: new Float32Array(5), tgt: new Float32Array(5),
       stickX: 0, stickY: 0, thr: 0, boost: 0, steerLag: 0, thrLag: 0,
-      fireStamp: null, rocketStamp: null, recoil: 0, muzL: 0, muzR: 0, gunSide: 1,
+      fireStamp: null, rocketStamp: null, trig: 0, thumb: 0, recoil: 0, muzL: 0, muzR: 0, gunSide: 1,
       hitGlitch: 0, haze: 0, emerg: 0, power: 1, deadT: -1, sparkIn: 3, flash: 0, extPrev: 0, shieldOn: 0, tickIn: 0,
       lastA: -1e9, lastB: -1e9, dirtyA: true, dirtyB: true, sig: new Float64Array(4), lamps: [false, false, false, false, false, false], gv: new Float32Array(4), hud: { spd: 0, thr: 0, bank: 0 },
     };
     this.flashCol = new T.Vector3(); this.ovFlash = new T.Vector3();
     this.rand = rng(4242);
-    this.cracks = 0;
+    this.cracks = 0; this.crackAt = new Float32Array(36);
     this.ships = new Map();
     this.cur = null; this.curId = null;
     this.basePitch = 0; this._lf = -1; this._la = -1;
@@ -1728,6 +1781,8 @@ export class Cockpit3D {
           .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor *= vMr.y;')
           // no surface of the cabin or the nose may blow out into bloom, whatever the sun does
           .replace('#include <dithering_fragment>', 'gl_FragColor.rgb = min(gl_FragColor.rgb, vec3(0.85));\n#include <dithering_fragment>')
+          // sunlight scattered through the canopy: lets the frame's shadow read even on faces turned from the sun
+          .replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\n#if NUM_DIR_LIGHTS > 0\n{ float wr = clamp(dot(normal, directionalLights[0].direction) * 0.5 + 0.62, 0.0, 1.0); reflectedLight.directDiffuse += diffuseColor.rgb * directionalLights[0].color * (ckLit * step(dot(vCk - uCkC, vCk - uCkC), 4.0) * wr * wr * 0.1); }\n#endif')
           .replace('#include <lights_fragment_begin>', 'float ckSun = ckShadow();\n' + T.ShaderChunk.lights_fragment_begin.replace(
             'getDirectionalLightInfo( directionalLight, directLight );', 'getDirectionalLightInfo( directionalLight, directLight );\ndirectLight.color *= ckSun;'));
       };
@@ -1894,15 +1949,21 @@ export class Cockpit3D {
     add(sg(b.scr.A), this.mScrA); add(sg(b.scr.B), this.mScrB); add(sg(b.scr.H), this.mHud, 4);
     const glass = add(this._glassGeo(C), this.mGlass, 2);
     const V = (a) => new T.Vector3(a[0], a[1], a[2]);
+    const digits = [];
     const controls = out.controls.map((c) => {
       const obj = meshes[c.part];
       obj.position.fromArray(c.piv);
       return {
         obj, type: c.type, piv: V(c.piv), axis: c.axis ? V(c.axis) : null,
-        grips: c.grips.map((g) => { const arm = meshes[g.part]; arm.position.fromArray(g.G); return { obj: arm, at: V(g.at), elbow: V(g.elbow), rest: V(vnorm(vsub(g.elbow, g.G))) }; }),
+        grips: c.grips.map((g) => {
+          const arm = meshes[g.part];
+          arm.position.fromArray(g.G);
+          for (const dg of g.digits || []) { const m = meshes[dg.part]; group.remove(m); arm.add(m); m.position.fromArray(dg.piv); digits.push({ obj: m, axis: V(dg.axis), kind: dg.kind }); }
+          return { obj: arm, at: V(g.at), elbow: V(g.elbow), rest: V(vnorm(vsub(g.elbow, g.G))) };
+        }),
       };
     });
-    return { key, group, glass, controls, guns: meshes.guns, C, H, ui: H0.ui, emitPts: out.emitPts.concat(out.emitTop ? [out.emitTop] : []), muzzles: out.muzzles, tris: Math.round(tris), draws: group.children.length + 3 };
+    return { key, group, glass, controls, digits, guns: meshes.guns, C, H, ui: H0.ui, emitPts: out.emitPts.concat(out.emitTop ? [out.emitTop] : []), muzzles: out.muzzles, tris: Math.round(tris), draws: group.children.length + digits.length + 3 };
   }
 
   // build (cached) the interior for a hull and show it; cheap if unchanged
@@ -1942,6 +2003,8 @@ export class Cockpit3D {
     this.basePitch = -(Math.atan((ny * ref) / zh) - 14.5 * DEG);
     cam.updateProjectionMatrix();
     this.U.uAspect.value = a;
+    this.portrait = a < 1;
+    this.A.dirtyA = this.A.dirtyB = true;
   }
 
   update(dtMs, tMs, s) {
@@ -1976,7 +2039,7 @@ export class Cockpit3D {
     /* guns */
     if (s.fireStamp !== undefined && s.fireStamp !== A.fireStamp) {
       if (A.fireStamp !== null) {
-        A.recoil = 1;
+        A.recoil = 1; A.trig = 1;
         A.gunSide = -A.gunSide;
         const both = (s.fireTier ?? 1) >= 2 ? 1 : 0.4;      // both barrels flash, the lead alternates
         A.muzL = Math.max(A.muzL, A.gunSide < 0 ? 1 : both); A.muzR = Math.max(A.muzR, A.gunSide < 0 ? both : 1);
@@ -1984,19 +2047,22 @@ export class Cockpit3D {
       A.fireStamp = s.fireStamp;
     }
     if (s.rocketStamp !== undefined && s.rocketStamp !== A.rocketStamp) {
-      if (A.rocketStamp !== null) { A.vel[4] += 0.22; A.vel[0] -= 0.12; A.muzL = Math.max(A.muzL, 0.6); A.muzR = Math.max(A.muzR, 0.6); }
+      if (A.rocketStamp !== null) { A.vel[4] += 0.22; A.vel[0] -= 0.12; A.muzL = Math.max(A.muzL, 0.6); A.muzR = Math.max(A.muzR, 0.6); A.thumb = 1; }
       A.rocketStamp = s.rocketStamp;
     }
     A.recoil *= Math.exp(-dt * 15); A.muzL *= Math.exp(-dt * 42); A.muzR *= Math.exp(-dt * 42);
     if (ship.guns) ship.guns.position.x = -A.recoil * 0.075;
+    // the trigger finger squeezes with every shot, the thumb reaches for the rocket button
+    A.trig *= Math.exp(-dt * 16); A.thumb *= Math.exp(-dt * 3.5);
+    for (const dg of ship.digits) dg.obj.quaternion.setFromAxisAngle(dg.axis, dg.kind === 'trigger' ? 0.1 + Math.min(1, A.trig * 1.6) * 0.3 + (s.firing ? 0.06 : 0) : -Math.min(1, A.thumb * 1.8) * 0.5);
     const laser = sat(s.laser ?? 0), lz = laser * (0.3 + 0.12 * wob(t, 61, 0));
     this.lMuz.intensity = Math.max(A.muzL, A.muzR) * 2.2 + laser * 1.2;
     this.lMuz.color.setRGB(1 - laser * 0.6, 0.75, 0.4 + laser * 0.6);
 
     /* damage state */
     A.hitGlitch *= Math.exp(-dt * 3.2);
-    A.haze += ((dead ? 0 : d * d * 0.12 + (crit ? 0.05 : 0)) - A.haze) * ex(dead ? 4 : 0.9);
-    A.emerg += ((d >= 0.6 ? 1 : 0) - A.emerg) * ex(3);
+    A.haze += ((crit && !dead ? 0.06 : 0) - A.haze) * ex(dead ? 4 : 0.9);
+    A.emerg += ((crit ? 1 : 0) - A.emerg) * ex(3);      // red lighting belongs to the last life only
     if (dead) {
       if (A.deadT < 0) { A.deadT = 0; this._decompress(); }
       A.deadT += dt;
@@ -2013,11 +2079,11 @@ export class Cockpit3D {
         this._sparks(p, 5 + ((R() * 8) | 0), 0.3, 0.7, 0.85, 1);
         this._flashAt(p, 0.7, 0.6, 0.8, 1);
         A.hitGlitch = Math.max(A.hitGlitch, 0.5);
-        if (d > 0.6) this._spawn(1, p[0], p[1], p[2], -0.05, 0.12, (R() - 0.5) * 0.1, 2.2, 0.05, 1, 1, 1);
+        if (crit) this._spawn(1, p[0], p[1], p[2], -0.05, 0.12, (R() - 0.5) * 0.1, 2.2, 0.05, 1, 1, 1);
       }
     }
     // smoke wisps from behind the panels when it is bad
-    if (d > 0.7 && !dead && dt > 0 && R() < dt * 2.2) {
+    if (crit && !dead && dt > 0 && R() < dt * 1.3) {
       const p = ship.emitPts[(R() * ship.emitPts.length) | 0];
       this._spawn(1, p[0] - 0.02, p[1], p[2], -0.04 - R() * 0.05, 0.1 + R() * 0.08, (R() - 0.5) * 0.08, 2.5 + R(), 0.035 + R() * 0.03, 1, 1, 1);
     }
@@ -2036,12 +2102,12 @@ export class Cockpit3D {
 
     /* lighting */
     const sunDir = s.sunDir || this._sunDef, sunC = s.sunColor || this._sunColDef, amb = s.ambient || this._ambDef, pw = A.power;
-    this.sun.position.copy(sunDir); this.sun.color.copy(sunC); this.sun.intensity = 5.5;
+    this.sun.position.copy(sunDir); this.sun.color.copy(sunC); this.sun.intensity = 7.5;
     U.ck.uSunL.value.copy(sunDir).transformDirection(U.ck.uRootInv.value);
-    this.hemi.color.copy(amb); this.hemi.groundColor.copy(amb).multiplyScalar(0.35); this.hemi.intensity = 3.2;
+    this.hemi.color.copy(amb); this.hemi.groundColor.copy(amb).multiplyScalar(0.35); this.hemi.intensity = 2.0;
     const pulse = 0.55 + 0.45 * Math.sin(t * 5.5), em = A.emerg, th = this._cTheme, wsh = warp * 0.7;
     this.lCabin.color.setRGB(lerp(lerp(th.x, 0.3, wsh), 1, em), lerp(lerp(th.y, 0.6, wsh), 0.04, em), lerp(lerp(th.z, 1.4, wsh), 0.03, em));
-    this.lCabin.intensity = (dead ? Math.max(pw, em * 0.35 * Math.max(0, 1 - A.deadT)) : 1) * (0.5 + em * 0.5 * pulse + warp * 0.4);
+    this.lCabin.intensity = (dead ? Math.max(pw, em * 0.35 * Math.max(0, 1 - A.deadT)) : 1) * (0.5 + em * 0.3 * pulse + warp * 0.4);
     A.flash *= Math.exp(-dt * 9);
     this.lFlash.intensity = A.flash * 2.2; this.lFlash.color.setRGB(this.flashCol.x, this.flashCol.y, this.flashCol.z);
     const ext = s.extLight, ei = ext ? ext.i || 0 : 0;
@@ -2059,16 +2125,16 @@ export class Cockpit3D {
 
     /* uniforms */
     U.uTime.value = t;
-    const burst = d > 0.5 && hash1(Math.floor(t * 1.7) + 11) < d * 0.45 ? 1 : 0;
+    const burst = d > 0.4 && hash1(Math.floor(t * 1.7) + 11) < (crit ? 0.4 : 0.12) ? 1 : 0;
     U.uGlitch.value = Math.max(A.hitGlitch, ion * 0.85, burst * 0.55, dead ? 1 : 0);
     U.uWashAmt.value = wsh;
     const flick = A.hitGlitch > 0.25 && hash1(Math.floor(t * 40)) < A.hitGlitch * 0.6 ? 0.2 : 1;
-    const scr = U.uScr.value, alarm = (crit || s.warning) && !dead;
+    const scr = U.uScr.value, alarm = crit && !dead;
     scr[SID.TAC] = pw * Math.max(flick, 0.65) * (burst ? 0.85 : 1);
-    scr[SID.GAUGE] = pw * (d >= 0.95 ? (hash1(Math.floor(t * 11) + 5) < 0.55 ? 0.05 : 0.7) : 1);
-    scr[SID.MFD_L] = pw * flick * (d >= 0.5 && hash1(Math.floor(t * 13) + 3) < (d - 0.35) * 0.45 ? 0.12 : 1);
-    scr[SID.MFD_R] = pw * flick * (d >= 0.75 ? (hash1(Math.floor(t * 9) + 7) < 0.78 ? 0.02 : 0.6) : 1);
-    scr[SID.LAMP0] = pw * (Math.sin(t * 15) > 0 ? 1.25 : 0.3);
+    scr[SID.GAUGE] = pw * (crit && hash1(Math.floor(t * 11) + 5) < 0.3 ? 0.25 : 1);
+    scr[SID.MFD_L] = pw * flick * (crit && hash1(Math.floor(t * 13) + 3) < 0.25 ? 0.2 : 1);
+    scr[SID.MFD_R] = pw * flick * (crit ? (hash1(Math.floor(t * 9) + 7) < 0.6 ? 0.05 : 0.7) : 1);
+    scr[SID.LAMP0] = pw * (crit ? (Math.sin(t * 15) > 0 ? 1.25 : 0.3) : 1);      // amber and steady until the last life
     scr[SID.LAMP0 + 1] = pw * (Math.sin(t * 24) > 0 ? 1.25 : 0.35);
     scr[SID.LAMP0 + 2] = pw * (Math.sin(t * 19) > 0 ? 1.25 : 0.3);
     scr[SID.LAMP0 + 3] = pw * (0.8 + 0.4 * hash1(Math.floor(t * 20)));
@@ -2086,8 +2152,8 @@ export class Cockpit3D {
     U.uExtC.value.set((ext ? ext.r * ei : 0) * 0.22 + this.flashCol.x * fl, (ext ? ext.g * ei : 0) * 0.22 + this.flashCol.y * fl, (ext ? ext.b * ei : 0) * 0.22 + this.flashCol.z * fl);
     U.uGlow.value.set(lerp(th.x * 0.35, 0.9, em * pulse) * pw, lerp(th.y * 0.35, 0.03, em) * pw, lerp(th.z * 0.35, 0.02, em) * pw);
     U.uWarp.value = warp; U.uFire.value = fire * 0.12;
-    U.uHaze.value = A.haze; U.uVig.value = d * 0.3 + warp * 0.15;
-    U.uRed.value = em * pulse * 0.24 * (dead ? Math.max(0, 1 - A.deadT) : 1);
+    U.uHaze.value = A.haze; U.uVig.value = em * 0.16 + warp * 0.15;
+    U.uRed.value = em * pulse * 0.13 * (dead ? Math.max(0, 1 - A.deadT) : 1);
     this.ovFlash.multiplyScalar(Math.exp(-dt * 8)); U.uFlash.value.copy(this.ovFlash);
     U.uHazeCol.value.set(0.05 + amb.r * 0.25 + em * pulse * 0.04 + fire * 0.03, 0.05 + amb.g * 0.25 + fire * 0.008, 0.055 + amb.b * 0.25);
     // shield dome and impact ripples
@@ -2151,7 +2217,7 @@ export class Cockpit3D {
     if (A.dirtyA || Math.abs(tMs - A.lastA) >= 66) {
       A.lastA = tMs; A.dirtyA = false;
       const c = this.cxA;
-      paintTactical(c, s, th, t, ion);
+      paintTactical(c, s, th, t, ion, this.portrait);
       A.gv[0] = sat(s.speed ?? 0); A.gv[1] = sat(Math.abs(A.thr)); A.gv[2] = sat(Math.max(s.overdrive ?? 0, A.boost)); A.gv[3] = sat(0.25 + A.boost * 0.35 + d * 0.45 + (s.warp ?? 0) * 0.3);
       paintGauges(c, th, A.gv, this.cur.H.dash.gauge);
       A.hud.spd = sat(s.speed ?? 0); A.hud.thr = sat(0.5 + A.thr * 0.5); A.hud.bank = (s.bank ?? 0) + A.stickX * 0.2;
@@ -2159,9 +2225,9 @@ export class Cockpit3D {
       this.tA.needsUpdate = true;
     }
     const hp = s.hp ?? 3, hpMax = s.hpMax ?? 3, L = A.lamps;
-    const l0 = hp <= 1 || hp / hpMax <= 0.34, l1 = crit, l2 = !!s.warning || (s.bossHp ?? -1) >= 0, l3 = ion > 0.1, l4 = !!s.shield, l5 = !!s.overdriveOn || (s.overdrive ?? 0) >= 1;
+    const l0 = hp <= 1 || (hp < hpMax && hp <= 2) || hp / hpMax <= 0.5, l1 = crit, l2 = !!s.warning || (s.bossHp ?? -1) >= 0, l3 = ion > 0.1, l4 = !!s.shield, l5 = !!s.overdriveOn || (s.overdrive ?? 0) >= 1;
     const bits = (l0 ? 1 : 0) | (l1 ? 2 : 0) | (l2 ? 4 : 0) | (l3 ? 8 : 0) | (l4 ? 16 : 0) | (l5 ? 32 : 0);
-    const s0 = hp + hpMax * 16 + (s.rockets ?? 0) * 256 + (s.lasers ?? 0) * 65536 + (s.fireTier ?? 1) * 1048576;
+    const s0 = hp + hpMax * 16 + (this.portrait ? 8388608 : 0) + (s.rockets ?? 0) * 256 + (s.lasers ?? 0) * 65536 + (s.fireTier ?? 1) * 1048576;
     const s1 = s.score | 0, s2 = (s.level ?? 1) + (s.combo ?? 0) * 128 + (s.mult ?? 1) * 1048576;
     const s3 = Math.round((s.laserCharge ?? 0) * 20) + Math.round((s.overdrive ?? 0) * 100) * 32 + (s.overdriveOn ? 8192 : 0) + bits * 16384;
     if (A.dirtyB || ((s0 !== A.sig[0] || s1 !== A.sig[1] || s2 !== A.sig[2] || s3 !== A.sig[3]) && Math.abs(tMs - A.lastB) >= 66)) {
@@ -2183,11 +2249,20 @@ export class Cockpit3D {
     A.vel[2] -= side * (0.22 + pw * 0.5); A.vel[0] -= front * (0.1 + pw * 0.28); A.vel[1] += (R() - 0.5) * 0.25 * pw;
     A.vel[3] += (side || R() - 0.5) * (0.35 + pw * 0.7); A.vel[4] += front * 0.2 * pw + (R() - 0.5) * 0.3 * pw;
     // where the blow shows on the canopy, as seen from the seat
-    let az = Math.abs(side) < 0.15 ? (R() - 0.5) * 40 : side * (16 + 30 * (1 - front) * 0.5) + (R() - 0.5) * 18;
-    az = clamp(az, -52, 52);
-    // keep the fight visible: dead ahead the glass only breaks above the horizon band
-    const el = (Math.abs(az) < 24 ? lerp(15, 25, R()) : lerp(-7, 23, R())) * DEG;
-    az *= DEG;
+    // a few candidate spots near the blow; take the one farthest from the fractures already there
+    let az = 0, el = 0, far = -1;
+    for (let k = 0; k < 6; k++) {
+      let a = Math.abs(side) < 0.15 ? (R() - 0.5) * 70 : side * (16 + 30 * (1 - front) * 0.5) + (R() - 0.5) * 30;
+      a = clamp(a, -54, 54);
+      // keep the fight visible: dead ahead the glass only breaks above the horizon band
+      const e = Math.abs(a) < 24 ? lerp(16, 27, R()) : lerp(-7, 25, R());
+      let dmin = 99;
+      for (let i = 0; i < this.cracks && i < 18; i++) dmin = Math.min(dmin, Math.hypot(a - this.crackAt[i * 2], e - this.crackAt[i * 2 + 1]));
+      if (dmin > far) { far = dmin; az = a; el = e; }
+      if (o.shielded || dmin > 16) break;
+    }
+    if (!o.shielded && this.cracks < 18) { this.crackAt[this.cracks * 2] = az; this.crackAt[this.cracks * 2 + 1] = el; }
+    az *= DEG; el *= DEG;
     const dx = Math.cos(el) * Math.cos(az), dy = Math.sin(el), dz = Math.cos(el) * Math.sin(az);
     if (o.shielded) {
       const rp = this.U.uRip.value;
@@ -2202,7 +2277,7 @@ export class Cockpit3D {
     if (this.cracks < 18) {
       const u = az / CR_AZ + 0.5, v = (el - CR_E0) / CR_ER, c = this.cxC, sc = this.crW / 2048;
       c.save(); c.translate(u * this.crW, (1 - v) * this.crH); c.scale(1, 1.2);
-      paintCrack(c, 0, 0, pw * (this.cracks > 9 ? 0.5 : 1), R, sc);
+      paintCrack(c, 0, 0, pw * (this.cracks > 5 ? 0.45 : 1), R, sc);
       c.restore();
       this.tCrack.needsUpdate = true;
       this.cracks++;

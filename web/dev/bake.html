@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SPACE VOID — classic sprite bake (old vs new)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; background: #04060b; color: #9fb4cc; font: 12px/1.35 ui-monospace, Menlo, monospace; }
+  #err { position: fixed; left: 0; top: 0; right: 0; margin: 0; color: #ff8080; background: rgba(50, 0, 0, .88); white-space: pre-wrap; z-index: 9; padding: 0 8px; }
+  #stats { margin: 6px 10px; white-space: pre-wrap; color: #7fd6a0; }
+  #grid { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 10px 10px; }
+  .card { background: #0a0e16; border: 1px solid #1a2433; padding: 4px 6px 6px; }
+  .card b { color: #d7e6ff; font-weight: 600; }
+  .card canvas { display: block; margin-top: 3px; }
+</style>
+<script type="importmap">{ "imports": { "three": "../vendor/three.module.min.js" } }</script>
+</head>
+<body>
+<pre id="err"></pre>
+<pre id="stats">baking…</pre>
+<div id="grid"></div>
+<script>
+  // visible error overlay (headless screenshots have no console)
+  const errBox = document.getElementById('err');
+  const showErr = (m) => { errBox.textContent += String(m).slice(0, 1800) + '\n'; };
+  window.addEventListener('error', (e) => showErr('ERROR: ' + (e.message || e) + (e.filename ? ` @ ${e.filename.split('/').pop()}:${e.lineno}:${e.colno}` : '')));
+  window.addEventListener('unhandledrejection', (e) => showErr('REJECTION: ' + (e.reason && (e.reason.stack || e.reason.message) || e.reason)));
+</script>
+<script type="module">
+/*
+  Old (procassets, low-poly) vs new (bake3d, hero models) classic sprites, side by side:
+  each card shows old | new at 1x and at &zoom (default 4), over the hit box (dashed) and
+  with the engine points drawFlames() uses (cyan rings).
+
+  ?set=ships|enemies|extra|bank|all   which sprites (default all)   &only=<name>[,<name>]
+  &zoom=4      enlargement of the second pair          &marks=0   hide hit box + nozzle rings
+  &K=2 &KH=4   force the bake densities                &q=0.5     model quality
+  &sync=1      bake without yielding (as ?bakefirst)   &fail=gl|mid|slow   simulate a failure
+  &bg=light    bright backdrop (edge / alpha check)
+*/
+import { generateSprites } from '../js/procassets.js';
+const { bakeImages } = await import('../js/bake3d.js?v=' + Date.now());
+
+const Q = new URLSearchParams(location.search);
+const num = (k, d) => (Q.has(k) && isFinite(+Q.get(k)) ? +Q.get(k) : d);
+const ZOOM = num('zoom', 4), MARKS = Q.get('marks') !== '0', SET = Q.get('set') || 'all';
+const ONLY = Q.get('only') ? Q.get('only').split(',') : null;
+
+const oldImgs = generateSprites({});
+const newImgs = generateSprites({});
+const stats = document.getElementById('stats');
+let S = null;
+try {
+  S = await bakeImages(newImgs, { sync: Q.has('sync'), K: num('K', 0), KH: num('KH', 0), quality: num('q', 0), fail: Q.get('fail') });
+} catch (e) {
+  stats.textContent = `BAKE FAILED (old sprites kept): ${e.message}`;
+  stats.style.color = '#ffb070';
+}
+if (S) {
+  const slow = S.steps.filter((s) => s[1] >= 8).sort((a, b) => b[1] - a[1]).slice(0, 14).map((s) => `${s[0]} ${s[1]}`).join(' · ');
+  const sum = (re) => S.steps.filter((s) => re.test(s[0])).reduce((a, s) => a + s[1], 0).toFixed(0);
+  stats.textContent = `BAKE ok: ${S.sprites} sprites · work ${S.work.toFixed(0)} ms · wall ${S.wall.toFixed(0)} ms · ${S.slices} slices, longest ${S.maxSlice.toFixed(0)} ms · K=${S.K} KH=${S.KH}\n`
+    + `builds ${sum(/^build/)} ms · measure ${sum(/^measure/)} ms · renders ${sum(/^(render|bank)/)} ms · renderer ${sum(/^renderer/)} ms · commit ${sum(/^commit/)} ms\nslowest steps: ${slow}`;
+}
+
+const rows = [];
+const SHIPS = ['vanguard', 'interceptor', 'juggernaut', 'ghost', 'ace'];
+const ENEMIES = ['basic', 'weaver', 'hunter', 'tank', 'sniper', 'carrier', 'shieldbearer', 'strafer', 'brood'];
+if (SET === 'all' || SET === 'ships') {
+  for (const id of SHIPS) rows.push([id, oldImgs.ships[id], newImgs.ships[id]]);
+  rows.push(['player1', oldImgs.player1_ship, newImgs.player1_ship], ['player2', oldImgs.player2_ship, newImgs.player2_ship]);
+}
+if (SET === 'all' || SET === 'enemies') for (const id of ENEMIES) rows.push([`enemy_${id}`, oldImgs[`enemy_${id}`], newImgs[`enemy_${id}`]]);
+if (SET === 'all' || SET === 'extra') {
+  for (const id of ENEMIES) rows.push([`enemy_${id}_elite`, oldImgs[`enemy_${id}`], newImgs[`enemy_${id}_elite`]]);
+  rows.push(['enemy_drone', oldImgs.enemy_basic, newImgs.enemy_drone]);
+}
+if (SET === 'bank') {
+  for (const id of ONLY || ['vanguard']) {
+    const o = oldImgs.ships[id] || oldImgs[`${id}_ship`], n = newImgs.ships[id] || newImgs[`${id}_ship`];
+    o.bankFrames.forEach((f, i) => { f.nozzles = o.nozzles; n.bankFrames[i].nozzles = n.nozzles; rows.push([`${id} bank ${i}`, f, n.bankFrames[i], o]); });
+  }
+}
+
+const grid = document.getElementById('grid');
+const dpr = window.devicePixelRatio || 1;
+for (const [name, o, n, ref] of rows) {
+  if (!o || !n) continue;
+  if (ONLY && SET !== 'bank' && !ONLY.some((k) => name.includes(k))) continue;
+  const lw = (ref || o).width, lh = (ref || o).height; // logical sprite size = the old canvas
+  const gap = 6, W = lw * 2 + gap + (lw * ZOOM) * 2 + gap * 2, H = lh * ZOOM;
+  const c = document.createElement('canvas');
+  c.width = Math.round(W * dpr); c.height = Math.round(H * dpr);
+  c.style.width = `${W}px`; c.style.height = `${H}px`;
+  const g = c.getContext('2d');
+  g.scale(dpr, dpr);
+  g.imageSmoothingQuality = 'high';
+  g.fillStyle = Q.get('bg') === 'light' ? '#8fa3b8' : '#02030a';
+  g.fillRect(0, 0, W, H);
+  const put = (img, x, y, z) => {
+    g.drawImage(img, x, y, lw * z, lh * z);
+    if (!MARKS) return;
+    // hit box: entities draw the sprite at 1.25x (VIS) of it
+    g.save();
+    g.strokeStyle = 'rgba(255,255,255,0.28)'; g.lineWidth = 1; g.setLineDash([3, 3]);
+    g.strokeRect(x + lw * z * 0.1, y + lh * z * 0.1, lw * z * 0.8, lh * z * 0.8);
+    g.setLineDash([]);
+    g.strokeStyle = 'rgba(80,230,255,0.9)';
+    for (const p of img.nozzles || []) {
+      g.beginPath();
+      g.arc(x + (p.x / img.width) * lw * z, y + (p.y / img.height) * lh * z, Math.max(1.5, (p.r / img.width) * lw * z), 0, Math.PI * 2);
+      g.stroke();
+    }
+    g.restore();
+  };
+  put(o, 0, (H - lh) / 2, 1);
+  put(n, lw + gap, (H - lh) / 2, 1);
+  put(o, lw * 2 + gap * 2, 0, ZOOM);
+  put(n, lw * 2 + gap * 3 + lw * ZOOM, 0, ZOOM);
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.innerHTML = `<b>${name}</b>  old ${o.width}×${o.height} · new ${n.width}×${n.height}${n.bankFrames ? ` · bank ${n.bankFrames.length}×${n.bankFrames[0].width}` : ''} · nozzles ${(o.nozzles || []).length}→${(n.nozzles || []).length}`;
+  card.appendChild(c);
+  grid.appendChild(card);
+}
+</script>
+</body>
+</html>

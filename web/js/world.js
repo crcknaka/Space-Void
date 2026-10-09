@@ -3,7 +3,8 @@
 import { W, H, STEP } from './const.js';
 import * as input from './input.js';
 import * as audio from './audio.js';
-import { Button, ButtonGroup, drawText } from './ui.js';
+import { Button, ButtonGroup } from './ui.js';
+import * as ui from './ui.js';
 import { makeStarLayers } from './entities.js';
 import { makeNebulaField, updateNebulae, drawNebulae } from './fx.js';
 import { makePlanetSprite, drawLiveStation } from './bggen.js';
@@ -140,12 +141,27 @@ export class BaseWorld {
     for (const layer of this.starLayers) for (const s of layer) s.draw(g);
   }
 
-  drawPauseOverlay(g) {
+  // stats: optional [[label, value], ...] shown under the title (the run's
+  // score / level / time in game.js)
+  drawPauseOverlay(g, stats = null) {
     if (!this.paused) return;
-    g.fillStyle = 'rgba(0,0,0,0.5)';
+    const { C, rgba } = ui;
+    ui.begin(g);
+    g.fillStyle = 'rgba(2,5,10,0.62)';
     g.fillRect(0, 0, W, H);
-    drawText(g, 'PAUSED', W / 2, H / 2 - 130, 52, 'rgb(255,60,60)');
+    const bs = this.pauseMenu.buttons, first = bs[0], last = bs[bs.length - 1];
+    const pw = Math.min(340, W - 32), head = stats ? 138 : 92;
+    const top = first.cy - first.h / 2 - head, bottom = last.cy + last.h / 2 + 26;
+    ui.panel(g, W / 2 - pw / 2, top, pw, bottom - top, { fill: 0.76 });
+    ui.text(g, 'PAUSED', W / 2, top + 40, { size: 28, weight: 300, track: 0.42, align: 'center', color: '#fff' });
+    g.fillStyle = rgba(C.cyan); g.fillRect(W / 2 - 18, top + 64, 36, 2);
+    (stats || []).forEach(([label, v], i) => {
+      const x = W / 2 + (i - (stats.length - 1) / 2) * (pw / 3 - 8);
+      ui.text(g, v, x, top + 92, { size: 17, weight: 600, align: 'center', color: '#fff' });
+      ui.text(g, label, x, top + 112, { size: 9, weight: 700, track: 0.26, align: 'center', color: rgba(C.low) });
+    });
     this.pauseMenu.draw(g);
+    if (!input.isTouch) ui.keyHints(g, W / 2, bottom + 26, [['W S', 'NAVIGATE'], ['ENTER', 'SELECT'], ['ESC', 'RESUME']], { align: 'center', size: 10 });
   }
 
   onResize() {

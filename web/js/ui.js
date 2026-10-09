@@ -3,25 +3,19 @@ import * as input from './input.js';
 import * as audio from './audio.js';
 import { W, H } from './const.js';
 
-export const FONT = '"Orbitron", "Trebuchet MS", "Segoe UI", Arial, sans-serif';
+// System UI stack — no web font, so the game looks the same offline.
+export const UI_FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
+export const FONT = UI_FONT;
 
-export function drawText(g, text, x, y, px, color = '#fff', align = 'center', bold = true) {
-  g.font = `${bold ? 'bold ' : ''}${px}px ${FONT}`;
-  g.fillStyle = color;
-  g.textAlign = align;
-  g.textBaseline = 'middle';
-  g.fillText(text, x, y);
-}
-
-function roundRect(g, x, y, w, h, r) {
-  if (g.roundRect) { g.beginPath(); g.roundRect(x, y, w, h, r); return; }
-  g.beginPath();
-  g.moveTo(x + r, y);
-  g.arcTo(x + w, y, x + w, y + h, r);
-  g.arcTo(x + w, y + h, x, y + h, r);
-  g.arcTo(x, y + h, x, y, r);
-  g.arcTo(x, y, x + w, y, r);
-  g.closePath();
+// Legacy one-liner kept for its many callers; it now sets type through the
+// kit (tracked system face, big headings go light) and never overflows the
+// screen. New code should call text() directly.
+export function drawText(g, str, x, y, px, color = '#fff', align = 'center', bold = true) {
+  const big = px >= 30;
+  text(g, str, x, y, {
+    size: big ? px * 0.82 : px, weight: big ? 300 : bold ? 600 : 400, track: big ? 0.22 : px >= 16 ? 0.1 : 0.06,
+    color, align, maxW: align === 'center' ? W - 24 : W - 20,
+  });
 }
 
 export class Button {
@@ -37,32 +31,13 @@ export class Button {
   contains(x, y) {
     return Math.abs(x - this.cx) <= this.w / 2 && Math.abs(y - this.cy) <= this.h / 2;
   }
+  // kit look (the old flat grey / neon-fill boxes are gone); `accent` buttons
+  // are the solid primary style
   draw(g) {
-    const active = this.hovered || this.selected;
-    const grow = active ? 1.1 : 1;            // 10% growth like the pygame menus
-    const w = this.w * grow, h = this.h * grow;
-    const x = this.cx - w / 2, y = this.cy - h / 2;
-    if (active) {
-      g.fillStyle = this.hoverColor;
-      roundRect(g, x, y, w, h, 6); g.fill();
-    } else if (this.accent) {
-      // permanent highlight: tinted fill + glowing coloured border
-      g.fillStyle = 'rgb(55,55,55)';
-      roundRect(g, x, y, w, h, 6); g.fill();
-      g.save();
-      g.globalAlpha = 0.22; g.fillStyle = this.hoverColor;
-      roundRect(g, x, y, w, h, 6); g.fill();
-      g.restore();
-      g.save();
-      g.strokeStyle = this.hoverColor; g.lineWidth = 2.5;
-      g.shadowColor = this.hoverColor; g.shadowBlur = 12;
-      roundRect(g, x, y, w, h, 6); g.stroke();
-      g.restore();
-    } else {
-      g.fillStyle = 'rgb(70,70,70)';
-      roundRect(g, x, y, w, h, 6); g.fill();
-    }
-    drawText(g, this.text, this.cx, this.cy + 1, Math.round(24 * (active ? 1.1 : 1)));
+    this.glow = (this.glow || 0) + ((this.hovered || this.selected ? 1 : 0) - (this.glow || 0)) * 0.25;
+    button(g, this.cx - this.w / 2, this.cy - this.h / 2 + 3, this.w, this.h - 6, this.text, {
+      a: this.glow, style: this.style || (this.accent ? 'solid' : 'ghost'), color: this.color || C.cyan, size: Math.min(15, this.h * 0.3),
+    });
   }
 }
 
@@ -123,8 +98,6 @@ export class ButtonGroup {
  * The legacy Button / ButtonGroup / drawText above are untouched: the kit only
  * draws, hit testing and navigation still go through Button + ButtonGroup.
  * ========================================================================== */
-
-export const UI_FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
 
 // palette as "r,g,b" so any alpha can be applied with rgba()
 export const C = {
@@ -644,11 +617,7 @@ export function segmented(g, xr, y, options, idx, o = {}) {
 export class UIButton extends Button {
   constructor(label, cx, cy, w, h, color, action, style = 'ghost') {
     super(label, cx, cy, w, h, rgba(color), action);
-    this.color = color; this.style = style; this.glow = 0;
-  }
-  draw(g) {
-    this.glow += ((this.hovered || this.selected ? 1 : 0) - this.glow) * 0.22;
-    button(g, this.cx - this.w / 2, this.cy - this.h / 2, this.w, this.h, this.text, { a: this.glow, style: this.style, color: this.color });
+    this.color = color; this.style = style;
   }
 }
 
@@ -726,4 +695,66 @@ export function hudIconPips(g, x, y, count, max, o = {}) {
     cx += iw + gap;
   }
   return total;
+}
+
+// HUD glyphs centred on (x, y); s = overall height. kind: 'rocket' | 'bolt'
+export function hudGlyph(g, kind, x, y, s, color) {
+  g.fillStyle = color;
+  g.beginPath();
+  if (kind === 'rocket') {
+    g.moveTo(x - s * 0.6, y - s * 0.5); g.lineTo(x - s * 0.3, y - s * 0.2); g.lineTo(x + s * 0.25, y - s * 0.2);
+    g.lineTo(x + s * 0.7, y); g.lineTo(x + s * 0.25, y + s * 0.2); g.lineTo(x - s * 0.3, y + s * 0.2);
+    g.lineTo(x - s * 0.6, y + s * 0.5); g.lineTo(x - s * 0.45, y);
+  } else {
+    g.moveTo(x + s * 0.15, y - s * 0.6); g.lineTo(x - s * 0.35, y + s * 0.08); g.lineTo(x - s * 0.02, y + s * 0.08);
+    g.lineTo(x - s * 0.15, y + s * 0.6); g.lineTo(x + s * 0.35, y - s * 0.08); g.lineTo(x + s * 0.02, y - s * 0.08);
+  }
+  g.closePath(); g.fill();
+}
+
+// Rocket + beam counters as glyph/number pairs starting at x (left edge).
+export function hudAmmo(g, x, y, rockets, lasers) {
+  const rc = rgba(rockets > 0 ? C.hi : C.low), lc = rgba(lasers > 0 ? C.cyan : C.low);
+  hudGlyph(g, 'rocket', x + 7, y, 11, rc);
+  text(g, String(rockets), x + 20, y + 0.5, { size: 14, weight: 700, color: rc });
+  hudGlyph(g, 'bolt', x + 54, y, 13, lc);
+  text(g, String(lasers), x + 64, y + 0.5, { size: 14, weight: 700, color: lc });
+}
+
+// Versus score plate in a top corner. side: 'left' | 'right'.
+// o: { name, score, color (css), rockets, lasers } — ammo row only when given.
+export function hudScorePlate(g, side, o) {
+  const w = 176, h = o.rockets != null ? 78 : 52, x = side === 'left' ? 8 : W - 8 - w;
+  const tx = side === 'left' ? x + 14 : x + w - 14;
+  hudPanel(g, x, 8, w, h, { alpha: 0.5, edge: side });
+  text(g, o.name, tx, 21, { size: 9.5, weight: 700, track: 0.24, align: side, color: o.color || rgba(C.low), maxW: w - 28 });
+  text(g, String(o.score), tx, 43, { size: 24, weight: 600, align: side, color: '#fff' });
+  if (o.rockets != null) {
+    g.fillStyle = rgba(C.mid, 0.14); g.fillRect(x + 14, 60, w - 28, F.lw);
+    hudAmmo(g, side === 'left' ? x + 14 : x + w - 14 - 76, 73, o.rockets, o.lasers);
+  }
+}
+
+// Glass disc for touch controls (dark fill holds up over a bright scene).
+export function touchDisc(g, x, y, r, color = C.mid, ring = 0.7) {
+  g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2);
+  g.fillStyle = rgba(C.ink, 0.5); g.fill();
+  g.strokeStyle = rgba(color, ring); g.lineWidth = 1.5; g.stroke();
+  g.beginPath(); g.arc(x, y, r - 5, 0, Math.PI * 2);
+  g.strokeStyle = rgba(color, 0.16); g.lineWidth = 1; g.stroke();
+}
+
+// Full-screen notice over a dimmed scene (disconnects, countdowns, results).
+// o: { sub, color = C.hi, dim = 0.6, y = H / 2, size = 34 }
+export function notice(g, str, o = {}) {
+  const { sub = null, color = C.hi, dim = 0.6, y = H / 2, size = 34 } = o;
+  if (dim) { g.fillStyle = rgba('2,5,10', dim); g.fillRect(0, 0, W, H); }
+  const bw = Math.min(W * 0.48, 460), h = size * 1.3 + (sub ? 30 : 8), top = y - size * 0.75;
+  for (const [dir, x] of [['l', W / 2 - bw], ['r', W / 2]]) {
+    fade(g, '2,5,10', dir, x, top, bw, h, 0.6);
+    fade(g, color, dir, x, top, bw, F.lw * 1.5, 0.9);
+    fade(g, color, dir, x, top + h - F.lw * 1.5, bw, F.lw * 1.5, 0.9);
+  }
+  text(g, str, W / 2, y, { size, weight: 300, track: 0.3, align: 'center', color: rgba(color), maxW: W - 40 });
+  if (sub) text(g, sub, W / 2, y + size * 0.62 + 10, { size: 11, weight: 700, track: 0.28, align: 'center', color: rgba(C.mid, 0.95), maxW: W - 40 });
 }
